@@ -2,8 +2,6 @@
 
 > CLI и десктопное окно для работы с `chat.deepseek.com` через сохранённую браузерную сессию. Кросс-платформенно — macOS, Linux, Windows.
 
-**Репозиторий:** [github.com/Staks-sor/free-deepseek-cli](https://github.com/Staks-sor/free-deepseek-cli)
-
 ---
 
 ## ⭐ Понравилось? Поставь звезду
