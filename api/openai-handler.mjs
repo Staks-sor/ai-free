@@ -1,11 +1,10 @@
 // Прототип OpenAI-совместимого /v1/chat/completions.
 //
 // Поддерживает:
-//   - POST /v1/chat/completions с body { model, messages, stream:false }
+//   - POST /v1/chat/completions с body { model, messages, stream:true/false }
 //   - GET  /v1/models
 //
 // НЕ поддерживает (пока):
-//   - stream: true (TODO: SSE)
 //   - tools / function calling (TODO)
 //   - logprobs, n>1, seed, и прочие OpenAI-параметры
 //   - API-ключи (TODO: добавить после прототипа)
@@ -23,9 +22,14 @@ import { findModel, modelsList } from "./models.mjs";
 import { readQwenAuth } from "../src/providers/qwen/auth-files.mjs";
 import { QWEN_AUTH_FILE } from "../src/providers/qwen/config.mjs";
 import { QwenChatClient } from "../src/providers/qwen/client.mjs";
+import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
+import { readSavedAuth } from "../src/auth/files.mjs";
+import { DeepSeekChatClient } from "../src/deepseek/client.mjs";
 
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.
 let qwenClient = null;
+// Ленивый singleton DeepSeek-клиента — переиспользуем через все вызовы API.
+let deepseekClient = null;
 async function getQwenClient() {
   if (qwenClient) return qwenClient;
   const auth = readQwenAuth(QWEN_AUTH_FILE);
@@ -38,6 +42,20 @@ async function getQwenClient() {
     debug: Boolean(process.env.API_DEBUG),
   });
   return qwenClient;
+}
+
+async function getDeepSeekClient() {
+  if (deepseekClient) return deepseekClient;
+  const auth = readSavedAuth(DEFAULT_AUTH_FILE);
+  if (!auth?.token || !auth?.cookieHeader) {
+    throw new Error("DeepSeek не подключён. Запусти: npm run login");
+  }
+  deepseekClient = new DeepSeekChatClient({
+    token: auth.token,
+    cookieHeader: auth.cookieHeader,
+    debug: Boolean(process.env.API_DEBUG),
+  });
+  return deepseekClient;
 }
 
 export async function handleRequest(req, res) {
@@ -82,11 +100,6 @@ async function handleChatCompletions(req, res) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   if (!messages.length) return sendError(res, 400, "Missing 'messages' array");
 
-  // Стрим пока не поддерживаем — возвращаем 501, чтобы клиент явно знал.
-  if (body.stream === true) {
-    return sendError(res, 501, "Streaming не реализован в прототипе. Пришли stream:false.");
-  }
-
   // OpenAI присылает ВСЮ историю каждый раз. Мы её сжимаем в один prompt —
   // конкатенируем с лейблами ролей. Это упрощение прототипа; для качества контекста
   // потом сделаем proper multi-turn через persistent sessionId + parent_id chain.
@@ -99,6 +112,11 @@ async function handleChatCompletions(req, res) {
       const client = await getQwenClient();
       // Свежий чат на каждый запрос — простейший stateless flow.
       const chatId = await client.createChat({ model: mapping.model, title: "API request" });
+
+      if (body.stream === true) {
+        return handleQwenStream(client, chatId, prompt, modelName, mapping.model, res);
+      }
+
       const result = await client.complete({
         chatId,
         prompt,
@@ -109,11 +127,104 @@ async function handleChatCompletions(req, res) {
       return sendJson(res, toOpenAIResponse(modelName, result.text));
     }
     if (mapping.provider === "deepseek") {
-      return sendError(res, 501, "DeepSeek в прототипе не подключён. Сначала Qwen.");
+      const client = await getDeepSeekClient();
+      // DeepSeek: создаём сессию и отправляем completion.
+      const sessionId = await client.createSession();
+
+      if (body.stream === true) {
+        return handleDeepSeekStream(client, sessionId, prompt, modelName, mapping.model, res);
+      }
+
+      const result = await client.complete({
+        sessionId,
+        prompt,
+        modelType: mapping.model,
+      });
+      return sendJson(res, toOpenAIResponse(modelName, result.text));
     }
     return sendError(res, 500, `Unknown provider: ${mapping.provider}`);
   } catch (e) {
     return sendError(res, 500, `Upstream error: ${e.message}`);
+  }
+}
+
+// Отправка SSE-события в OpenAI формате.
+function sendSseEvent(res, data) {
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+// Формирует SSE-чанк в OpenAI формате.
+function toOpenAIStreamChunk(model, textDelta, isFirst = false) {
+  const ts = Math.floor(Date.now() / 1000);
+  const chunk = {
+    id: `chatcmpl-${ts}${Math.random().toString(36).slice(2, 10)}`,
+    object: "chat.completion.chunk",
+    created: ts,
+    model,
+    choices: [{ index: 0, delta: isFirst ? { role: "assistant" } : { content: textDelta } }],
+  };
+  return chunk;
+}
+
+// Обработка streaming-запроса к Qwen.
+async function handleQwenStream(client, chatId, prompt, modelName, model, res) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  let first = true;
+  try {
+    await client.complete({
+      chatId,
+      prompt,
+      thinking: false,
+      search: false,
+      model,
+      onText: (textDelta) => {
+        if (first) {
+          sendSseEvent(res, toOpenAIStreamChunk(modelName, "", true));
+          first = false;
+        }
+        sendSseEvent(res, toOpenAIStreamChunk(modelName, textDelta));
+        if (res.flush) res.flush();
+      },
+    });
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (e) {
+    res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
+    res.end();
+  }
+}
+
+// Обработка streaming-запроса к DeepSeek.
+async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  let first = true;
+  try {
+    await client.complete({
+      sessionId,
+      prompt,
+      modelType: model,
+      onText: (textDelta) => {
+        if (first) {
+          sendSseEvent(res, toOpenAIStreamChunk(modelName, "", true));
+          first = false;
+        }
+        sendSseEvent(res, toOpenAIStreamChunk(modelName, textDelta));
+        if (res.flush) res.flush();
+      },
+    });
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (e) {
+    res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
+    res.end();
   }
 }
 

@@ -2,7 +2,7 @@
 //
 // "name" — то, что внешняя программа шлёт в body.model.
 // "provider" — на какой наш клиент маршрутизируется ("qwen" или "deepseek").
-// "model" — внутреннее имя модели у провайдера.
+// "model" — внутреннее имя модели у провайдера (для DeepSeek это model_type).
 //
 // Если хочешь добавить — просто допиши строку. UI Settings (когда будет) сможет
 // показать этот же список.
@@ -16,7 +16,8 @@ export const MODELS = [
   { name: "qwen-vl-max",    provider: "qwen",     model: "qwen-vl-max" },
 
   // DeepSeek — через прямой API (chat.deepseek.com)
-  { name: "deepseek-chat",      provider: "deepseek", model: "fast" },
+  // model_type: null = chat (по умолчанию), "expert" = reasoner, "vision" = vision
+  { name: "deepseek-chat",      provider: "deepseek", model: null },
   { name: "deepseek-reasoner",  provider: "deepseek", model: "expert" },
 ];
 

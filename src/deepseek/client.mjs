@@ -293,27 +293,27 @@ export class DeepSeekChatClient {
     throw new Error(`File ${fileId} still ${lastStatus || "PENDING"} after ${timeoutMs}ms (timeout)`);
   }
 
-  async _completeOnce({
-    sessionId,
-    prompt,
-    parentMessageId = null,
-    modelType = null,
-    thinkingEnabled = false,
-    searchEnabled = false,
-    onText = null,
-    refFileIds = [],
-  }) {
-    const pow = await this.createPowHeader(COMPLETION_PATH);
-    const body = {
-      chat_session_id: sessionId,
-      parent_message_id: parentMessageId,
-      model_type: modelType,
-      preempt: false, // отдаёт прерывание предыдущего стрима; их фронт шлёт всегда
-      prompt,
-      ref_file_ids: Array.isArray(refFileIds) ? refFileIds : [],
-      thinking_enabled: thinkingEnabled,
-      search_enabled: searchEnabled,
-    };
+async _completeOnce({
+     sessionId,
+     prompt,
+     parentMessageId = null,
+     modelType = null,
+     thinkingEnabled = false,
+     searchEnabled = false,
+     onText = null,
+     refFileIds = [],
+   }) {
+     const pow = await this.createPowHeader(COMPLETION_PATH);
+     const body = {
+       chat_session_id: sessionId,
+       parent_message_id: parentMessageId,
+       preempt: false, // отдаёт прерывание предыдущего стрима; их фронт шлёт всегда
+       prompt,
+       ref_file_ids: Array.isArray(refFileIds) ? refFileIds : [],
+       thinking_enabled: thinkingEnabled,
+       search_enabled: searchEnabled,
+     };
+     if (modelType != null) body.model_type = modelType;
 
     // Безусловный лог флагов — чтоб видеть, что реально уходит в API.
     // Полезно для отладки «почему режимы не работают».

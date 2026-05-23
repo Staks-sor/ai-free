@@ -200,7 +200,7 @@ export class QwenChatClient {
         throw new Error(`Qwen completion failed (browser): HTTP ${result.status}: ${(result.text || "").slice(0, 800)}`);
       }
 
-      return parseQwenResponseText(result.text, result.contentType);
+      return parseQwenResponseText(result.text, result.contentType, onText);
     }
 
     // FALLBACK: прямой fetch с bx-ua из .env (обычно ломается на Bad_Request).
@@ -238,7 +238,8 @@ export class QwenChatClient {
 
 // Парсит полный текст ответа (от browser-proxy — он отдаёт весь body одним куском).
 // Поддерживает оба варианта: одиночный JSON и SSE-стрим из много "data: {...}" блоков.
-function parseQwenResponseText(text, contentType) {
+// Если передан onText callback, вызывает его для каждого найденного текстового кусочка.
+function parseQwenResponseText(text, contentType, onText) {
   const ct = String(contentType || "").toLowerCase();
 
   // Одиночный JSON-ответ (обычно — ошибка или non-streaming endpoint).
@@ -272,8 +273,12 @@ function parseQwenResponseText(text, contentType) {
     try { parsed = JSON.parse(ev.data); } catch { continue; }
     const found = extractTextRecursively(parsed);
     if (found.text) {
-      if (found.isThinking) thinkingBuf += found.text;
-      else fullText += found.text;
+      if (found.isThinking) {
+        thinkingBuf += found.text;
+      } else {
+        fullText += found.text;
+        onText?.(found.text);
+      }
     }
     if (found.messageId) lastMessageId = String(found.messageId);
   }
@@ -425,9 +430,9 @@ function extractTextRecursively(node, isThinking = false) {
   // Рекурсия в объект. ВАЖНО: не пропускаем delta/content — они могут быть
   // объектами (например, OpenAI-формат Qwen: choices[0].delta — это объект
   // с полями {role, content, phase, status}, и текст внутри content).
-  // Пропускаем только метаданные (phase/type/role) — они не контейнеры с текстом.
+  // Пропускаем только метаданные (phase/type) — они не контейнеры с текстом.
   for (const [key, value] of Object.entries(node)) {
-    if (["phase", "type", "role"].includes(key)) continue;
+    if (["phase", "type"].includes(key)) continue;
     if (typeof value !== "object" || value === null) continue;
     const sub = extractTextRecursively(value, foundThinking);
     text += sub.text;

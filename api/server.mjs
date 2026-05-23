@@ -26,7 +26,8 @@ const PORT = Number(process.env.API_PORT) || 4318;
 const HOST = "127.0.0.1"; // намеренно НЕ слушаем на 0.0.0.0 — только локально
 
 const server = http.createServer(async (req, res) => {
-  // CORS — на всякий случай, для веб-клиентов на localhost.
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+   // CORS — на всякий случай, для веб-клиентов на localhost.
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");

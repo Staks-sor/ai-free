@@ -16,3 +16,5 @@ CONTINUATION.md
 HANDOFF.md
 REFACTOR_NOTES.md
 api/README.md
+.kilo/
+package-lock.json
