@@ -246,6 +246,84 @@ export class QwenChatClient {
   }
 }
 
+// SSE-событие с полем error (квота, rate limit и т.д.) — не содержит текста ответа.
+export function formatQwenStreamError(parsed) {
+  if (!parsed || typeof parsed !== "object") return null;
+  const err = parsed.error;
+  if (!err || typeof err !== "object") return null;
+  const code = String(err.code || err.type || "error");
+  const details = String(
+    err.details || err.message || err.detail || err.msg || JSON.stringify(err),
+  );
+  return formatQwenUserFacingError(code, details);
+}
+
+export function formatQwenUserFacingError(code, details) {
+  const d = details.toLowerCase();
+  if (
+    d.includes("quota exceeded")
+    || d.includes("allocated quota")
+    || d.includes("token-limit")
+    || d.includes("insufficient quota")
+  ) {
+    return (
+      "Лимит Qwen (Alibaba Cloud) исчерпан.\n\n" +
+      "Сервер вернул: allocated quota exceeded — закончилась квота токенов или запросов на аккаунте.\n\n" +
+      "Что сделать:\n" +
+      "• Открой https://chat.qwen.ai и проверь лимиты / подписку\n" +
+      "• Попробуй другую модель в чате (например Qwen3.6 Plus вместо MAX)\n" +
+      "• Подожди сброс квоты или увеличь лимит: https://help.aliyun.com/zh/model-studio/error-code#token-limit\n\n" +
+      `Код: ${code}\n${details}`
+    );
+  }
+  if (d.includes("rate limit") || d.includes("too many requests") || code.includes("rate")) {
+    return `Слишком много запросов к Qwen (rate limit).\n\n${details}`;
+  }
+  return `Qwen вернул ошибку (${code}):\n\n${details}`;
+}
+
+function findQwenErrorInSseText(text) {
+  const blocks = text.split(/\r?\n\r?\n/).filter(Boolean);
+  for (const raw of blocks) {
+    const ev = parseSseEvent(raw);
+    if (!ev.data || ev.data === "[DONE]") continue;
+    try {
+      const msg = formatQwenStreamError(JSON.parse(ev.data));
+      if (msg) return msg;
+    } catch {
+      // ignore
+    }
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload.startsWith("{")) continue;
+    try {
+      const msg = formatQwenStreamError(JSON.parse(payload));
+      if (msg) return msg;
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+function emptyQwenParseFallback(text, rawAccumulated, eventCount) {
+  const scan = findQwenErrorInSseText(rawAccumulated || text);
+  if (scan) {
+    return { text: scan, lastMessageId: null, thinkingText: "" };
+  }
+  const bytes = (rawAccumulated || text).length;
+  return {
+    text:
+      `Qwen ответил (${bytes} байт), но текста в ответе нет (только служебные события).\n\n` +
+      `Сырой ответ (первые 1500 символов):\n\n${(rawAccumulated || text).slice(0, 1500)}`,
+    lastMessageId: null,
+    thinkingText: "",
+  };
+}
+
 // Парсит полный текст ответа (от browser-proxy — он отдаёт весь body одним куском).
 // Поддерживает оба варианта: одиночный JSON и SSE-стрим из много "data: {...}" блоков.
 // Если передан onText callback, вызывает его для каждого найденного текстового кусочка.
@@ -281,6 +359,10 @@ function parseQwenResponseText(text, contentType, onText) {
     if (!ev.data || ev.data === "[DONE]") continue;
     let parsed;
     try { parsed = JSON.parse(ev.data); } catch { continue; }
+    const errMsg = formatQwenStreamError(parsed);
+    if (errMsg) {
+      return { text: errMsg, lastMessageId, thinkingText: "" };
+    }
     const found = extractTextRecursively(parsed);
     if (found.text) {
       if (found.isThinking) {
@@ -294,13 +376,7 @@ function parseQwenResponseText(text, contentType, onText) {
   }
 
   if (!fullText && !thinkingBuf) {
-    return {
-      text:
-        `⚠️ Qwen ответил (${text.length} байт), но парсер ничего не извлёк.\n\n` +
-        `Сырой ответ (первые 1500 символов):\n\n${text.slice(0, 1500)}`,
-      lastMessageId,
-      thinkingText: "",
-    };
+    return emptyQwenParseFallback(text, text, events.length);
   }
   return { text: fullText, lastMessageId, thinkingText: thinkingBuf };
 }
@@ -346,6 +422,12 @@ async function parseQwenStream(res, onText, debug) {
         continue;
       }
 
+      const streamErr = formatQwenStreamError(parsed);
+      if (streamErr) {
+        if (debug) console.error("[qwen-sse] API error event:", streamErr.slice(0, 200));
+        return { text: streamErr, lastMessageId, thinkingText: thinkingBuf };
+      }
+
       // Сохраняем первые 3 события целиком — даже без debug. Если в конце текст пустой,
       // печатаем эти примеры в throw-сообщение или console чтобы было видно формат.
       if (firstFewRaw.length < 3) firstFewRaw.push(event.data);
@@ -387,14 +469,7 @@ async function parseQwenStream(res, onText, debug) {
   // Это всегда даёт юзеру что-то полезное, по чему я смогу починить парсер.
   if (!fullText && !thinkingBuf) {
     console.error(`[qwen-sse] no text extracted. Raw stream (${rawAccumulated.length} chars):\n${rawAccumulated.slice(0, 2000)}`);
-    return {
-      text:
-        `⚠️ Qwen ответил, но парсер ничего не извлёк (events: ${eventCount}, raw bytes: ${rawAccumulated.length}).\n\n` +
-        `Сырой стрим (первые 1500 символов):\n\n${rawAccumulated.slice(0, 1500)}\n\n` +
-        `Присылай мне это сообщение целиком — поправлю парсер.`,
-      lastMessageId,
-      thinkingText: "",
-    };
+    return emptyQwenParseFallback("", rawAccumulated, eventCount);
   }
 
   return { text: fullText, lastMessageId, thinkingText: thinkingBuf };

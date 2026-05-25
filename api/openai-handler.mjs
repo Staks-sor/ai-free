@@ -270,6 +270,12 @@ function sendSseEvent(res, data) {
 // вместо допустимого значения. Подсказываем, что обычно лечится обновлением репо.
 function humanizeUpstreamError(rawMessage) {
   const msg = String(rawMessage || "");
+  if (/quota exceeded|allocated quota|token-limit/i.test(msg)) {
+    return (
+      "Qwen quota exceeded (Alibaba Cloud). Check limits at chat.qwen.ai or try a smaller model. " +
+      `Details: ${msg}`
+    );
+  }
   if (msg.includes("422") && /unknown variant/i.test(msg)) {
     const match = msg.match(/unknown variant `([^`]+)`/i);
     const bad = match ? match[1] : "?";

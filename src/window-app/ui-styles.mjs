@@ -117,10 +117,13 @@ export const STYLES = `
       background: #222936;
     }
     .newForm {
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--line);
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 14px 16px;
       display: grid;
       gap: 8px;
+      align-content: start;
     }
     .newForm input {
       width: 100%;
@@ -473,11 +476,16 @@ export const STYLES = `
       margin: 0;
     }
     .browseList {
-      max-height: 280px;
+      max-height: min(42vh, 360px);
       overflow-y: auto;
       display: grid;
       gap: 2px;
       font-size: 13px;
+    }
+    .browseCount {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 6px;
     }
     .browseRow {
       text-align: left;

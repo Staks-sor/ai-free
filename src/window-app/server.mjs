@@ -14,6 +14,7 @@ import { COMMAND_CATALOG, loadSettings, saveSettings } from "../state/settings.m
 import { conversationList, makeConversationTitle, shouldAutoTitle } from "../state/conversations.mjs";
 import { startTask, isRunning, getRunningIds } from "./task-runner.mjs";
 import { getStateFile, loadWindowState, saveWindowState } from "../state/window-state.mjs";
+import { listBrowseDirectories } from "./browse-fs.mjs";
 import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
 
@@ -209,45 +210,28 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
       if (req.method === "GET" && url.pathname === "/api/browse") {
         const requested = url.searchParams.get("path");
         const showHidden = url.searchParams.get("hidden") === "1";
-        let target;
+        let resolved;
         try {
           let p = (requested || os.homedir()).trim();
           if (p.startsWith("~/") || p === "~") p = path.join(os.homedir(), p.slice(1));
-          target = path.resolve(p);
+          resolved = path.resolve(p);
         } catch {
           return sendJson(res, { error: "Невалидный путь" }, 400);
         }
-        if (!fs.existsSync(target)) {
-          return sendJson(res, { error: `Папка не существует: ${target}` }, 404);
-        }
-        if (!fs.statSync(target).isDirectory()) {
-          return sendJson(res, { error: `Не папка: ${target}` }, 400);
-        }
-        let raw;
         try {
-          raw = fs.readdirSync(target, { withFileTypes: true });
+          const listing = listBrowseDirectories(resolved, { showHidden });
+          return sendJson(res, {
+            ...listing,
+            home: os.homedir(),
+            defaultWorkspace: path.resolve(workspaceRoot),
+          });
         } catch (error) {
-          return sendJson(res, { error: `Не могу прочитать папку: ${error.message}` }, 403);
+          const code = error.code;
+          if (code === "ENOENT") return sendJson(res, { error: error.message }, 404);
+          if (code === "ENOTDIR") return sendJson(res, { error: error.message }, 400);
+          if (code === "EACCES") return sendJson(res, { error: error.message }, 403);
+          return sendJson(res, { error: error.message || "Ошибка чтения папки" }, 500);
         }
-        const folders = raw
-          .filter((entry) => {
-            try { return entry.isDirectory(); } catch { return false; }
-          })
-          .filter((entry) => (showHidden ? true : !entry.name.startsWith(".")))
-          .map((entry) => ({
-            name: entry.name,
-            path: path.join(target, entry.name),
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
-          .slice(0, 500);
-        const parent = path.dirname(target);
-        return sendJson(res, {
-          path: target,
-          parent: parent !== target ? parent : null,
-          entries: folders,
-          home: os.homedir(),
-          truncated: raw.filter((e) => { try { return e.isDirectory(); } catch { return false; } }).length > 500,
-        });
       }
 
       // ===== Проекты (workspace'ы из чатов) =====

@@ -77,8 +77,9 @@ export function renderWindowHtml() {
                 <button type="button" id="createFolderCancel" class="iconBtn">Отмена</button>
               </div>
               <div id="createFolderError" class="formError hidden"></div>
+              <div id="browseCount" class="browseCount hidden"></div>
               <div id="browseList" class="browseList">Loading...</div>
-              <div id="browseTruncated" class="browseTruncated hidden">Показано первые 500 — папка содержит больше.</div>
+              <div id="browseTruncated" class="browseTruncated hidden">Показано не все папки — включи «Скрытые» или открой родительскую папку выше.</div>
             </div>
 
             <div id="recentProjects" class="recentProjects"></div>
@@ -180,6 +181,7 @@ export function renderWindowHtml() {
     const newCreateFolder = document.getElementById("newCreateFolder");
     const newFormError = document.getElementById("newFormError");
     const recentProjects = document.getElementById("recentProjects");
+    let browseDefaultPath = "";
 
     openNewChatBtn.addEventListener("click", openNewChatModal);
     newChatClose.addEventListener("click", closeNewChatModal);
@@ -198,7 +200,8 @@ export function renderWindowHtml() {
       // Подтягиваем список ранее использованных проектов.
       try {
         const data = await api("/api/projects");
-        newWorkspaceInput.value = data.defaultWorkspace || "";
+        browseDefaultPath = data.defaultWorkspace || data.home || "";
+        newWorkspaceInput.value = browseDefaultPath;
         for (const project of data.projects || []) {
           const chip = document.createElement("button");
           chip.type = "button";
@@ -228,6 +231,7 @@ export function renderWindowHtml() {
     const browseList = document.getElementById("browseList");
     const browseShowHidden = document.getElementById("browseShowHidden");
     const browseTruncated = document.getElementById("browseTruncated");
+    const browseCount = document.getElementById("browseCount");
 
     let currentBrowsePath = null;
     let currentBrowseParent = null;
@@ -236,8 +240,8 @@ export function renderWindowHtml() {
     browseBtn.addEventListener("click", async () => {
       if (browseSection.classList.contains("hidden")) {
         browseSection.classList.remove("hidden");
-        // Стартуем с того, что в поле ввода. Если пусто — с домашней папки.
-        const start = newWorkspaceInput.value.trim() || null;
+        // Стартуем с пути в поле, иначе — workspace по умолчанию (cwd при запуске CLI).
+        const start = newWorkspaceInput.value.trim() || browseDefaultPath || null;
         await navigateBrowse(start);
       } else {
         browseSection.classList.add("hidden");
@@ -315,6 +319,7 @@ export function renderWindowHtml() {
     async function navigateBrowse(targetPath) {
       browseList.textContent = "Загружаю...";
       browseTruncated.classList.add("hidden");
+      browseCount.classList.add("hidden");
       try {
         const params = new URLSearchParams();
         if (targetPath) params.set("path", targetPath);
@@ -323,13 +328,26 @@ export function renderWindowHtml() {
         currentBrowsePath = data.path;
         currentBrowseParent = data.parent;
         browseHome_ = data.home;
+        if (data.defaultWorkspace && !browseDefaultPath) {
+          browseDefaultPath = data.defaultWorkspace;
+        }
         browsePath.textContent = data.path;
         browseUp.disabled = !data.parent;
         browseList.innerHTML = "";
+        const total = data.totalDirectories ?? data.entries.length;
+        const shown = data.entries.length;
+        if (total > 0) {
+          browseCount.textContent = shown === total
+            ? "Папок: " + total + (browseShowHidden.checked ? "" : " (скрытые .папки — чекбокс «Скрытые»)")
+            : "Показано " + shown + " из " + total + " папок";
+          browseCount.classList.remove("hidden");
+        }
         if (!data.entries.length) {
           const empty = document.createElement("div");
           empty.className = "browseEmpty";
-          empty.textContent = "(нет подпапок)";
+          empty.textContent = total > 0 && data.truncated
+            ? "(слишком много папок — уточни путь или включи «Скрытые»)"
+            : "(нет подпапок — можно выбрать эту папку кнопкой «Выбрать»)";
           browseList.appendChild(empty);
         } else {
           for (const entry of data.entries) {
@@ -342,7 +360,11 @@ export function renderWindowHtml() {
             browseList.appendChild(row);
           }
         }
-        if (data.truncated) browseTruncated.classList.remove("hidden");
+        if (data.truncated) {
+          browseTruncated.textContent =
+            "Показано первые " + shown + " из " + total + " — сузь путь или включи «Скрытые».";
+          browseTruncated.classList.remove("hidden");
+        }
       } catch (err) {
         browseList.textContent = "Ошибка: " + err.message;
       }
