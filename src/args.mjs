@@ -17,7 +17,9 @@ export function parseArgs(argv) {
     login: false,
     stream: false,
     window: false,
+    api: false,
     port: Number(process.env.DEEPSEEK_WINDOW_PORT || 4317),
+    apiPort: Number(process.env.API_PORT || 4318),
     thinking: false,
     search: false,
     saveCreds: false,
@@ -41,12 +43,14 @@ export function parseArgs(argv) {
     else if (arg === "--debug") args.debug = true;
     else if (arg === "--stream") args.stream = true;
     else if (arg === "--window") args.window = true;
+    else if (arg === "--api") args.api = true;
     else if (arg === "--login") args.login = true;
     else if (arg === "--save-creds") args.saveCreds = true;
     else if (arg === "--login-qwen") args.loginQwen = true;
     else if (arg === "--import-qwen") args.importQwenFile = argv[++i];
     else if (arg === "--welcome") args.forceWelcome = true;
     else if (arg === "--port") args.port = Number(argv[++i]);
+    else if (arg === "--api-port") args.apiPort = Number(argv[++i]);
     else if (arg === "-h" || arg === "--help") {
       printHelp();
       process.exit(0);
@@ -109,6 +113,8 @@ Options:
   --stream            Print response while it is generated
   --window            Open local multi-chat window (default for npm start)
   --port PORT         Port for --window (default 4317)
+  --api               Start OpenAI-compatible API server
+  --api-port PORT     Port for --api (default 4318)
   --check             Test auth and session creation
   --debug             Print API event diagnostics`);
 }

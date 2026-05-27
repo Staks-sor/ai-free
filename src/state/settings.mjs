@@ -5,6 +5,7 @@
 // бэкенд читает loadSettings() на каждый run_command вызов — без рестарта.
 
 import fs from "node:fs";
+import { randomBytes } from "node:crypto";
 import { AUTH_DIR, SETTINGS_FILE } from "../config.mjs";
 
 export const COMMAND_CATALOG = {
@@ -96,6 +97,7 @@ export function loadSettings() {
     allowedCommands: Object.keys(COMMAND_CATALOG).filter(
       (cmd) => COMMAND_CATALOG[cmd].enabledByDefault,
     ),
+    openAICompat: { apiKeys: { deepseek: "", qwen: "" } },
   };
   if (!fs.existsSync(SETTINGS_FILE)) return fallback;
   try {
@@ -103,7 +105,17 @@ export function loadSettings() {
     const allowed = Array.isArray(raw?.allowedCommands)
       ? raw.allowedCommands.filter((cmd) => typeof cmd === "string" && COMMAND_CATALOG[cmd])
       : fallback.allowedCommands;
-    return { allowedCommands: allowed };
+    const legacyKey = typeof raw?.openAICompat?.apiKey === "string" ? raw.openAICompat.apiKey : "";
+    const apiKeys = raw?.openAICompat?.apiKeys || {};
+    return {
+      allowedCommands: allowed,
+      openAICompat: {
+        apiKeys: {
+          deepseek: typeof apiKeys.deepseek === "string" ? apiKeys.deepseek : legacyKey,
+          qwen: typeof apiKeys.qwen === "string" ? apiKeys.qwen : "",
+        },
+      },
+    };
   } catch {
     return fallback;
   }
@@ -112,8 +124,55 @@ export function loadSettings() {
 export function saveSettings(settings) {
   fs.mkdirSync(AUTH_DIR, { recursive: true });
   const valid = (settings?.allowedCommands || []).filter((cmd) => COMMAND_CATALOG[cmd]);
-  const payload = { allowedCommands: Array.from(new Set(valid)), savedAt: new Date().toISOString() };
+  const current = loadSettings();
+  const requestedKeys = settings?.openAICompat?.apiKeys || {};
+  const currentKeys = current.openAICompat?.apiKeys || {};
+  const payload = {
+    allowedCommands: Array.from(new Set(valid)),
+    openAICompat: {
+      apiKeys: {
+        deepseek: typeof requestedKeys.deepseek === "string" ? requestedKeys.deepseek : currentKeys.deepseek || "",
+        qwen: typeof requestedKeys.qwen === "string" ? requestedKeys.qwen : currentKeys.qwen || "",
+      },
+    },
+    savedAt: new Date().toISOString(),
+  };
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(payload, null, 2));
   try { fs.chmodSync(SETTINGS_FILE, 0o600); } catch {}
   return payload;
+}
+
+export function ensureOpenAICompatApiKey(provider) {
+  if (provider !== "deepseek" && provider !== "qwen") {
+    throw new Error(`Unknown OpenAI-compatible API provider: ${provider}`);
+  }
+  const current = loadSettings();
+  const existing = current.openAICompat?.apiKeys?.[provider];
+  if (existing) return existing;
+
+  const apiKey = `sk-${randomBytes(32).toString("base64url")}`;
+  const apiKeys = {
+    deepseek: current.openAICompat?.apiKeys?.deepseek || "",
+    qwen: current.openAICompat?.apiKeys?.qwen || "",
+    [provider]: apiKey,
+  };
+  saveSettings({
+    allowedCommands: current.allowedCommands,
+    openAICompat: { apiKeys },
+  });
+  return apiKey;
+}
+
+export function resolveOpenAICompatApiKey(req) {
+  const keys = loadSettings().openAICompat?.apiKeys || {};
+  const configured = Object.entries(keys).filter(([, key]) => key);
+  if (!configured.length) return { ok: true, provider: null };
+
+  const auth = String(req.headers.authorization || "");
+  const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const apiKey = String(req.headers["x-api-key"] || "").trim();
+  const provided = bearer || apiKey;
+  const match = configured.find(([, key]) => key === provided);
+  if (!match) return { ok: false, provider: null };
+  return { ok: true, provider: match[0] };
 }

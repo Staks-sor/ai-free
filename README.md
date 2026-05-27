@@ -132,6 +132,7 @@ npm start
 | `npm start` | Окно чатов (`localhost:4317`). Welcome + логин, если провайдер не подключён. |
 | `npm run window` | Алиас `npm start`. |
 | `npm run cli` | Терминальный REPL (`/code`, `/ls`, `/new`, …). |
+| `npm run api` | OpenAI-совместимый API на `127.0.0.1:4318`. |
 | `npm run welcome` | Снова показать выбор провайдеров и подключить новые. |
 | `npm run check` | Проверка auth DeepSeek (`OK: authenticated`). |
 | `npm run login` | Re-login DeepSeek → `~/.deepseek-cli/auth.json`. |
@@ -143,9 +144,14 @@ npm start
 Запуск OpenAI-совместимого API (отдельный процесс):
 
 ```bash
-node api/server.mjs
+npm run api
 # → http://127.0.0.1:4318/v1
 ```
+
+Если уже открыто окно чатов (`npm start`), тот же API доступен прямо на порту окна:
+`http://127.0.0.1:4317/v1`. Base URL и ключи есть в Settings. Для DeepSeek и
+Qwen создаются отдельные ключи формата `sk-...`; каждый ключ переиспользуется из
+`~/.deepseek-cli/settings.json` и не дублируется.
 
 ---
 
@@ -306,7 +312,7 @@ npm run login-qwen
 ### Запуск API сервера
 
 ```bash
-node api/server.mjs
+npm run api
 ```
 
 Сервер запустится на `http://127.0.0.1:4318`.
@@ -314,10 +320,10 @@ node api/server.mjs
 ### Настройка в Kilo Code
 
 1. Подключи провайдеров в CLI: `npm run login` и/или `npm run login-qwen`
-2. Запусти API: `node api/server.mjs`
+2. Запусти API: `npm run api` или открой окно чатов и возьми Base URL из Settings
 3. В Kilo Code — **OpenAI-совместимый провайдер**:
    - **Base URL:** `http://127.0.0.1:4318/v1`
-   - **API Key:** любой (проверка отключена)
+   - **API Key:** DeepSeek или Qwen key из Settings
    - **Модели:** см. `GET http://127.0.0.1:4318/v1/models`
 
 | Имя в Kilo Code | Провайдер |

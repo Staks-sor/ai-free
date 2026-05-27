@@ -13,6 +13,7 @@
     "window": "node ./bin/deepseek.mjs --window",
     "cli": "node ./bin/deepseek.mjs",
     "chat": "node ./bin/deepseek.mjs",
+    "api": "node ./bin/deepseek.mjs --api",
     "login": "node ./bin/deepseek.mjs --login",
     "login-qwen": "node ./bin/deepseek.mjs --login-qwen",
     "import-qwen": "node ./bin/deepseek.mjs --import-qwen",

@@ -8,7 +8,7 @@ import fs from 'fs';
 // НЕ поддерживает (пока):
 //   - tools / function calling (TODO)
 //   - logprobs, n>1, seed, и прочие OpenAI-параметры
-//   - API-ключи (TODO: добавить после прототипа)
+//   - provider-specific API keys are checked in api/server.mjs and window-app/server.mjs
 //
 // Маршрутизация: model имя → провайдер (см. models.mjs).
 //   - Qwen: создаём чат по запросу (sessionId не персистится между вызовами API!),
@@ -69,7 +69,13 @@ export async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === "GET" && url.pathname === "/v1/models") {
-    return sendJson(res, modelsList());
+    const provider = req.openAICompatProvider || null;
+    const list = modelsList();
+    if (!provider) return sendJson(res, list);
+    return sendJson(res, {
+      ...list,
+      data: list.data.filter((model) => model.owned_by === provider),
+    });
   }
 
   if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
@@ -105,6 +111,13 @@ async function handleChatCompletions(req, res) {
 
   const mapping = findModel(modelName);
   if (!mapping) return sendError(res, 404, `Unknown model: ${modelName}`);
+  if (req.openAICompatProvider && mapping.provider !== req.openAICompatProvider) {
+    return sendError(
+      res,
+      403,
+      `API key for ${req.openAICompatProvider} cannot be used with ${mapping.provider} model '${modelName}'`,
+    );
+  }
 
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   if (!messages.length) return sendError(res, 400, "Missing 'messages' array");

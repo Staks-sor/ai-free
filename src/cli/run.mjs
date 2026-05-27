@@ -43,6 +43,12 @@ export async function run() {
     return;
   }
 
+  if (args.api) {
+    const { startOpenAICompatServer } = await import("../../api/server.mjs");
+    startOpenAICompatServer({ port: args.apiPort });
+    return;
+  }
+
   // Welcome TUI: показывается ТОЛЬКО если ни один провайдер не залогинен,
   // ИЛИ если юзер явно попросил через --welcome (для добавления провайдера).
   const { configuredCount } = await import("../providers/registry.mjs");

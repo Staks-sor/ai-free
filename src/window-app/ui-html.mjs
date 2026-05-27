@@ -114,12 +114,12 @@ export function renderWindowHtml() {
       <div id="settingsOverlay" class="settingsOverlay hidden" aria-hidden="true">
         <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
           <div class="settingsHead">
-            <h2 id="settingsTitle">Settings — разрешённые команды для /code</h2>
+            <h2 id="settingsTitle">Settings</h2>
             <button id="settingsClose" class="iconBtn" type="button" aria-label="Close">✕</button>
           </div>
           <p class="settingsHint">
-            Каждая команда — это то, что LLM-агент может запустить через <code>run_command</code> в режиме <code>/code</code>.
-            Включай только то, что реально нужно: чем шире allow-list, тем больше поверхность атаки.
+            OpenAI-compatible API работает как локальный прокси к подключённым чатам.
+            Для DeepSeek и Qwen создаются отдельные ключи формата <code>sk-...</code>.
             Файл настроек: <code>~/.deepseek-cli/settings.json</code>.
           </p>
           <div id="settingsBody" class="settingsBody">Loading…</div>
@@ -1191,7 +1191,7 @@ export function renderWindowHtml() {
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands }) {
+    function renderSettings({ catalog, allowedCommands, openAICompat }) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
@@ -1200,6 +1200,7 @@ export function renderWindowHtml() {
       const labels = { low: "Низкий риск", medium: "Средний риск", high: "Высокий риск" };
       const order = ["low", "medium", "high"];
       settingsBody.innerHTML = "";
+      renderOpenAISettings(openAICompat);
       for (const key of order) {
         const items = groups[key];
         if (!items.length) continue;
@@ -1238,6 +1239,83 @@ export function renderWindowHtml() {
         }
         settingsBody.appendChild(groupEl);
       }
+    }
+
+    function renderOpenAISettings(info) {
+      if (!info) return;
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup apiSettings";
+
+      const heading = document.createElement("h3");
+      heading.textContent = "OpenAI-compatible API";
+      groupEl.appendChild(heading);
+
+      const grid = document.createElement("div");
+      grid.className = "apiSettingsGrid";
+
+      grid.appendChild(makeApiField("Base URL", info.embeddedBaseUrl));
+      grid.appendChild(makeApiField("Отдельный сервер", info.standaloneBaseUrl));
+      groupEl.appendChild(grid);
+
+      const keyList = document.createElement("div");
+      keyList.className = "apiKeyList";
+      const keys = info.apiKeys || {};
+      keyList.appendChild(makeApiKeyRow("deepseek", "DeepSeek", keys.deepseek || ""));
+      keyList.appendChild(makeApiKeyRow("qwen", "Qwen", keys.qwen || ""));
+      groupEl.appendChild(keyList);
+
+      const note = document.createElement("div");
+      note.className = "apiModels";
+      note.textContent = "В OpenAI-compatible клиенте укажи Base URL и Bearer API key нужного провайдера. Модели: " + (info.models || []).join(", ");
+      groupEl.appendChild(note);
+
+      settingsBody.appendChild(groupEl);
+    }
+
+    function makeApiKeyRow(provider, label, key) {
+      const row = document.createElement("div");
+      row.className = "apiKeyRow";
+
+      const title = document.createElement("div");
+      title.className = "apiKeyProvider";
+      title.textContent = label;
+
+      const code = document.createElement("code");
+      code.textContent = key || "Ключ не создан";
+
+      const createBtn = document.createElement("button");
+      createBtn.type = "button";
+      createBtn.className = "apiKeyBtn";
+      createBtn.textContent = key ? "Ключ создан" : "Создать";
+      createBtn.disabled = Boolean(key);
+      createBtn.addEventListener("click", async () => {
+        try {
+          await api("/api/settings/openai-key", { method: "POST", body: { provider } });
+          const nextSettings = await api("/api/settings");
+          renderSettings(nextSettings);
+          setStatus(label + " API key готов", false);
+        } catch (err) {
+          setStatus("Не удалось создать " + label + " API key: " + err.message, true);
+        }
+      });
+
+      row.appendChild(title);
+      row.appendChild(code);
+      row.appendChild(createBtn);
+      return row;
+    }
+
+    function makeApiField(label, value) {
+      const wrap = document.createElement("div");
+      wrap.className = "apiField";
+      const labelEl = document.createElement("div");
+      labelEl.className = "apiFieldLabel";
+      labelEl.textContent = label;
+      const valueEl = document.createElement("code");
+      valueEl.textContent = value;
+      wrap.appendChild(labelEl);
+      wrap.appendChild(valueEl);
+      return wrap;
     }
 
     async function onToggle() {

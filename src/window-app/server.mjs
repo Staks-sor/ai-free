@@ -10,13 +10,21 @@ import { randomUUID } from "node:crypto";
 
 import { openAppWindow } from "../browser/launch.mjs";
 import { runCodeTask } from "../code-agent/run.mjs";
-import { COMMAND_CATALOG, loadSettings, saveSettings } from "../state/settings.mjs";
+import {
+  COMMAND_CATALOG,
+  ensureOpenAICompatApiKey,
+  loadSettings,
+  resolveOpenAICompatApiKey,
+  saveSettings,
+} from "../state/settings.mjs";
 import { conversationList, makeConversationTitle, shouldAutoTitle } from "../state/conversations.mjs";
 import { startTask, isRunning, getRunningIds } from "./task-runner.mjs";
 import { getStateFile, loadWindowState, saveWindowState } from "../state/window-state.mjs";
 import { listBrowseDirectories } from "./browse-fs.mjs";
 import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
+import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
+import { DEFAULT_API_PORT, setOpenAICorsHeaders } from "../../api/server.mjs";
 
 export async function runWindowApp({ client, workspaceRoot, port, modelType, thinkingEnabled, searchEnabled }) {
   const state = loadWindowState(workspaceRoot);
@@ -86,6 +94,24 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
 
       if (req.method === "GET" && url.pathname === "/") {
         return sendHtml(res, renderWindowHtml());
+      }
+
+      // OpenAI-compatible API is also available on the window server:
+      // http://127.0.0.1:<window-port>/v1/...
+      if (url.pathname.startsWith("/v1/")) {
+        setOpenAICorsHeaders(res);
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          return res.end();
+        }
+        const apiAuth = resolveOpenAICompatApiKey(req);
+        if (!apiAuth.ok) {
+          return sendJson(res, {
+            error: { message: "Invalid OpenAI-compatible API key", type: "authentication_error" },
+          }, 401);
+        }
+        req.openAICompatProvider = apiAuth.provider;
+        return handleOpenAICompatRequest(req, res);
       }
 
       // Lifeline для фронта. Если этот endpoint не отвечает 3 раза подряд → окно закрывается.
@@ -263,16 +289,38 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
       // ===== Settings (whitelist команд для /code) =====
 
       if (req.method === "GET" && url.pathname === "/api/settings") {
+        const { modelsList } = await import("../../api/models.mjs");
+        const { listProviders } = await import("../providers/registry.mjs");
         const current = loadSettings();
         const catalog = Object.entries(COMMAND_CATALOG).map(([name, meta]) => ({
           name,
           description: meta.description,
           risk: meta.risk,
         }));
+        const providers = listProviders().map((p) => ({
+          id: p.id,
+          name: p.name,
+          hasAuth: p.hasAuth(),
+        }));
         return sendJson(res, {
           allowedCommands: current.allowedCommands,
           catalog,
+          openAICompat: {
+            embeddedBaseUrl: `http://127.0.0.1:${port}/v1`,
+            standaloneBaseUrl: `http://127.0.0.1:${Number(process.env.API_PORT) || DEFAULT_API_PORT}/v1`,
+            startCommand: "npm run api",
+            apiKeys: current.openAICompat?.apiKeys || { deepseek: "", qwen: "" },
+            models: modelsList().data.map((m) => m.id),
+            providers,
+          },
         });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/settings/openai-key") {
+        const body = await readJsonBody(req);
+        const provider = String(body.provider || "");
+        const apiKey = ensureOpenAICompatApiKey(provider);
+        return sendJson(res, { provider, apiKey });
       }
 
       if (req.method === "PUT" && url.pathname === "/api/settings") {

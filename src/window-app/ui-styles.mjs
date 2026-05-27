@@ -350,6 +350,121 @@ export const STYLES = `
     .riskBadge.low    { background: rgba(34,197,94,0.15);  color: #22c55e; border: 1px solid rgba(34,197,94,0.35); }
     .riskBadge.medium { background: rgba(234,179,8,0.15);  color: #eab308; border: 1px solid rgba(234,179,8,0.35); }
     .riskBadge.high   { background: rgba(239,68,68,0.15);  color: #ef4444; border: 1px solid rgba(239,68,68,0.4); }
+    .apiSettings {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .apiSettingsGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .apiField {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .apiFieldLabel {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .apiField code {
+      display: block;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      background: var(--code-bg, #1e1e1e);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 7px 8px;
+      font-size: 12px;
+    }
+    .apiProviderRow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 4px 0 10px;
+    }
+    .apiProviderBadge {
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+    .apiProviderBadge.ready {
+      color: #22c55e;
+      border-color: rgba(34,197,94,0.35);
+      background: rgba(34,197,94,0.12);
+    }
+    .apiProviderBadge.missing {
+      color: #eab308;
+      border-color: rgba(234,179,8,0.35);
+      background: rgba(234,179,8,0.12);
+    }
+    .apiKeyList {
+      display: grid;
+      gap: 8px;
+      margin: 4px 0 10px;
+    }
+    .apiKeyRow {
+      display: grid;
+      grid-template-columns: 80px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px;
+    }
+    .apiKeyProvider {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .apiKeyRow code {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      background: var(--code-bg, #1e1e1e);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+    .apiKeyBtn {
+      border: 1px solid var(--line);
+      background: var(--button-bg);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 7px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .apiKeyBtn:hover:not(:disabled) {
+      border-color: var(--line-strong);
+    }
+    .apiKeyBtn:disabled {
+      color: var(--muted);
+      cursor: default;
+      opacity: 0.8;
+    }
+    .apiModels {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      margin-bottom: 10px;
+    }
+    .apiSample {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: var(--code-bg, #1e1e1e);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.45;
+    }
 
     .newChatBtn {
       width: 100%;
