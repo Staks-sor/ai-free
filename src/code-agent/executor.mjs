@@ -6,6 +6,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { COMMAND_CATALOG, loadSettings } from "../state/settings.mjs";
 
+export class WorkspaceToolError extends Error {
+  constructor(message, { fatal = false } = {}) {
+    super(message);
+    this.name = "WorkspaceToolError";
+    this.fatal = fatal;
+  }
+}
+
 export async function executeWorkspaceTool(workspaceRoot, call) {
   const tool = call.tool;
 
@@ -15,8 +23,14 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
 
   if (tool === "list_files") {
     const target = resolveWorkspacePath(workspaceRoot, call.path || ".");
-    const entries = listFiles(target, workspaceRoot);
-    return { ok: true, entries };
+    const maxDepth = clampInteger(call.maxDepth, 0, 8, 4);
+    const maxEntries = clampInteger(call.maxEntries, 20, 1000, 500);
+    const listing = listFiles(target, workspaceRoot, { maxDepth, maxEntries });
+    return {
+      ok: true,
+      path: path.relative(workspaceRoot, target) || ".",
+      ...listing,
+    };
   }
 
   if (tool === "read_file") {
@@ -44,6 +58,19 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
     return { ok: true, path: path.relative(workspaceRoot, target), bytes: Buffer.byteLength(call.content) };
   }
 
+  if (tool === "delete_file") {
+    const target = resolveWorkspacePath(workspaceRoot, call.path);
+    if (!fs.existsSync(target)) {
+      return { ok: true, path: path.relative(workspaceRoot, target), deleted: false, existed: false };
+    }
+    const stat = fs.lstatSync(target);
+    if (stat.isDirectory()) {
+      throw new Error("delete_file target is a directory. This tool deletes files only.");
+    }
+    fs.unlinkSync(target);
+    return { ok: true, path: path.relative(workspaceRoot, target), deleted: true, existed: true };
+  }
+
   if (tool === "mkdir") {
     const target = resolveWorkspacePath(workspaceRoot, call.path);
     fs.mkdirSync(target, { recursive: true });
@@ -64,7 +91,7 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
   const allowedCommands = new Set(settings.allowedCommands);
   const cmd = String(call.cmd || "").trim();
   if (!allowedCommands.has(cmd)) {
-    throw new Error(`Команда "${cmd}" не разрешена. Включи её в Settings → Allowed commands в окне чата.`);
+    throw new WorkspaceToolError(`Команда "${cmd}" не разрешена. Включи её в Settings → Allowed commands в окне чата.`, { fatal: true });
   }
 
   const args = Array.isArray(call.args) ? call.args.map((arg) => String(arg)) : [];
@@ -99,27 +126,31 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
 }
 
 export function validateCommandArgs(workspaceRoot, cmd, args) {
+  if ((cmd === "python" || cmd === "python3" || cmd === "node") && args.length === 0) {
+    throw new WorkspaceToolError(`${cmd} without a script is blocked because it opens an interactive REPL. Use write_file/mkdir for file changes, or run a workspace script file.`, { fatal: true });
+  }
+
   const blockedFlags = new Set([
     "install", "add", "remove", "uninstall", "publish", "login", "logout", "token",
   ]);
 
   if (cmd === "npm" && args.some((arg) => blockedFlags.has(arg))) {
-    throw new Error(`npm ${args.find((arg) => blockedFlags.has(arg))} is blocked.`);
+    throw new WorkspaceToolError(`npm ${args.find((arg) => blockedFlags.has(arg))} is blocked.`, { fatal: true });
   }
 
   if (cmd === "node" && args.some((arg) => ["-e", "--eval", "-p", "--print"].includes(arg))) {
-    throw new Error("node eval/print flags are blocked. Run a workspace file instead.");
+    throw new WorkspaceToolError("node eval/print flags are blocked. Run a workspace file instead.", { fatal: true });
   }
 
   if ((cmd === "python" || cmd === "python3") && args.some((arg) => ["-c", "-m"].includes(arg))) {
-    throw new Error("python -c/-m is blocked. Run a workspace file instead.");
+    throw new WorkspaceToolError("python -c/-m is blocked. Run a workspace file instead.", { fatal: true });
   }
 
   for (const arg of args) {
     if (!arg || arg.startsWith("-")) continue;
-    if (/^https?:\/\//i.test(arg)) throw new Error("Network URLs are blocked in command args.");
+    if (/^https?:\/\//i.test(arg)) throw new WorkspaceToolError("Network URLs are blocked in command args.", { fatal: true });
     if (arg.includes(";") || arg.includes("&&") || arg.includes("|") || arg.includes("`")) {
-      throw new Error("Shell operators are blocked in command args.");
+      throw new WorkspaceToolError("Shell operators are blocked in command args.", { fatal: true });
     }
 
     if (looksLikePath(arg)) resolveWorkspacePath(workspaceRoot, arg);
@@ -177,6 +208,12 @@ export function truncateOutput(text) {
   return value.length > 12000 ? `${value.slice(0, 12000)}\n[truncated]` : value;
 }
 
+function clampInteger(value, min, max, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+}
+
 // Резолв пути к файлу/папке внутри workspace. Гарантирует, что результат
 // НЕ выходит за пределы корня и не попадает в .git / node_modules / .env.
 export function resolveWorkspacePath(workspaceRoot, requestedPath) {
@@ -200,23 +237,54 @@ export function resolveWorkspacePath(workspaceRoot, requestedPath) {
   return target;
 }
 
-export function listFiles(target, workspaceRoot) {
+export function listFiles(target, workspaceRoot, { maxDepth = 4, maxEntries = 500 } = {}) {
   const stat = fs.statSync(target);
-  if (stat.isFile()) return [path.relative(workspaceRoot, target)];
+  if (stat.isFile()) {
+    return {
+      entries: [path.relative(workspaceRoot, target)],
+      truncated: false,
+      maxDepth,
+      maxEntries,
+    };
+  }
 
   const result = [];
+  let truncated = false;
   const walk = (dir, depth) => {
-    if (depth > 2 || result.length >= 200) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (depth > maxDepth) {
+      truncated = true;
+      return;
+    }
+    if (result.length >= maxEntries) {
+      truncated = true;
+      return;
+    }
+
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => ![".git", "node_modules", ".env"].includes(entry.name))
+      .sort((a, b) => {
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+    for (const entry of entries) {
       if ([".git", "node_modules", ".env"].includes(entry.name)) continue;
       const fullPath = path.join(dir, entry.name);
       const rel = path.relative(workspaceRoot, fullPath);
       result.push(entry.isDirectory() ? `${rel}/` : rel);
       if (entry.isDirectory()) walk(fullPath, depth + 1);
-      if (result.length >= 200) break;
+      if (result.length >= maxEntries) {
+        truncated = true;
+        break;
+      }
     }
   };
 
   walk(target, 0);
-  return result;
+  return {
+    entries: result,
+    truncated,
+    maxDepth,
+    maxEntries,
+  };
 }

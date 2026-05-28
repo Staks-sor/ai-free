@@ -6,7 +6,7 @@
 
 ## ⭐ Понравилось? Поставь звезду
 
-Если проект сэкономил тебе время — **поставь звезду на [GitHub](https://github.com/Staks-sor/free-deepseek-cli)**. Это бесплатно, занимает секунду, но реально помогает: больше звёзд → выше в выдаче → больше людей найдёт.
+Если проект сэкономил тебе время — **поставь звезду на [GitHub](https://github.com/Staks-sor/ai-free)**. Это бесплатно, занимает секунду, но реально помогает: больше звёзд → выше в выдаче → больше людей найдёт.
 
 ## 💳 Поддержать развитие
 
@@ -52,8 +52,8 @@
 ### macOS / Linux
 
 ```bash
-git clone https://github.com/Staks-sor/free-deepseek-cli.git deepseek-cli
-cd deepseek-cli
+git clone https://github.com/Staks-sor/ai-free.git ai-free
+cd ai-free
 npm install
 ```
 
@@ -70,8 +70,8 @@ sudo npx playwright install-deps chromium
 ### Windows
 
 ```powershell
-git clone https://github.com/Staks-sor/free-deepseek-cli.git deepseek-cli
-cd deepseek-cli
+git clone https://github.com/Staks-sor/ai-free.git ai-free
+cd ai-free
 npm install
 ```
 
@@ -131,6 +131,7 @@ npm start
 |---------|------------|
 | `npm start` | Окно чатов (`localhost:4317`). Welcome + логин, если провайдер не подключён. |
 | `npm run window` | Алиас `npm start`. |
+| `npm run server` | Тот же сервер чатов и `/v1`, но без открытия окна; события идут в консоль. |
 | `npm run cli` | Терминальный REPL (`/code`, `/ls`, `/new`, …). |
 | `npm run api` | OpenAI-совместимый API на `127.0.0.1:4318`. |
 | `npm run welcome` | Снова показать выбор провайдеров и подключить новые. |
@@ -152,6 +153,16 @@ npm run api
 `http://127.0.0.1:4317/v1`. Base URL и ключи есть в Settings. Для DeepSeek и
 Qwen создаются отдельные ключи формата `sk-...`; каждый ключ переиспользуется из
 `~/.deepseek-cli/settings.json` и не дублируется.
+
+Если окно не нужно, запусти:
+
+```bash
+npm run server
+```
+
+Это поднимает тот же сервер на `http://127.0.0.1:4317` и тот же API на
+`http://127.0.0.1:4317/v1`, но Chromium-окно не открывается. Основные события
+чатов, API-запросов и `/code`-задач печатаются в консоль.
 
 ---
 
@@ -328,13 +339,52 @@ npm run api
 
 | Имя в Kilo Code | Провайдер |
 |-----------------|-----------|
-| `deepseek-chat` | DeepSeek, обычный чат |
-| `deepseek-reasoner` | DeepSeek R1 (reasoner) |
+| `deepseek-v4-flash`, `deepseek-chat` | DeepSeek, обычный чат |
+| `deepseek-v4-pro`, `deepseek-reasoner` | DeepSeek reasoning / Expert |
 | `qwen3.7-max` (дефолт), `qwen3.6-plus`, `qwen3-max`, … | Qwen |
 
 **Важно:** в настройках Kilo указывай именно эти id — не подставляй `deepseek-reasoner` вручную в другие поля. Сервер сам маппит `deepseek-reasoner` → `model_type: expert` у DeepSeek.
 
 При ошибке `unknown variant 'deepseek-reasoner'` — обнови репозиторий (`git pull`) и перезапусти `node api/server.mjs` (нужна актуальная `api/models.mjs`).
+
+---
+
+## Интеграция с PyCharm ACP
+
+PyCharm AI Assistant запускает ACP-агента как subprocess из `~/.jetbrains/acp.json`.
+Для этого в проекте есть режим:
+
+```bash
+node ./bin/deepseek.mjs --acp
+```
+
+ACP-агент ходит в наш OpenAI-compatible API (`http://127.0.0.1:4317/v1` или `4318/v1`).
+Перед запуском в PyCharm должен быть поднят `npm start` или `npm run api`.
+
+Пример `~/.jetbrains/acp.json`:
+
+```json
+{
+  "default_mcp_settings": {
+    "use_idea_mcp": true,
+    "use_custom_mcp": true
+  },
+  "agent_servers": {
+    "HR Recruiter (Qwen)": {
+      "command": "/path/to/node",
+      "args": ["/path/to/ai-free/bin/deepseek.mjs", "--acp"],
+      "env": {
+        "OPENAI_BASE_URL": "http://127.0.0.1:4317/v1",
+        "OPENAI_API_KEY": "QWEN_KEY_FROM_SETTINGS",
+        "OPENAI_MODEL": "qwen3.7-max",
+        "DSCLI_ACP_ROLE": "recruiter"
+      }
+    }
+  }
+}
+```
+
+Доступные HR-роли: `recruiter`, `sourcer`, `interviewer`, `policy`.
 
 ---
 
@@ -350,7 +400,7 @@ npm run api
 
 ## Обратная связь
 
-Нашёл баг или есть идея? Открой [Issue](https://github.com/Staks-sor/free-deepseek-cli/issues) — отвечу.
+Нашёл баг или есть идея? Открой [Issue](https://github.com/Staks-sor/ai-free/issues) — отвечу.
 
 ## Лицензия
 

@@ -267,12 +267,13 @@ export function formatQwenUserFacingError(code, details) {
     || d.includes("insufficient quota")
   ) {
     return (
-      "Лимит Qwen (Alibaba Cloud) исчерпан.\n\n" +
-      "Сервер вернул: allocated quota exceeded — закончилась квота токенов или запросов на аккаунте.\n\n" +
+      "Qwen отклонил этот запрос по quota/token-limit.\n\n" +
+      "Это не обязательно значит, что аккаунт полностью заблокирован: Qwen иногда отдаёт allocated quota exceeded на один тяжёлый запрос, а следующий короткий запрос проходит нормально.\n\n" +
       "Что сделать:\n" +
-      "• Открой https://chat.qwen.ai и проверь лимиты / подписку\n" +
-      "• Попробуй другую модель в чате (например Qwen3.6 Plus вместо MAX)\n" +
-      "• Подожди сброс квоты или увеличь лимит: https://help.aliyun.com/zh/model-studio/error-code#token-limit\n\n" +
+      "• Повтори запрос, если он был короткий\n" +
+      "• Для большой /code-задачи разбей её на части или выбери модель полегче\n" +
+      "• Если ошибка повторяется подряд, проверь лимиты / подписку: https://chat.qwen.ai\n" +
+      "• Справка Alibaba: https://help.aliyun.com/zh/model-studio/error-code#token-limit\n\n" +
       `Код: ${code}\n${details}`
     );
   }

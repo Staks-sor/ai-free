@@ -15,7 +15,8 @@ describe("Qwen SSE error parsing", () => {
     };
     const msg = formatQwenStreamError(payload);
     assert.ok(msg);
-    assert.match(msg, /Лимит Qwen/i);
+    assert.match(msg, /Qwen отклонил/i);
+    assert.match(msg, /не обязательно/i);
     assert.match(msg, /quota exceeded/i);
     assert.match(msg, /internal_error/);
   });

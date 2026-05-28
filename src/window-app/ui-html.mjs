@@ -12,7 +12,7 @@ export function renderWindowHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Free v0.1.7</title>
+  <title>AI Free v0.2.0</title>
   <style>${STYLES}</style>
 </head>
 <body>
@@ -1254,7 +1254,6 @@ export function renderWindowHtml() {
       grid.className = "apiSettingsGrid";
 
       grid.appendChild(makeApiField("Base URL", info.embeddedBaseUrl));
-      grid.appendChild(makeApiField("Отдельный сервер", info.standaloneBaseUrl));
       groupEl.appendChild(grid);
 
       const keyList = document.createElement("div");

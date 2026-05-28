@@ -1,9 +1,10 @@
 {
-  "name": "deepseek-cookie-cli",
-  "version": "0.1.7",
+  "name": "ai-free",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "bin": {
+    "ai-free": "./bin/deepseek.mjs",
     "deepseek": "./bin/deepseek.mjs",
     "deepseek-cookie-cli": "./bin/deepseek.mjs"
   },
@@ -11,6 +12,7 @@
     "postinstall": "playwright install chromium",
     "start": "node ./bin/deepseek.mjs --window",
     "window": "node ./bin/deepseek.mjs --window",
+    "server": "node ./bin/deepseek.mjs --no-window",
     "cli": "node ./bin/deepseek.mjs",
     "chat": "node ./bin/deepseek.mjs",
     "api": "node ./bin/deepseek.mjs --api",

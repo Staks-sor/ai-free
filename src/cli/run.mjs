@@ -43,6 +43,12 @@ export async function run() {
     return;
   }
 
+  if (args.acp) {
+    const { runAcpServer } = await import("../acp/server.mjs");
+    await runAcpServer();
+    return;
+  }
+
   if (args.api) {
     const { startOpenAICompatServer } = await import("../../api/server.mjs");
     startOpenAICompatServer({ port: args.apiPort });
@@ -86,6 +92,8 @@ export async function run() {
       modelType: args.model,
       thinkingEnabled: args.thinking,
       searchEnabled: args.search,
+      openWindow: !args.noWindow,
+      consoleLog: args.noWindow,
     });
     return;
   }

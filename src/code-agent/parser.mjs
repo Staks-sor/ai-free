@@ -12,6 +12,9 @@
 export function parseToolCall(text) {
   const trimmed = String(text || "").trim();
 
+  const xmlResult = findXmlToolCall(trimmed);
+  if (xmlResult) return xmlResult;
+
   const fencedBlocks = [
     ...trimmed.matchAll(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/gi),
   ];
@@ -25,6 +28,36 @@ export function parseToolCall(text) {
   if (result2) return result2;
 
   return findToolCallInText(trimmed);
+}
+
+function findXmlToolCall(text) {
+  const match = text.match(/<tool_call\s+name=(["'])([^"']+)\1\s*>([\s\S]*?)<\/tool_call>/i);
+  if (!match) return null;
+
+  const tool = match[2];
+  const rawBody = match[3].trim();
+  if (!rawBody) return { tool };
+
+  try {
+    const parsed = JSON.parse(rawBody);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { tool, ...parsed };
+    }
+  } catch {
+    // Fall through to JSON extraction below.
+  }
+
+  const json = extractFirstJsonObject(rawBody);
+  if (!json) return { tool };
+  try {
+    const parsed = JSON.parse(json);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { tool, ...parsed };
+    }
+  } catch {
+    // ignore
+  }
+  return { tool };
 }
 
 // Ищет первый JSON-объект с полем "tool" (string) в тексте.
@@ -42,19 +75,33 @@ function findToolCallInText(text) {
     }
 
     try {
-      const parsed = JSON.parse(candidate);
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        typeof parsed.tool === "string"
-      ) {
-        return parsed;
-      }
+      const parsed = normalizeToolCall(JSON.parse(candidate));
+      if (parsed) return parsed;
     } catch {
       // Невалидный JSON — пробуем следующий объект.
     }
 
     offset = start + Math.max(candidate.length, 1);
+  }
+
+  return null;
+}
+
+function normalizeToolCall(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  if (typeof parsed.tool === "string") return parsed;
+
+  // Some models emit ACP-ish or malformed tool JSON, for example:
+  // {"":"write_file","path":"x","content":""}
+  // {"name":"write_file","arguments":{"path":"x","content":""}}
+  const emptyKeyTool = parsed[""];
+  if (typeof emptyKeyTool === "string") {
+    const { [""]: _ignored, ...rest } = parsed;
+    return { tool: emptyKeyTool, ...rest };
+  }
+
+  if (typeof parsed.name === "string" && parsed.arguments && typeof parsed.arguments === "object") {
+    return { tool: parsed.name, ...parsed.arguments };
   }
 
   return null;

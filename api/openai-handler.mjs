@@ -84,7 +84,7 @@ export async function handleRequest(req, res) {
 
   if (req.method === "GET" && url.pathname === "/") {
     return sendJson(res, {
-      name: "deepseek-cli openai-compat",
+      name: "AI Free openai-compat",
       version: "0.1.0-prototype",
       endpoints: ["GET /v1/models", "POST /v1/chat/completions"],
       docs: "see README.md in api/",
@@ -208,6 +208,11 @@ ${JSON.stringify(body.tools, null, 2)}
       return `[${(m.role || "user").toUpperCase()}]:\n${content}`;
     })
     .join("\n\n---\n\n");
+
+  prompt += `\n\n---\n[CURRENT API ROUTING — AUTHORITATIVE]:
+The current OpenAI-compatible request is routed to provider "${mapping.provider}" with requested model id "${modelName}".
+If the user asks what model you are, answer using this current requested model id and provider.
+Do not copy model identity from earlier assistant messages in the conversation history; those may have come from a different provider before the user switched models.`;
     
   // Ensure the prompt ends with a clear directive if tools are available
   if (body.tools && body.tools.length > 0) {

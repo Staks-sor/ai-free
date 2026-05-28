@@ -16,8 +16,14 @@ export const MODELS = [
   { name: "qwq-32b",        provider: "qwen",     model: "qwq-32b" },
   { name: "qwen-vl-max",    provider: "qwen",     model: "qwen-vl-max" },
 
-  // DeepSeek — через прямой API (chat.deepseek.com)
-  // model_type: null = chat (по умолчанию), "expert" = reasoner, "vision" = vision
+  // DeepSeek — через прямой API (chat.deepseek.com).
+  // Официальный API уже показывает новые имена deepseek-v4-flash / deepseek-v4-pro,
+  // но chat.deepseek.com за кулисами принимает режимы, а не эти id напрямую.
+  // Поэтому наружу отдаём OpenAI-compatible model id, внутрь маппим на model_type.
+  { name: "deepseek-v4-flash",  provider: "deepseek", model: null },
+  { name: "deepseek-v4-pro",    provider: "deepseek", model: "expert" },
+
+  // Legacy aliases для клиентов и конфигов, где они уже прописаны.
   { name: "deepseek-chat",      provider: "deepseek", model: null },
   { name: "deepseek-reasoner",  provider: "deepseek", model: "expert" },
 ];

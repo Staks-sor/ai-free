@@ -8,7 +8,7 @@ export const BASE_URL = "https://chat.deepseek.com";
 
 // Версия проекта (наша, отображается юзеру). НЕ путать с APP_VERSION ниже,
 // который имитирует фронт DeepSeek для их API.
-export const AI_FREE_VERSION = "0.1.7";
+export const AI_FREE_VERSION = "0.2.0";
 
 // Версия фронта DeepSeek — используется в X-App-Version заголовке.
 export const APP_VERSION = "2.0.0";

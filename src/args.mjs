@@ -17,7 +17,9 @@ export function parseArgs(argv) {
     login: false,
     stream: false,
     window: false,
+    noWindow: false,
     api: false,
+    acp: false,
     port: Number(process.env.DEEPSEEK_WINDOW_PORT || 4317),
     apiPort: Number(process.env.API_PORT || 4318),
     thinking: false,
@@ -43,7 +45,12 @@ export function parseArgs(argv) {
     else if (arg === "--debug") args.debug = true;
     else if (arg === "--stream") args.stream = true;
     else if (arg === "--window") args.window = true;
+    else if (arg === "--no-window") {
+      args.window = true;
+      args.noWindow = true;
+    }
     else if (arg === "--api") args.api = true;
+    else if (arg === "--acp") args.acp = true;
     else if (arg === "--login") args.login = true;
     else if (arg === "--save-creds") args.saveCreds = true;
     else if (arg === "--login-qwen") args.loginQwen = true;
@@ -91,10 +98,10 @@ export function parseEnvValue(rawValue) {
 
 export function printHelp() {
   console.log(`Usage:
-  deepseek-cookie-cli --cookies cookies.json --token TOKEN "message"
-  deepseek-cookie-cli --cookies cookies.json --token TOKEN
-  deepseek-cookie-cli --check --cookies cookies.json --token TOKEN
-  deepseek-cookie-cli --login
+  ai-free --cookies cookies.json --token TOKEN "message"
+  ai-free --cookies cookies.json --token TOKEN
+  ai-free --check --cookies cookies.json --token TOKEN
+  ai-free --login
 
 Options:
   --cookies FILE      Browser cookie export JSON
@@ -112,9 +119,11 @@ Options:
   --workspace DIR     Folder available to /code file tools
   --stream            Print response while it is generated
   --window            Open local multi-chat window (default for npm start)
+  --no-window         Start the same chat server/API without opening Chromium
   --port PORT         Port for --window (default 4317)
   --api               Start OpenAI-compatible API server
   --api-port PORT     Port for --api (default 4318)
+  --acp               Start ACP agent server over stdio for JetBrains IDEs
   --check             Test auth and session creation
   --debug             Print API event diagnostics`);
 }

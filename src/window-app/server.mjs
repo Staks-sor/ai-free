@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 
 import { openAppWindow } from "../browser/launch.mjs";
 import { runCodeTask } from "../code-agent/run.mjs";
+import { CODE_AGENT_PROMPT_VERSION } from "../code-agent/prompt.mjs";
 import {
   COMMAND_CATALOG,
   ensureOpenAICompatApiKey,
@@ -24,10 +25,30 @@ import { listBrowseDirectories } from "./browse-fs.mjs";
 import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
-import { DEFAULT_API_PORT, setOpenAICorsHeaders } from "../../api/server.mjs";
+import { setOpenAICorsHeaders } from "../../api/server.mjs";
 
-export async function runWindowApp({ client, workspaceRoot, port, modelType, thinkingEnabled, searchEnabled }) {
+export async function runWindowApp({
+  client,
+  workspaceRoot,
+  port,
+  modelType,
+  thinkingEnabled,
+  searchEnabled,
+  openWindow = true,
+  consoleLog = false,
+}) {
   const state = loadWindowState(workspaceRoot);
+
+  function logConsole(message) {
+    if (consoleLog) console.log(message);
+  }
+
+  function logConsoleBlock(label, value) {
+    if (!consoleLog) return;
+    const text = String(value || "").trimEnd();
+    console.log(`\n[${label}]`);
+    console.log(text || "[empty]");
+  }
 
   // Lazy init Qwen-клиента + авто-relogin (как DeepSeek AuthManager).
   let qwenClient = null;
@@ -99,6 +120,7 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
       // OpenAI-compatible API is also available on the window server:
       // http://127.0.0.1:<window-port>/v1/...
       if (url.pathname.startsWith("/v1/")) {
+        logConsole(`[api] ${req.method} ${url.pathname}`);
         setOpenAICorsHeaders(res);
         if (req.method === "OPTIONS") {
           res.statusCode = 204;
@@ -307,8 +329,6 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
           catalog,
           openAICompat: {
             embeddedBaseUrl: `http://127.0.0.1:${port}/v1`,
-            standaloneBaseUrl: `http://127.0.0.1:${Number(process.env.API_PORT) || DEFAULT_API_PORT}/v1`,
-            startCommand: "npm run api",
             apiKeys: current.openAICompat?.apiKeys || { deepseek: "", qwen: "" },
             models: modelsList().data.map((m) => m.id),
             providers,
@@ -401,6 +421,7 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
         state.conversations.unshift(conversation);
         state.activeConversationId = conversation.id;
         saveWindowState(workspaceRoot, state);
+        logConsole(`[chat] created ${provider}/${mode}: ${conversation.title} (${conversation.id})`);
         return sendJson(res, { conversation });
       }
 
@@ -459,6 +480,8 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
 
         // Маршрутизация по провайдеру.
         const convProvider = conversation.provider || "deepseek";
+        logConsole(`[chat] ${convProvider} message in ${conversation.title}: ${summarizeForLog(prompt)}`);
+        logConsoleBlock("user", prompt);
         if (convProvider === "qwen") {
           // Пушим user-сообщение СРАЗУ, до запроса к Qwen, чтобы оно отображалось
           // в UI пока ждём ответ (4-5 сек). Иначе пользовательское сообщение
@@ -520,24 +543,37 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
                 thinkingEnabled: body.thinking === true,
                 searchEnabled: false,
               };
-              const parentId = conversation.codeParentMessageId || null;
+              const parentId = getCodeParentMessageId(conversation);
+              const progressLogs = [];
+              const progressMessage = createCodeProgressMessage(conversation, task);
+              conversation.messages.push(progressMessage);
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
 
               startTask(conversation.id, "code", async () => {
                 try {
-                  const codeResult = await runCodeTask(adapter, baseOptions, workspacePath, task, parentId);
+                  logConsole(`[code] qwen started: ${summarizeForLog(task)}`);
+                  const codeResult = await runCodeTask(adapter, baseOptions, workspacePath, task, parentId, {
+                    onTool: (_call, _result, log) => {
+                      progressLogs.push(log);
+                      progressMessage.content = formatCodeProgressMessage(task, progressLogs);
+                      progressMessage.updatedAt = new Date().toISOString();
+                      conversation.updatedAt = progressMessage.updatedAt;
+                      saveWindowState(workspaceRoot, state);
+                    },
+                  });
                   conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
+                  conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
                   const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
-                  conversation.messages.push({
-                    role: "assistant",
-                    content: `${toolText}${codeResult.message}`.trimEnd(),
-                    createdAt: new Date().toISOString(),
-                  });
+                  progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+                  progressMessage.updatedAt = new Date().toISOString();
+                  if (toolText) logConsoleBlock("code tools", toolText);
+                  logConsoleBlock("assistant", codeResult.message);
+                  logConsole(`[code] qwen completed: ${codeResult.toolLogs.length} tool log(s)`);
                 } catch (err) {
-                  conversation.messages.push({
-                    role: "assistant",
-                    content: `⚠️ /code error: ${err.message}`,
-                    createdAt: new Date().toISOString(),
-                  });
+                  progressMessage.content = `⚠️ /code error: ${err.message}`;
+                  progressMessage.updatedAt = new Date().toISOString();
+                  logConsole(`[code] qwen failed: ${err.message}`);
                 }
                 conversation.updatedAt = new Date().toISOString();
                 saveWindowState(workspaceRoot, state);
@@ -567,6 +603,8 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
             });
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
+            logConsoleBlock("assistant", finalText || "[empty]");
+            logConsole(`[chat] qwen assistant response: ${finalText.length} char(s)`);
           } catch (error) {
             conversation.messages.push({
               role: "assistant",
@@ -575,6 +613,7 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
             });
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
+            logConsole(`[chat] qwen failed: ${error.message}`);
           }
           return sendJson(res, { conversation });
         }
@@ -662,24 +701,37 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
             thinkingEnabled: useThinking,
             searchEnabled: useSearch,
           };
-          const parentId = conversation.codeParentMessageId || null;
+          const parentId = getCodeParentMessageId(conversation);
+          const progressLogs = [];
+          const progressMessage = createCodeProgressMessage(conversation, task);
+          conversation.messages.push(progressMessage);
+          conversation.updatedAt = new Date().toISOString();
+          saveWindowState(workspaceRoot, state);
 
           startTask(conversation.id, "code", async () => {
             try {
-              const codeResult = await runCodeTask(client, baseOptions, workspacePath, task, parentId);
+              logConsole(`[code] deepseek started: ${summarizeForLog(task)}`);
+              const codeResult = await runCodeTask(client, baseOptions, workspacePath, task, parentId, {
+                onTool: (_call, _result, log) => {
+                  progressLogs.push(log);
+                  progressMessage.content = formatCodeProgressMessage(task, progressLogs);
+                  progressMessage.updatedAt = new Date().toISOString();
+                  conversation.updatedAt = progressMessage.updatedAt;
+                  saveWindowState(workspaceRoot, state);
+                },
+              });
               conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
+              conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
               const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
-              conversation.messages.push({
-                role: "assistant",
-                content: `${toolText}${codeResult.message}`.trimEnd(),
-                createdAt: new Date().toISOString(),
-              });
+              progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+              progressMessage.updatedAt = new Date().toISOString();
+              if (toolText) logConsoleBlock("code tools", toolText);
+              logConsoleBlock("assistant", codeResult.message);
+              logConsole(`[code] deepseek completed: ${codeResult.toolLogs.length} tool log(s)`);
             } catch (err) {
-              conversation.messages.push({
-                role: "assistant",
-                content: `⚠️ /code error: ${err.message}`,
-                createdAt: new Date().toISOString(),
-              });
+              progressMessage.content = `⚠️ /code error: ${err.message}`;
+              progressMessage.updatedAt = new Date().toISOString();
+              logConsole(`[code] deepseek failed: ${err.message}`);
             }
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
@@ -706,6 +758,8 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
         });
         conversation.updatedAt = new Date().toISOString();
         saveWindowState(workspaceRoot, state);
+        logConsoleBlock("assistant", result.text);
+        logConsole(`[chat] deepseek assistant response: ${result.text.length} char(s)`);
 
         return sendJson(res, { conversation });
       }
@@ -722,8 +776,14 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
   });
 
   const url = `http://127.0.0.1:${port}`;
-  console.log(`Workspace window: ${url}`);
-  openAppWindow(url);
+  if (openWindow) {
+    console.log(`Workspace window: ${url}`);
+    openAppWindow(url);
+  } else {
+    console.log(`Workspace server: ${url}`);
+    console.log(`OpenAI-compatible API: ${url}/v1`);
+    console.log("Window opening disabled. Console logging is enabled. Press Ctrl+C to stop.");
+  }
 
   // Graceful shutdown: Ctrl+C / kill / закрытие терминала.
   // Сервер закрывается → фронт через heartbeat видит мёртвый CLI → окно закрывается.
@@ -738,6 +798,44 @@ export async function runWindowApp({ client, workspaceRoot, port, modelType, thi
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGHUP", () => shutdown("SIGHUP"));
+}
+
+function summarizeForLog(value, maxLength = 160) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1)}...`;
+}
+
+function createCodeProgressMessage(task) {
+  const now = new Date().toISOString();
+  return {
+    role: "assistant",
+    content: `⏳ Выполняю задачу...\n\n${summarizeForLog(task, 240)}`,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function getCodeParentMessageId(conversation) {
+  if (conversation.codeAgentPromptVersion !== CODE_AGENT_PROMPT_VERSION) {
+    conversation.codeParentMessageId = null;
+    conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
+    return null;
+  }
+  return conversation.codeParentMessageId || null;
+}
+
+function formatCodeProgressMessage(task, logs) {
+  const visibleLogs = logs.slice(-8).join("\n\n");
+  const hiddenCount = Math.max(0, logs.length - 8);
+  const prefix = hiddenCount > 0 ? `...ещё ${hiddenCount} предыдущих tool-call(ов)\n\n` : "";
+  return [
+    `⏳ Выполняю задачу... tool-call ${logs.length}`,
+    summarizeForLog(task, 240),
+    "```text",
+    `${prefix}${visibleLogs}`.trimEnd(),
+    "```",
+  ].join("\n\n");
 }
 
 // Маппинг режима из UI в значение model_type для DeepSeek API.
