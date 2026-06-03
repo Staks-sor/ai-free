@@ -27,37 +27,37 @@ export function renderWindowHtml() {
       <div id="newChatOverlay" class="settingsOverlay hidden" aria-hidden="true">
         <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="newChatTitle">
           <div class="settingsHead">
-            <h2 id="newChatTitle">Новый чат</h2>
-            <button id="newChatClose" class="iconBtn" type="button" aria-label="Close">✕</button>
+             <h2 id="newChatTitle">Новый чат</h2>
+             <button id="newChatClose" class="iconBtn" type="button" aria-label="Close">✕</button>
           </div>
           <form id="newForm" class="newForm" autocomplete="off">
-            <label class="formField">
+            <div class="formField">
               <span>Провайдер</span>
               <div class="providerPicker" id="newChatProvider">
                 <!-- кнопки рендерятся динамически по ответу /api/providers -->
               </div>
-            </label>
+            </div>
 
-            <label class="formField">
+            <div class="formField">
               <span>Режим (модель)</span>
               <div class="modePicker" id="newChatMode">
                 <!-- кнопки режимов рендерятся динамически в зависимости от выбранного провайдера -->
               </div>
               <div class="modeHint">Режим зафиксируется при создании чата. Переключить потом нельзя — создавай новый чат в нужном режиме.</div>
-            </label>
+            </div>
 
             <label class="formField">
               <span>Название чата (опционально)</span>
               <input id="newTitle" placeholder="Например: рефакторинг auth" autocomplete="off">
             </label>
 
-            <label class="formField">
+            <div class="formField">
               <span>Папка проекта</span>
               <div class="pathRow">
                 <input id="newWorkspace" placeholder="/Users/.../project или ~/Projects/new-thing" autocomplete="off">
                 <button type="button" id="browseBtn" class="iconBtn">📁 Обзор</button>
               </div>
-            </label>
+            </div>
 
             <div id="browseSection" class="browseSection hidden">
               <div class="browsePath" id="browsePath"></div>
@@ -149,6 +149,40 @@ export function renderWindowHtml() {
   </div>
 
   <script>
+    // Принудительное переопределение confirm и alert для работы в VS Code Webview (блокирующем диалоги)
+    window.confirm = function(msg) {
+      console.log("[Confirm override]:", msg);
+      return true; // Автоматически подтверждаем все действия
+    };
+    window.alert = function(msg) {
+      console.warn("[Alert override]:", msg);
+      const el = document.getElementById("status");
+      if (el) {
+        el.textContent = msg;
+        el.className = "status error";
+      }
+    };
+
+    // Безопасная обёртка для localStorage в условиях песочницы VS Code Webview
+    const safeStorage = {
+      _data: {},
+      getItem(key) {
+        try {
+          return window.localStorage.getItem(key);
+        } catch (e) {
+          return this._data[key] || null;
+        }
+      },
+      setItem(key, value) {
+        try {
+          window.localStorage.setItem(key, value);
+        } catch (e) {
+          this._data[key] = String(value);
+        }
+      }
+    };
+    const localStorage = safeStorage;
+
     let appState = { conversations: [], activeConversationId: null, workspaceRoot: "" };
     let activeConversation = null;
     let sending = false;
@@ -592,16 +626,22 @@ export function renderWindowHtml() {
         label: "🐳 DeepSeek",
         sub: "chat.deepseek.com",
         modes: [
-          { id: "fast",   title: "⚡ Быстрый",     sub: "default, быстро" },
-          { id: "expert", title: "💎 Эксперт",    sub: "reasoning + мышление" },
-          { id: "vision", title: "🖼 Распознание", sub: "для изображений" },
+          { id: "fast",   title: "⚡ DeepSeek v4 Flash (Быстрый)",     sub: "Стандартная модель, быстрые ответы" },
+          { id: "expert", title: "🧠 DeepSeek v4 Pro (Эксперт)",    sub: "Глубокое мышление и логика (Reasoning)" },
+          { id: "vision", title: "🖼 DeepSeek v4 Vision", sub: "Распознавание изображений" },
         ],
+        models: [
+          { id: "deepseek-v4-flash", label: "DeepSeek v4 Flash" },
+          { id: "deepseek-v4-pro",   label: "DeepSeek v4 Pro (R1)" },
+          { id: "deepseek-v4-vision", label: "DeepSeek v4 Vision" },
+        ],
+        defaultModel: "deepseek-v4-flash",
       },
       qwen: {
         label: "🐫 Qwen",
         sub: "chat.qwen.ai",
         modes: [
-          { id: "default", title: "💬 Чат",        sub: "стандартная модель Qwen" },
+          { id: "default", title: "💬 Чат Qwen",        sub: "Интеллектуальная модель Qwen" },
         ],
         // Список моделей для picker'а. Должен совпадать с QWEN_MODELS в config.mjs.
         models: [
@@ -674,11 +714,12 @@ export function renderWindowHtml() {
         btn.dataset.authed = isAuthed ? "1" : "0";
         btn.innerHTML =
           '<div class="providerOptionTitle"></div>' +
-          '<div class="providerOptionSub"></div>';
+          '<div class="providerOptionSub"></div>' +
+          (isAuthed 
+            ? '<span class="reconnectLink success" title="Вы авторизованы. Нажмите, если хотите войти под другим аккаунтом">✓ Подключено</span>'
+            : '<span class="reconnectLink danger" title="Требуется авторизация. Нажмите, чтобы войти в аккаунт">🔑 Авторизоваться</span>');
         btn.querySelector(".providerOptionTitle").textContent = info.label;
-        btn.querySelector(".providerOptionSub").textContent = isAuthed
-          ? info.sub
-          : info.sub + " (нажми — подключить)";
+        btn.querySelector(".providerOptionSub").textContent = info.sub;
         newChatProviderPicker.appendChild(btn);
       }
     }
@@ -707,10 +748,16 @@ export function renderWindowHtml() {
       const opt = event.target.closest(".providerOption");
       if (!opt) return;
       const id = opt.dataset.provider;
-      if (opt.dataset.authed !== "1") {
+
+      // Запускаем авторизацию ТОЛЬКО если кликнули по кнопке НЕавторизованного провайдера.
+      // Если провайдер уже подключен, клик по зеленому бейджу просто выбирает его!
+      const reconnectBtn = event.target.closest(".reconnectLink");
+      if (reconnectBtn && opt.dataset.authed !== "1") {
+        event.stopPropagation();
         await connectProvider(id);
         return;
       }
+
       newChatSelectedProvider = id;
       localStorage.setItem(PROVIDER_PICK_KEY, newChatSelectedProvider);
       renderProviderPicker();
@@ -1051,7 +1098,8 @@ export function renderWindowHtml() {
       activeModeBadge.className = "modeBadge " + mode;
       activeModeBadge.textContent = modeDef?.title || mode;
 
-      // Model picker — только для провайдеров с поддержкой смены модели (сейчас Qwen).
+      // Model picker — для провайдеров с поддержкой смены модели.
+      // Скрываем статический бейдж, если доступен интерактивный выбор модели, чтобы не было путаницы.
       if (Array.isArray(info.models) && info.models.length > 1) {
         const currentModel = conversation.model || info.defaultModel || info.models[0].id;
         modelPickerEl.innerHTML = "";
@@ -1063,8 +1111,10 @@ export function renderWindowHtml() {
           modelPickerEl.appendChild(opt);
         }
         modelPickerEl.classList.remove("hidden");
+        activeModeBadge.classList.add("hidden");
       } else {
         modelPickerEl.classList.add("hidden");
+        activeModeBadge.classList.remove("hidden");
       }
 
       // Coder toggle — переключает coderMode для текущего чата.
@@ -1076,6 +1126,21 @@ export function renderWindowHtml() {
       } else {
         coderToggleEl.classList.remove("active");
         coderToggleEl.textContent = "🛠 Coder";
+      }
+
+      // Синхронизация и блокировка "Глубокого мышления" для моделей-рассуждалок (DeepSeek R1 / QwQ)
+      const currentModel = conversation.model || info.defaultModel || (info.models && info.models[0]?.id);
+      const isReasoningModel = currentModel === "deepseek-v4-pro" || currentModel === "qwq-32b";
+      if (isReasoningModel) {
+        toggleThinking.classList.add("active");
+        toggleThinking.disabled = true;
+        toggleThinking.classList.add("disabled");
+        toggleThinking.title = "Глубокое мышление обязательно для этой модели";
+      } else {
+        toggleThinking.disabled = false;
+        toggleThinking.classList.remove("disabled");
+        toggleThinking.classList.toggle("active", thinkingActive);
+        toggleThinking.title = "Глубокое мышление — модель показывает chain-of-thought";
       }
 
       // Раньше я думал, что search не работает в Expert — но юзер подтвердил

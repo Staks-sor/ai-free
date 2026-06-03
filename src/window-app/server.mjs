@@ -582,12 +582,13 @@ export async function runWindowApp({
               return sendJson(res, { conversation, running: true });
             }
 
+            const isQwenReasoning = conversation.model === "qwq-32b";
             const result = await qwenApiCall((c) =>
               c.complete({
                 chatId: conversation.sessionId,
                 prompt,
                 parentId: conversation.parentMessageId,
-                thinking: body.thinking === true,
+                thinking: isQwenReasoning ? true : (body.thinking === true),
                 search: body.search === true,
                 model: conversation.model || undefined,
               }),
@@ -631,10 +632,20 @@ export async function runWindowApp({
         // Режим берём ИЗ ЧАТА (зафиксирован при создании). Переключить нельзя —
         // DeepSeek завязывает parent_message_id chain на одну модель.
         // Тумблеры (thinking/search) — можно переключать per-message.
-        const messageMode = String(conversation.mode || "fast");
-        // thinking: в Expert по умолчанию true, юзер может перебить тумблером в обе стороны.
-        // search: чистый юзер-флаг, без переопределения от режима.
-        const useThinking = effectiveThinkingForMode(messageMode, body.thinking, thinkingEnabled);
+        // Поддержка смены модели DeepSeek прямо из селектора чата (как у Qwen)
+        let messageMode = String(conversation.mode || "fast");
+        if (conversation.model === "deepseek-v4-pro" || conversation.model === "deepseek-reasoner") {
+          messageMode = "expert";
+        } else if (conversation.model === "deepseek-v4-flash" || conversation.model === "deepseek-chat") {
+          messageMode = "fast";
+        } else if (conversation.model === "deepseek-v4-vision") {
+          messageMode = "vision";
+        }
+        // thinking: в Expert (Pro) безусловно true (модель R1 не работает без thinking), в остальных по умолчанию.
+        let useThinking = effectiveThinkingForMode(messageMode, body.thinking, thinkingEnabled);
+        if (messageMode === "expert") {
+          useThinking = true;
+        }
         let useSearch = body.search === true || (body.search !== false && searchEnabled);
         // file_id'ы загруженных картинок для vision-режима. Фронт сначала зальёт
         // файлы через /api/upload, потом шлёт их id здесь.

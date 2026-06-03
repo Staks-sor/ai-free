@@ -4,18 +4,18 @@
 export const STYLES = `
     :root {
       color-scheme: dark;
-      --bg: #0b0d10;
-      --sidebar: #111418;
-      --panel: #15191f;
-      --panel-2: #0f1216;
-      --line: #2a3038;
-      --line-strong: #3a4350;
+      --bg: #0e1116;
+      --sidebar: #13171f;
+      --panel: #161a23;
+      --panel-2: #0f1116;
+      --line: rgba(255, 255, 255, 0.05);
+      --line-strong: rgba(255, 255, 255, 0.12);
       --text: #edf1f7;
-      --muted: #929baa;
+      --muted: #8b96a7;
       --accent: #4d7cff;
       --accent-strong: #7fa0ff;
-      --accent-soft: #18264a;
-      --bubble: #1b2028;
+      --accent-soft: rgba(77, 124, 255, 0.12);
+      --bubble: #1c212d;
       --danger: #ff776d;
     }
     * { box-sizing: border-box; }
@@ -39,22 +39,20 @@ export const STYLES = `
       background: rgba(77, 124, 255, 0.35);
     }
     ::-webkit-scrollbar {
-      width: 10px;
-      height: 10px;
+      width: 8px;
+      height: 8px;
     }
     ::-webkit-scrollbar-track {
       background: transparent;
     }
     ::-webkit-scrollbar-thumb {
-      background: #343c47;
-      border: 2px solid transparent;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid transparent;
       background-clip: content-box;
       border-radius: 999px;
     }
     ::-webkit-scrollbar-thumb:hover {
-      background: #48515f;
-      border: 2px solid transparent;
-      background-clip: content-box;
+      background: rgba(255, 255, 255, 0.2);
     }
     .app {
       --sidebar-width: 300px;
@@ -111,8 +109,9 @@ export const STYLES = `
       min-width: 36px;
       border-radius: 6px;
       cursor: pointer;
+      transition: all 120ms ease;
     }
-    .iconBtn:hover, .sendBtn:hover {
+    .iconBtn:hover {
       border-color: var(--line-strong);
       background: #222936;
     }
@@ -158,16 +157,17 @@ export const STYLES = `
       cursor: pointer;
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
+      gap: 6px;
       width: 100%;
+      transition: all 120ms ease;
     }
-    .chatItem:hover { background: #171c24; }
+    .chatItem:hover { background: rgba(255, 255, 255, 0.03); }
     .chatItem.active {
       background: var(--accent-soft);
-      border-color: #304b8f;
+      border-color: rgba(77, 124, 255, 0.25);
     }
     .chatTitle {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -175,11 +175,11 @@ export const STYLES = `
     }
     .chatMeta {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
     }
     .chatDelete {
-      width: 28px;
-      height: 28px;
+      width: 26px;
+      height: 26px;
       border: 1px solid transparent;
       background: transparent;
       color: var(--muted);
@@ -188,11 +188,14 @@ export const STYLES = `
       align-self: center;
       grid-row: 1 / span 2;
       grid-column: 2;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .chatDelete:hover {
       color: var(--danger);
-      border-color: #5a3030;
-      background: #2b1719;
+      border-color: rgba(255, 119, 109, 0.2);
+      background: rgba(255, 119, 109, 0.08);
     }
     .main {
       display: grid;
@@ -203,8 +206,6 @@ export const STYLES = `
       background: var(--panel);
       overflow: hidden;
     }
-    /* Резайзер между списком сообщений и формой ввода.
-       Тянуть вверх — composer становится больше, тянуть вниз — меньше. */
     .composerResizer {
       height: 6px;
       background: var(--panel-2);
@@ -224,54 +225,61 @@ export const STYLES = `
     }
     .topbar {
       border-bottom: 1px solid var(--line);
-      padding: 12px 18px;
-      display: grid;
-      grid-template-columns: 1fr auto;
-      grid-template-rows: auto auto;
-      gap: 3px 12px;
+      padding: 10px 16px;
+      display: flex;
       align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--sidebar);
+    }
+    .titleRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
     }
     .title {
       font-weight: 700;
+      font-size: 14px;
+      color: var(--text);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      grid-column: 1;
-      grid-row: 1;
     }
     .workspace {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      grid-column: 1;
-      grid-row: 2;
+      display: none; /* Скрыто в сайдбаре VS Code, путь пишется в титле */
     }
     .settingsBtn {
-      grid-column: 2;
-      grid-row: 1 / span 2;
-      font-size: 18px;
-      padding: 6px 10px;
+      font-size: 16px;
+      padding: 4px 8px;
     }
     .settingsOverlay {
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.45);
+      background: rgba(10, 12, 16, 0.65);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
       z-index: 1000;
+      overflow-y: auto;
+      padding: 20px 10px;
     }
     .settingsOverlay.hidden { display: none; }
     .settingsPanel {
-      background: var(--panel);
+      background: #14171e;
       color: var(--text);
       width: min(720px, 92vw);
-      max-height: 86vh;
-      border-radius: 12px;
-      border: 1px solid var(--line);
-      box-shadow: 0 24px 64px rgba(0,0,0,0.4);
+      max-height: calc(100vh - 40px);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 24px 64px rgba(0,0,0,0.65);
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -528,10 +536,23 @@ export const STYLES = `
       justify-content: flex-end;
     }
     .primaryBtn {
-      background: var(--accent, #4f46e5);
+      background: linear-gradient(135deg, #4d7cff, #704dff);
       color: white;
-      padding: 8px 16px;
+      padding: 8px 18px;
       font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(77, 124, 255, 0.2);
+      transition: all 150ms ease;
+    }
+    .primaryBtn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(77, 124, 255, 0.3);
+      background: linear-gradient(135deg, #5b87ff, #7f5eff);
+    }
+    .primaryBtn:active {
+      transform: translateY(0);
     }
     .formError {
       margin-top: 10px;
@@ -664,11 +685,12 @@ export const STYLES = `
       text-align: center;
       max-width: 420px;
       line-height: 1.5;
+      font-size: 13px;
     }
     .msg {
       max-width: min(860px, 92%);
       display: grid;
-      gap: 6px;
+      gap: 4px;
     }
     .msg.user {
       align-self: flex-end;
@@ -677,27 +699,32 @@ export const STYLES = `
       align-self: flex-start;
     }
     .role {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--muted);
-      padding: 0 2px;
+      font-weight: 600;
+      margin-bottom: 2px;
     }
     .bubble {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 12px 14px;
-      line-height: 1.48;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 12px;
+      padding: 12px 16px;
+      line-height: 1.5;
+      font-size: 14px;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       background: var(--bubble);
       color: var(--text);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+      transition: all 120ms ease;
     }
     .user .bubble {
-      background: var(--accent);
+      background: linear-gradient(135deg, #3b66ff, #5c4dff);
       color: #fff;
-      border-color: var(--accent);
+      border: none;
+      box-shadow: 0 4px 16px rgba(77, 124, 255, 0.2);
     }
     .composer {
-      padding: 0 18px 14px;
+      padding: 12px 18px 14px;
       display: flex;
       flex-direction: column;
       gap: 10px;
@@ -706,15 +733,11 @@ export const STYLES = `
       min-height: 0;
       box-sizing: border-box;
     }
-    /* Когда composer-height задан через resizer — textarea заполняет всю доступную
-       высоту композера (минус кнопки и отступы). До этого работает auto-grow. */
     .bottomBar { display: flex; flex-direction: column; min-height: 0; height: 100%; }
     .main.composerSized #messageInput {
       flex: 1 1 0;
       max-height: none;
       height: auto;
-      /* Когда composer управляется внешним resizer'ом — отключаем нативный
-         resize-уголок у textarea, чтобы не было двух конфликтующих ручек. */
       resize: none;
     }
     .composerControls {
@@ -728,7 +751,6 @@ export const STYLES = `
       border-top: 1px solid var(--line);
       background: var(--panel-2);
     }
-    /* Бейдж режима в шапке текущего чата (read-only индикатор). */
     .titleRow {
       display: flex;
       align-items: center;
@@ -754,23 +776,23 @@ export const STYLES = `
     }
     .modeBadge.hidden { display: none; }
 
-    /* Picker модели Qwen + Coder toggle в шапке чата. */
     .modelPicker {
-      font-size: 12px;
-      padding: 4px 8px;
+      font-size: 11px;
+      padding: 4px 10px;
       border-radius: 6px;
       border: 1px solid var(--line);
       background: #10141a;
       color: var(--text);
       cursor: pointer;
       max-width: 200px;
+      font-weight: 600;
     }
     .modelPicker.hidden { display: none; }
     .modelPicker:hover { border-color: var(--line-strong); }
 
     .coderToggle {
-      font-size: 12px;
-      padding: 4px 10px;
+      font-size: 11px;
+      padding: 4px 12px;
       border-radius: 999px;
       border: 1px solid var(--line);
       background: transparent;
@@ -790,33 +812,24 @@ export const STYLES = `
     .modeBadge.expert  { background: rgba(168, 85, 247, 0.14); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.4); }
     .modeBadge.vision  { background: rgba(34, 197, 94, 0.14);  color: #86efac; border-color: rgba(34, 197, 94, 0.4); }
 
-    /* Бейдж провайдера в карточке чата в сайдбаре и в шапке.
-       Цветовая идея: DeepSeek = синий, Qwen = оранжевый/янтарный (Alibaba accent). */
     .providerBadge {
       display: inline-block;
       font-size: 10px;
       padding: 1px 6px;
       border-radius: 3px;
       font-weight: 700;
-      letter-spacing: 0.3px;
       text-transform: uppercase;
-      vertical-align: middle;
+      letter-spacing: 0.3px;
     }
-    .providerBadge.deepseek { background: rgba(82, 126, 255, 0.18); color: #aabfff; }
-    .providerBadge.qwen     { background: rgba(251, 146, 60, 0.20); color: #fdba74; }
-
-    /* Индикатор выполняющейся задачи (/code-агента) в сайдбаре.
-       Спиннер крутится только пока есть running tasks. */
-    .taskSpinner {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      margin-right: 6px;
-      border: 2px solid rgba(82, 126, 255, 0.25);
-      border-top-color: #aabfff;
-      border-radius: 50%;
-      animation: taskSpin 0.9s linear infinite;
-      vertical-align: middle;
+    .providerBadge.deepseek {
+      background: rgba(77, 124, 255, 0.12);
+      color: #7fa0ff;
+      border: 1px solid rgba(77, 124, 255, 0.3);
+    }
+    .providerBadge.qwen {
+      background: rgba(251, 146, 60, 0.12);
+      color: #fca5a5;
+      border: 1px solid rgba(251, 146, 60, 0.3);
     }
     @keyframes taskSpin { to { transform: rotate(360deg); } }
     .chatItem.running .chatTitle { color: #cbd5ff; font-weight: 700; }
@@ -832,25 +845,27 @@ export const STYLES = `
       align-items: flex-start;
       gap: 4px;
       padding: 12px;
-      border: 1px solid var(--line);
-      background: transparent;
-      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 8px;
       cursor: pointer;
-      transition: all 120ms;
+      transition: all 150ms ease;
       text-align: left;
       color: var(--text);
     }
     .providerOption:hover {
-      border-color: var(--line-strong);
-      background: rgba(255,255,255,0.03);
+      border-color: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.05);
     }
     .providerOption.active.deepseek {
-      background: rgba(82, 126, 255, 0.10);
-      border-color: rgba(82, 126, 255, 0.55);
+      background: rgba(77, 124, 255, 0.12);
+      border-color: rgba(77, 124, 255, 0.5);
+      box-shadow: 0 0 12px rgba(77, 124, 255, 0.15);
     }
     .providerOption.active.qwen {
-      background: rgba(251, 146, 60, 0.10);
-      border-color: rgba(251, 146, 60, 0.55);
+      background: rgba(251, 146, 60, 0.12);
+      border-color: rgba(251, 146, 60, 0.5);
+      box-shadow: 0 0 12px rgba(251, 146, 60, 0.15);
     }
     .providerOption.disabled {
       opacity: 0.4;
@@ -865,7 +880,6 @@ export const STYLES = `
       color: var(--muted);
     }
 
-    /* Mode picker в модалке Новый чат: 3 квадратные карточки с выбором. */
     .modePicker {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
@@ -877,21 +891,22 @@ export const STYLES = `
       align-items: flex-start;
       gap: 4px;
       padding: 12px;
-      border: 1px solid var(--line);
-      background: transparent;
-      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 8px;
       cursor: pointer;
-      transition: all 120ms;
+      transition: all 150ms ease;
       text-align: left;
       color: var(--text);
     }
     .modeOption:hover {
-      border-color: var(--line-strong);
-      background: rgba(255,255,255,0.03);
+      border-color: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.05);
     }
     .modeOption.active {
-      background: rgba(82, 126, 255, 0.10);
-      border-color: rgba(82, 126, 255, 0.55);
+      background: rgba(77, 124, 255, 0.12);
+      border-color: rgba(77, 124, 255, 0.5);
+      box-shadow: 0 0 12px rgba(77, 124, 255, 0.15);
     }
     .modeOptionTitle {
       font-weight: 700;
@@ -904,45 +919,10 @@ export const STYLES = `
     .modeHint {
       font-size: 11px;
       color: var(--muted);
-      margin-top: 4px;
-    }
-    /* Toggle pills внутри composer: «Глубокое мышление» / «Умный поиск». */
-    .togglePill {
-      padding: 6px 14px;
-      border: 1px solid var(--line);
-      background: transparent;
-      color: var(--muted);
-      font-size: 12px;
-      border-radius: 999px;
-      cursor: pointer;
-      font-weight: 500;
-      transition: all 120ms;
-    }
-    .togglePill:hover {
-      color: var(--text);
-      border-color: var(--line-strong);
-    }
-    .togglePill.active {
-      background: rgba(82, 126, 255, 0.12);
-      color: #aabfff;
-      border-color: rgba(82, 126, 255, 0.4);
-    }
-    .togglePill.disabled,
-    .togglePill:disabled {
-      opacity: 0.35;
-      cursor: not-allowed;
-      background: transparent;
-      color: var(--muted);
-      border-color: var(--line);
-    }
-    .togglePill:disabled:hover {
-      background: transparent;
-      color: var(--muted);
-      border-color: var(--line);
+      line-height: 1.4;
     }
     .attachBtn { font-size: 12px; }
 
-    /* Список прикреплённых файлов над input'ом. */
     .attachmentList {
       display: flex;
       flex-wrap: wrap;
@@ -981,44 +961,64 @@ export const STYLES = `
     }
     .attachChip .remove:hover { color: #ef4444; }
     textarea {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: #131720;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 12px;
+      line-height: 1.45;
+      width: 100%;
+      box-sizing: border-box;
+      transition: all 150ms ease;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.15);
       resize: vertical;
       min-height: 56px;
       max-height: 60vh;
-      border: 1px solid var(--line);
-      background: #10141a;
-      color: var(--text);
-      border-radius: 8px;
-      padding: 12px;
-      line-height: 1.4;
-      width: 100%;
-      box-sizing: border-box;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: rgba(77, 124, 255, 0.4);
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.15), 0 0 12px rgba(77, 124, 255, 0.12);
+      background: #161b25;
     }
     #messageInput { min-height: 72px; }
     .sendBtn {
-      height: 48px;
-      padding: 0 16px;
-      background: var(--accent);
-      border-color: var(--accent);
+      height: 36px;
+      width: 36px;
+      border: none;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
       color: #fff;
-      font-weight: 700;
-    }
-    .sendBtn:hover {
-      background: var(--accent-strong);
-      border-color: var(--accent-strong);
-    }
-    .codeBtn {
-      height: 48px;
-      padding: 0 14px;
-      border: 1px solid var(--line);
-      background: #1a1f27;
-      color: var(--text);
       border-radius: 8px;
       cursor: pointer;
       font-weight: 700;
+      box-shadow: 0 4px 10px rgba(59, 130, 246, 0.2);
+      transition: all 150ms ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    .codeBtn:hover {
-      border-color: var(--line-strong);
-      background: #222936;
+    .sendBtn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px rgba(59, 130, 246, 0.3);
+      background: linear-gradient(135deg, #4f46e5, #3b82f6);
+    }
+    .codeBtn {
+      height: 36px;
+      padding: 0 16px;
+      border: none;
+      background: linear-gradient(135deg, #7c3aed, #a855f7);
+      color: #fff;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+      box-shadow: 0 4px 10px rgba(168, 85, 247, 0.2);
+      transition: all 150ms ease;
+    }
+    .codeBtn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px rgba(168, 85, 247, 0.3);
+      background: linear-gradient(135deg, #8b5cf6, #b070f8);
     }
     .codeBtn:disabled {
       opacity: 0.55;
@@ -1036,4 +1036,124 @@ export const STYLES = `
       background: var(--panel-2);
     }
     .error { color: var(--danger); }
+
+    /* Ссылка войти заново / переподключить */
+    .reconnectLink {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-top: 4px;
+      cursor: pointer;
+      transition: all 120ms ease;
+      text-transform: none;
+      border: 1px solid transparent;
+    }
+    .reconnectLink.success {
+      color: #22c55e;
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.35);
+    }
+    .reconnectLink.success:hover {
+      color: #fff;
+      background: rgba(34, 197, 94, 0.25);
+      border-color: rgba(34, 197, 94, 0.5);
+    }
+    .reconnectLink.danger {
+      color: #ff776d;
+      background: rgba(255, 119, 109, 0.12);
+      border-color: rgba(255, 119, 109, 0.35);
+    }
+    .reconnectLink.danger:hover {
+      color: #fff;
+      background: rgba(255, 119, 109, 0.25);
+      border-color: rgba(255, 119, 109, 0.5);
+    }
+
+    .togglePill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 150ms ease;
+    }
+    .togglePill:hover {
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .togglePill.active {
+      color: #fff;
+      background: rgba(77, 124, 255, 0.2);
+      border-color: rgba(77, 124, 255, 0.45);
+      box-shadow: 0 2px 8px rgba(77, 124, 255, 0.15);
+    }
+
+    /* Адаптивный дизайн для боковой панели VS Code (экраны до 480px) */
+    @media (max-width: 480px) {
+      .settingsOverlay {
+        align-items: stretch;
+        justify-content: stretch;
+        background: var(--sidebar);
+      }
+      .settingsPanel {
+        width: 100vw;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+        border: none;
+        box-shadow: none;
+      }
+      .settingsHead {
+        padding: 12px 14px;
+      }
+      .newForm {
+        padding: 10px 12px 24px;
+        gap: 10px;
+      }
+      .formField {
+        margin-bottom: 6px;
+      }
+      .providerPicker {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+      .modePicker {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+      .providerOption, .modeOption {
+        padding: 10px 12px;
+        border-radius: 8px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .providerOptionSub, .modeOptionSub {
+        width: 100%;
+        margin-top: 2px;
+      }
+      .checkboxRow {
+        margin-bottom: 10px;
+        font-size: 12px;
+      }
+      .formActions {
+        margin-top: 6px;
+        justify-content: stretch;
+      }
+      .formActions button {
+        width: 100%;
+        height: 40px;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+    }
 `;
