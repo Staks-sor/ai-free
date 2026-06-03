@@ -1,0 +1,5 @@
+ai-free-vscode-*.vsix
+.DS_Store
+src/.DS_Store
+node_modules/.package-lock.json
+npm-debug.log

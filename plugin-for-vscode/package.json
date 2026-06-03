@@ -1,0 +1,58 @@
+{
+  "name": "ai-free-vscode",
+  "displayName": "AI Free Chat & Agent",
+  "description": "Free AI Chat (DeepSeek, Qwen) and Coding Agent directly in your VS Code sidebar",
+  "version": "0.1.14",
+  "publisher": "developers-daily-life",
+  "license": "SEE LICENSE IN LICENSE",
+  "icon": "media/marketplace-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Staks-sor/ai-free.git",
+    "directory": "plugin-for-vscode"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "assistant",
+    "chat",
+    "coding",
+    "deepseek",
+    "qwen"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ai-free-sidebar",
+          "title": "AI Free",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ai-free-sidebar": [
+        {
+          "type": "webview",
+          "id": "ai-free-chat",
+          "name": "AI Free Chat & Agent"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "package": "npx @vscode/vsce package"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
+  }
+}

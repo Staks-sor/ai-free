@@ -18,8 +18,31 @@
 
 import { QWEN_AUTH_FILE, QWEN_BASE_URL, QWEN_BROWSER_PROFILE } from "./config.mjs";
 import { applyQwenCookiesToContext, readQwenAuth } from "./auth-files.mjs";
+import fs from "node:fs";
+import path from "node:path";
+import url from "node:url";
+import { spawnSync } from "node:child_process";
 
 let proxyPromise = null;
+const here = path.dirname(url.fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(here, "../../..");
+
+function shouldInstallPlaywrightBrowser(error) {
+  const message = String(error?.message || "");
+  return /Executable doesn't exist|browserType\.launch|playwright install/i.test(message);
+}
+
+function installPlaywrightChromium() {
+  const cli = path.join(projectRoot, "node_modules", "playwright", "cli.js");
+  if (!fs.existsSync(cli)) return false;
+  console.log("[playwright] Chromium browser is missing. Installing it now...");
+  const result = spawnSync(process.execPath, [cli, "install", "chromium"], {
+    cwd: projectRoot,
+    stdio: "inherit",
+    env: process.env,
+  });
+  return result.status === 0;
+}
 
 // Сброс singleton после re-login / refresh — следующий запрос поднимет прокси с новыми куками.
 export function resetQwenBrowserProxy() {
@@ -48,7 +71,7 @@ async function createProxy({ debug }) {
 
   if (debug) console.log("[qwen-proxy] launching headless Chromium with profile…");
 
-  const context = await chromium.launchPersistentContext(QWEN_BROWSER_PROFILE, {
+  const launchOptions = {
     headless: true,
     viewport: { width: 1280, height: 800 },
     locale: "ru-RU",
@@ -56,7 +79,17 @@ async function createProxy({ debug }) {
       "--disable-blink-features=AutomationControlled",
       "--disable-features=site-per-process",
     ],
-  });
+  };
+  let context;
+  try {
+    context = await chromium.launchPersistentContext(QWEN_BROWSER_PROFILE, launchOptions);
+  } catch (error) {
+    if (shouldInstallPlaywrightBrowser(error) && installPlaywrightChromium()) {
+      context = await chromium.launchPersistentContext(QWEN_BROWSER_PROFILE, launchOptions);
+    } else {
+      throw error;
+    }
+  }
 
   // Стелс — те же меры, что в browser-login.mjs.
   await context.addInitScript(() => {

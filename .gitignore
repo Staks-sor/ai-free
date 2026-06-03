@@ -2,6 +2,7 @@ node_modules/
 .env
 .DS_Store
 .deepseek-cli/
+*.vsix
 cookies*.json
 *cookie*.json
 deepseek-token*.txt
@@ -18,3 +19,4 @@ REFACTOR_NOTES.md
 api/README.md
 .kilo/
 package-lock.json
+!plugin-for-vscode/package-lock.json
