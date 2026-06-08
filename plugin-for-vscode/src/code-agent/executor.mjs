@@ -2,6 +2,7 @@
 // Все пути валидируются через resolveWorkspacePath: за пределы workspace не выйти.
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { COMMAND_CATALOG, loadSettings } from "../state/settings.mjs";
@@ -31,6 +32,14 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
       path: path.relative(workspaceRoot, target) || ".",
       ...listing,
     };
+  }
+
+  if (tool === "list_serial_ports") {
+    return listSerialPorts();
+  }
+
+  if (tool === "ask_user") {
+    return createUserQuestion(call);
   }
 
   if (tool === "read_file") {
@@ -108,10 +117,23 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
     30000,
   );
 
-  const result = await spawnSyncSafe(cmd, args, {
-    cwd: path.resolve(workspaceRoot),
-    timeoutMs,
-  });
+  let result;
+  try {
+    result = await spawnSyncSafe(cmd, args, {
+      cwd: path.resolve(workspaceRoot),
+      timeoutMs,
+      env: getCommandExecutionEnv(),
+    });
+  } catch (error) {
+    const installRequest = createInstallRequestForMissingCommand(cmd);
+    return {
+      ok: false,
+      cmd,
+      args,
+      error: error.code === "ENOENT" ? `spawn ${cmd} ENOENT` : error.message,
+      installRequest,
+    };
+  }
 
   return {
     ok: result.status === 0,
@@ -122,6 +144,55 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
     timedOut: result.timedOut,
     stdout: truncateOutput(result.stdout),
     stderr: truncateOutput(result.stderr),
+  };
+}
+
+export function createInstallRequestForMissingCommand(cmd) {
+  const requests = {
+    pio: {
+      id: "platformio",
+      title: "Установить PlatformIO Core",
+      description: "Нужен для обнаружения плат, сборки и прошивки PlatformIO-проектов.",
+      command: "python3",
+      args: ["-m", "pip", "install", "--user", "platformio"],
+    },
+    "esptool.py": {
+      id: "esptool",
+      title: "Установить esptool",
+      description: "Нужен для диагностики и прямой прошивки ESP-чипов.",
+      command: "python3",
+      args: ["-m", "pip", "install", "--user", "esptool"],
+    },
+    "arduino-cli": {
+      id: "arduino-cli",
+      title: "Установить arduino-cli",
+      description: "Нужен для Arduino-проектов: board list, compile, upload и monitor.",
+      command: "brew",
+      args: ["install", "arduino-cli"],
+    },
+  };
+  return requests[cmd] || null;
+}
+
+export function createUserQuestion(call) {
+  const question = String(call.question || "").trim();
+  if (!question) {
+    return { ok: false, error: "ask_user requires a non-empty question.", fatal: true };
+  }
+  const choices = Array.isArray(call.choices)
+    ? call.choices
+        .map((choice) => String(choice).trim())
+        .filter(Boolean)
+        .slice(0, 6)
+    : [];
+  return {
+    ok: true,
+    awaitingUser: true,
+    userQuestion: {
+      question,
+      details: String(call.details || "").trim(),
+      choices,
+    },
   };
 }
 
@@ -153,7 +224,31 @@ export function validateCommandArgs(workspaceRoot, cmd, args) {
       throw new WorkspaceToolError("Shell operators are blocked in command args.", { fatal: true });
     }
 
-    if (looksLikePath(arg)) resolveWorkspacePath(workspaceRoot, arg);
+    if (looksLikePath(arg) && !isAllowedDevicePath(cmd, arg)) resolveWorkspacePath(workspaceRoot, arg);
+  }
+}
+
+export function isAllowedDevicePath(cmd, value) {
+  if (!["pio", "arduino-cli", "esptool.py"].includes(cmd)) return false;
+  return /^\/dev\/(cu|tty)[A-Za-z0-9._-]*$/u.test(String(value || ""));
+}
+
+export function listSerialPorts() {
+  const devDir = "/dev";
+  const patterns = [
+    /^cu\.(usb|wchusb|serial|SLAB|CP210|wch|modem|Bluetooth|usbserial|usbmodem)/i,
+    /^tty\.(usb|wchusb|serial|SLAB|CP210|wch|usbserial|usbmodem)/i,
+    /^ttyUSB\d+$/i,
+    /^ttyACM\d+$/i,
+  ];
+  try {
+    const entries = fs.readdirSync(devDir)
+      .filter((name) => patterns.some((pattern) => pattern.test(name)))
+      .sort((a, b) => a.localeCompare(b))
+      .map((name) => `${devDir}/${name}`);
+    return { ok: true, ports: entries, count: entries.length };
+  } catch (error) {
+    return { ok: false, ports: [], count: 0, error: error.message };
   }
 }
 
@@ -169,6 +264,7 @@ export function looksLikePath(value) {
 export function spawnSyncSafe(cmd, args, options) {
   const child = spawn(cmd, args, {
     cwd: options.cwd,
+    env: options.env || process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -206,6 +302,35 @@ export function waitForChild(child, timeoutMs, handlers) {
 export function truncateOutput(text) {
   const value = String(text || "");
   return value.length > 12000 ? `${value.slice(0, 12000)}\n[truncated]` : value;
+}
+
+export function getCommandExecutionEnv(baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    PATH: buildCommandPath(baseEnv),
+  };
+}
+
+export function buildCommandPath(baseEnv = process.env) {
+  const home = baseEnv.HOME || os.homedir();
+  const candidates = [
+    path.join(home, ".local", "bin"),
+    path.join(home, "Library", "Python"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ];
+  const pythonRoot = path.join(home, "Library", "Python");
+  try {
+    for (const entry of fs.readdirSync(pythonRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) candidates.push(path.join(pythonRoot, entry.name, "bin"));
+    }
+  } catch {}
+
+  const existingPath = String(baseEnv.PATH || "");
+  const parts = [...candidates, ...existingPath.split(path.delimiter)]
+    .filter(Boolean)
+    .filter((item, index, array) => array.indexOf(item) === index);
+  return parts.join(path.delimiter);
 }
 
 function clampInteger(value, min, max, fallback) {

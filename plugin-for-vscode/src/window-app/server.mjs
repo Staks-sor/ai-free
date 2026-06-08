@@ -6,9 +6,11 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { openAppWindow } from "../browser/launch.mjs";
+import { getCommandExecutionEnv } from "../code-agent/executor.mjs";
 import { runCodeTask } from "../code-agent/run.mjs";
 import { CODE_AGENT_PROMPT_VERSION } from "../code-agent/prompt.mjs";
 import {
@@ -75,7 +77,7 @@ export async function runWindowApp({
   }
 
   function getVisibleConversations() {
-    return agentMode ? state.conversations.filter(isCurrentWorkspaceConversation) : state.conversations;
+    return state.conversations;
   }
 
   function getActiveConversationIdForResponse() {
@@ -273,7 +275,10 @@ export async function runWindowApp({
       try {
         logConsole(`[agent] ${providerLabel.toLowerCase()} started in ${workspacePath}: ${summarizeForLog(task)}`);
         const codeResult = await runCodeTask(clientForAgent, baseOptions, workspacePath, task, parentId, {
-          onTool: (_call, _result, log) => {
+          systemPrompt: conversation.hardwareMode === true ? createHardwareAgentPrompt() : "",
+          onTool: (_call, result, log) => {
+            captureInstallRequest(conversation, result);
+            captureQuestionRequest(conversation, result);
             progressLogs.push(log);
             progressMessage.content = formatCodeProgressMessage(task, progressLogs);
             progressMessage.updatedAt = new Date().toISOString();
@@ -716,9 +721,69 @@ export async function runWindowApp({
             await resetProviderChainForModelChange(conversation);
           }
         }
+        if (typeof body.hardwareMode === "boolean") {
+          conversation.hardwareMode = body.hardwareMode;
+        }
         conversation.updatedAt = new Date().toISOString();
         saveWindowState(workspaceRoot, state);
         return sendJson(res, { conversation });
+      }
+
+      const installMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/install-request\/(approve|reject)$/);
+      if (req.method === "POST" && installMatch) {
+        const conversation = state.conversations.find((item) => item.id === installMatch[1]);
+        if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
+        const request = conversation.pendingInstallRequest;
+        if (!request || request.status !== "pending") {
+          return sendJson(res, { error: "No pending install request" }, 400);
+        }
+        if (installMatch[2] === "reject") {
+          conversation.pendingInstallRequest = { ...request, status: "rejected", updatedAt: new Date().toISOString() };
+          conversation.updatedAt = new Date().toISOString();
+          saveWindowState(workspaceRoot, state);
+          return sendJson(res, { conversation });
+        }
+        conversation.pendingInstallRequest = { ...request, status: "running", updatedAt: new Date().toISOString() };
+        conversation.updatedAt = new Date().toISOString();
+        saveWindowState(workspaceRoot, state);
+        runApprovedInstall(request, workspaceRoot, (progress) => {
+          conversation.pendingInstallRequest = {
+            ...conversation.pendingInstallRequest,
+            ...progress,
+            status: "running",
+            updatedAt: new Date().toISOString(),
+          };
+          conversation.updatedAt = new Date().toISOString();
+          saveWindowState(workspaceRoot, state);
+        })
+          .then((result) => {
+            conversation.pendingInstallRequest = {
+              ...request,
+              status: result.ok ? "installed" : "failed",
+              result,
+              updatedAt: new Date().toISOString(),
+            };
+            conversation.messages.push({
+              role: "assistant",
+              content: result.ok
+                ? `Установка завершена: ${request.title}`
+                : `Установка не удалась: ${request.title}\n${result.stderr || result.error || ""}`.trim(),
+              createdAt: new Date().toISOString(),
+            });
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+          })
+          .catch((error) => {
+            conversation.pendingInstallRequest = {
+              ...request,
+              status: "failed",
+              result: { ok: false, error: error.message },
+              updatedAt: new Date().toISOString(),
+            };
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+          });
+        return sendJson(res, { conversation, runningInstall: true });
       }
 
       if (req.method === "DELETE" && conversationMatch) {
@@ -750,9 +815,10 @@ export async function runWindowApp({
 
         const prompt = String(body.content || "").trim();
         if (!prompt) return sendJson(res, { error: "Message is empty" }, 400);
+        conversation.pendingQuestion = null;
 
         const convProvider = conversation.provider || "deepseek";
-        const shouldRunAgent = agentMode || conversation.agentMode === true;
+        const shouldRunAgent = agentMode || conversation.agentMode === true || conversation.hardwareMode === true;
         logConsole(`[${shouldRunAgent ? "agent" : "chat"}] ${convProvider} message in ${conversation.title}: ${summarizeForLog(prompt)}`);
         logConsoleBlock("user", prompt);
 
@@ -927,6 +993,150 @@ function summarizeForLog(value, maxLength = 160) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength - 1)}...`;
+}
+
+function captureInstallRequest(conversation, toolResult) {
+  const install = toolResult?.installRequest;
+  if (!install || !install.id || !install.command || !Array.isArray(install.args)) return;
+  conversation.pendingInstallRequest = {
+    requestId: randomUUID(),
+    status: "pending",
+    ...install,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function captureQuestionRequest(conversation, toolResult) {
+  const question = toolResult?.userQuestion;
+  if (!question || !question.question) return;
+  conversation.pendingQuestion = {
+    questionId: randomUUID(),
+    status: "pending",
+    question: question.question,
+    details: question.details || "",
+    choices: Array.isArray(question.choices) ? question.choices : [],
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function approvedInstallRecipes() {
+  return {
+    platformio: {
+      command: "python3",
+      args: ["-m", "pip", "install", "--user", "platformio"],
+      verifyCommand: "pio",
+      verifyArgs: ["--version"],
+    },
+    esptool: {
+      command: "python3",
+      args: ["-m", "pip", "install", "--user", "esptool"],
+      verifyCommand: "esptool.py",
+      verifyArgs: ["--version"],
+    },
+    "arduino-cli": {
+      command: "brew",
+      args: ["install", "arduino-cli"],
+      verifyCommand: "arduino-cli",
+      verifyArgs: ["version"],
+    },
+  };
+}
+
+function runApprovedInstall(request, cwd, onProgress = () => {}) {
+  const recipe = approvedInstallRecipes()[request.id];
+  if (!recipe) return Promise.resolve({ ok: false, error: `Unknown install recipe: ${request.id}` });
+  if (request.command !== recipe.command || JSON.stringify(request.args) !== JSON.stringify(recipe.args)) {
+    return Promise.resolve({ ok: false, error: "Install command does not match approved recipe." });
+  }
+  return new Promise((resolve) => {
+    const env = getCommandExecutionEnv();
+    const child = spawn(recipe.command, recipe.args, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const startedAt = new Date().toISOString();
+    const publish = () => onProgress({
+      startedAt,
+      stdout: stdout.slice(-12000),
+      stderr: stderr.slice(-12000),
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      child.kill("SIGTERM");
+      stderr += "\nInstall timed out after 10 minutes.";
+      publish();
+    }, 10 * 60 * 1000);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      publish();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+      publish();
+    });
+    child.on("error", (error) => {
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok: false, error: error.message, stdout, stderr });
+    });
+    child.on("close", async (status, signal) => {
+      settled = true;
+      clearTimeout(timer);
+      const verify = status === 0
+        ? await verifyInstalledCommand(recipe, cwd, env)
+        : { ok: false, stdout: "", stderr: "" };
+      resolve({
+        ok: status === 0 && verify.ok,
+        status,
+        signal,
+        command: recipe.command,
+        args: recipe.args,
+        verifyCommand: recipe.verifyCommand,
+        verify,
+        stdout: stdout.slice(-12000),
+        stderr: [stderr, verify.ok ? "" : verify.stderr || verify.error || ""].filter(Boolean).join("\n").slice(-12000),
+      });
+    });
+  });
+}
+
+function verifyInstalledCommand(recipe, cwd, env) {
+  if (!recipe.verifyCommand) return Promise.resolve({ ok: true });
+  return new Promise((resolve) => {
+    const child = spawn(recipe.verifyCommand, recipe.verifyArgs || [], {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => resolve({ ok: false, error: error.message, stdout, stderr }));
+    child.on("close", (status, signal) => resolve({
+      ok: status === 0,
+      status,
+      signal,
+      stdout: stdout.slice(-12000),
+      stderr: stderr.slice(-12000),
+    }));
+  });
+}
+
+function createHardwareAgentPrompt() {
+  return `ESP / hardware mode is enabled.
+- Treat the task as work with a real microcontroller project in this workspace.
+- First inspect the project files and identify whether it uses PlatformIO, Arduino CLI, ESP-IDF, or raw esptool artifacts.
+- Prefer PlatformIO when platformio.ini exists. Use arduino-cli only for Arduino projects, and esptool.py only for direct ESP diagnostics/flashing.
+- Before upload/flash, identify the target board and serial port with safe read-only checks such as list_serial_ports, pio device list, arduino-cli board list, or project file inspection.
+- If PlatformIO, arduino-cli, or esptool.py are not installed, still use list_serial_ports for port discovery and then tell the user which external flashing tool must be installed.
+- Do not run erase_flash. Do not invent a serial port or board. If the exact port/board/firmware path is missing, ask the user for it.
+- Only upload/flash when the user explicitly asks to прошить/upload/flash. For analysis tasks, stop after reporting the plan and required commands.`;
 }
 
 function modeForProviderModel(providerId, modelId) {

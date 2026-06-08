@@ -27,27 +27,76 @@ export function getLegacyInWorkspaceStateFile(workspaceRoot) {
 
 export function loadWindowState(workspaceRoot) {
   const file = getStateFile();
-  const legacy1 = getLegacyPerWorkspaceStateFile(workspaceRoot);
-  const legacy2 = getLegacyInWorkspaceStateFile(workspaceRoot);
+  const legacyFiles = getLegacyStateFiles(workspaceRoot);
 
   // Migration: глобального нет → копируем из любой старой версии.
   if (!fs.existsSync(file)) {
-    if (fs.existsSync(legacy1)) {
+    const firstLegacy = legacyFiles.find((candidate) => fs.existsSync(candidate));
+    if (firstLegacy) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.copyFileSync(legacy1, file);
-    } else if (fs.existsSync(legacy2)) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.copyFileSync(legacy2, file);
+      fs.copyFileSync(firstLegacy, file);
     }
   }
 
-  for (const candidate of [file, getStateBackupFile(), legacy1, legacy2]) {
+  const primary = readFirstStateFile([file, getStateBackupFile(), ...legacyFiles]);
+  if (primary) {
+    const merged = mergeWindowStates(primary, legacyFiles.map(readStateFile).filter(Boolean), workspaceRoot);
+    if (merged.conversations.length > primary.conversations.length) {
+      saveWindowState(workspaceRoot, merged);
+    }
+    return merged;
+  }
+
+  return createEmptyState(workspaceRoot);
+}
+
+export function getLegacyStateFiles(workspaceRoot) {
+  const direct = [
+    getLegacyPerWorkspaceStateFile(workspaceRoot),
+    getLegacyInWorkspaceStateFile(workspaceRoot),
+  ];
+  const workspacesDir = path.join(AUTH_DIR, "workspaces");
+  let allWorkspaceStates = [];
+  try {
+    allWorkspaceStates = fs.readdirSync(workspacesDir)
+      .map((name) => path.join(workspacesDir, name, "state.json"))
+      .filter((file) => fs.existsSync(file));
+  } catch {
+    allWorkspaceStates = [];
+  }
+  return Array.from(new Set([...direct, ...allWorkspaceStates]));
+}
+
+function readFirstStateFile(files) {
+  for (const candidate of files) {
     if (!fs.existsSync(candidate)) continue;
     const state = readStateFile(candidate);
     if (state) return state;
   }
+  return null;
+}
 
-  return createEmptyState(workspaceRoot);
+export function mergeWindowStates(primary, states, workspaceRoot) {
+  const byId = new Map();
+  for (const state of [primary, ...states]) {
+    for (const conversation of state.conversations || []) {
+      const existing = byId.get(conversation.id);
+      if (!existing || String(conversation.updatedAt || "") > String(existing.updatedAt || "")) {
+        byId.set(conversation.id, conversation);
+      }
+    }
+  }
+  const conversations = Array.from(byId.values())
+    .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  const activeConversationId = conversations.some((item) => item.id === primary.activeConversationId)
+    ? primary.activeConversationId
+    : conversations[0]?.id || null;
+  return normalizeWindowState({
+    ...primary,
+    workspaceRoot: primary.workspaceRoot || path.resolve(workspaceRoot),
+    activeConversationId,
+    conversations,
+  }, workspaceRoot);
 }
 
 export function saveWindowState(workspaceRoot, state) {

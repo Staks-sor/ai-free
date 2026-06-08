@@ -6,13 +6,14 @@
 // модалки (Settings, New chat, файловый браузер) рендерятся и работают.
 
 import { STYLES } from "./ui-styles.mjs";
+import { AI_FREE_VERSION } from "../config.mjs";
 export function renderWindowHtml() {
   return `<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Free v0.2.0</title>
+  <title>AI Free v${AI_FREE_VERSION}</title>
   <style>${STYLES}</style>
 </head>
 <body>
@@ -106,8 +107,10 @@ export function renderWindowHtml() {
           <span id="activeMode" class="modeBadge hidden"></span>
           <select id="modelPicker" class="modelPicker hidden" title="Модель"></select>
           <button id="coderToggle" class="coderToggle hidden" type="button" title="Включить режим агента — модель сама создаёт/редактирует файлы">🛠 Coder</button>
+          <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="ESP / прошивка плат — включает аппаратный профиль агента">ESP</button>
         </div>
         <div id="workspace" class="workspace"></div>
+        <button id="themeBtn" class="iconBtn themeBtn" type="button" title="Сменить тему">◐</button>
         <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="Settings / разрешённые команды">⚙</button>
       </header>
 
@@ -132,14 +135,13 @@ export function renderWindowHtml() {
       <div class="bottomBar">
         <form id="composer" class="composer">
           <div id="attachmentList" class="attachmentList"></div>
-          <textarea id="messageInput" placeholder="Сообщение DeepSeek... или /code создай файл app.js" disabled></textarea>
+          <textarea id="messageInput" placeholder="Сообщение DeepSeek..." disabled></textarea>
           <input type="file" id="fileInput" multiple style="display:none">
           <div class="composerControls">
             <button type="button" id="toggleThinking" class="togglePill" title="Глубокое мышление — модель показывает chain-of-thought">⚛ Глубокое мышление</button>
             <button type="button" id="toggleSearch" class="togglePill" title="Умный поиск — модель использует веб-поиск для актуальной инфы">🌐 Умный поиск</button>
             <button type="button" id="attachBtn" class="togglePill attachBtn" title="Прикрепить текстовый файл для чтения">📎 Файл</button>
             <div class="composerSpacer"></div>
-            <button id="codeBtn" class="codeBtn" type="button" disabled>/code</button>
             <button id="sendBtn" class="sendBtn" type="submit" disabled>↑</button>
           </div>
         </form>
@@ -149,11 +151,7 @@ export function renderWindowHtml() {
   </div>
 
   <script>
-    // Принудительное переопределение confirm и alert для работы в VS Code Webview (блокирующем диалоги)
-    window.confirm = function(msg) {
-      console.log("[Confirm override]:", msg);
-      return true; // Автоматически подтверждаем все действия
-    };
+    // alert в webview может быть заблокирован, поэтому дублируем его в status bar.
     window.alert = function(msg) {
       console.warn("[Alert override]:", msg);
       const el = document.getElementById("status");
@@ -195,11 +193,17 @@ export function renderWindowHtml() {
     const workspace = document.getElementById("workspace");
     const statusEl = document.getElementById("status");
     const messageInput = document.getElementById("messageInput");
-    const codeBtn = document.getElementById("codeBtn");
     const sendBtn = document.getElementById("sendBtn");
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
+    const THEME_KEY = "deepseek.theme";
+    const THEMES = [
+      { id: "dark", label: "Тёмная", icon: "◐" },
+      { id: "light", label: "Светлая", icon: "☼" },
+      { id: "contrast", label: "Контраст", icon: "◑" },
+    ];
 
+    setupTheme();
     applySavedSidebarWidth();
     setupSidebarResize();
     applySavedComposerHeight();
@@ -224,6 +228,9 @@ export function renderWindowHtml() {
     });
 
     async function openNewChatModal() {
+      await refreshModelCatalog();
+      renderProviderPicker();
+      renderModePickerForProvider();
       newFormError.classList.add("hidden");
       newFormError.textContent = "";
       newTitleInput.value = "";
@@ -421,6 +428,7 @@ export function renderWindowHtml() {
             createFolder,
             mode: newChatSelectedMode,
             provider: newChatSelectedProvider,
+            model: defaultModelForProviderMode(newChatSelectedProvider, newChatSelectedMode),
           },
         });
         activeConversation = data.conversation;
@@ -621,29 +629,30 @@ export function renderWindowHtml() {
     // Qwen: выбор модели в picker (см. QWEN_MODELS в config.mjs).
     const PROVIDER_PICK_KEY = "deepseek.newchat.provider";
 
-    const PROVIDER_INFO = {
+    let PROVIDER_INFO = {
       deepseek: {
-        label: "🐳 DeepSeek",
+        label: "DeepSeek",
         sub: "chat.deepseek.com",
+        defaultMode: "fast",
         modes: [
-          { id: "fast",   title: "⚡ DeepSeek v4 Flash (Быстрый)",     sub: "Стандартная модель, быстрые ответы" },
-          { id: "expert", title: "🧠 DeepSeek v4 Pro (Эксперт)",    sub: "Глубокое мышление и логика (Reasoning)" },
-          { id: "vision", title: "🖼 DeepSeek v4 Vision", sub: "Распознавание изображений" },
+          { id: "fast", title: "DeepSeek v4 Flash", sub: "быстрый обычный чат", model: "deepseek-v4-flash" },
+          { id: "expert", title: "DeepSeek v4 Pro", sub: "reasoning / R1", model: "deepseek-v4-pro", reasoning: true },
+          { id: "vision", title: "DeepSeek v4 Vision", sub: "распознавание изображений", model: "deepseek-v4-vision", vision: true },
         ],
         models: [
           { id: "deepseek-v4-flash", label: "DeepSeek v4 Flash" },
-          { id: "deepseek-v4-pro",   label: "DeepSeek v4 Pro (R1)" },
+          { id: "deepseek-v4-pro", label: "DeepSeek v4 Pro", reasoning: true },
           { id: "deepseek-v4-vision", label: "DeepSeek v4 Vision" },
         ],
         defaultModel: "deepseek-v4-flash",
       },
       qwen: {
-        label: "🐫 Qwen",
+        label: "Qwen",
         sub: "chat.qwen.ai",
+        defaultMode: "default",
         modes: [
-          { id: "default", title: "💬 Чат Qwen",        sub: "Интеллектуальная модель Qwen" },
+          { id: "default", title: "Qwen Chat", sub: "выбор модели в шапке чата", model: "qwen3.7-max" },
         ],
-        // Список моделей для picker'а. Должен совпадать с QWEN_MODELS в config.mjs.
         models: [
           { id: "qwen3.7-max",   label: "Qwen3.7 MAX" },
           { id: "qwen3.6-plus",  label: "Qwen3.6 Plus" },
@@ -655,6 +664,28 @@ export function renderWindowHtml() {
         defaultModel: "qwen3.7-max",
       },
     };
+
+    async function refreshModelCatalog() {
+      try {
+        const r = await fetch("/api/model-catalog");
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j && j.providers && typeof j.providers === "object") {
+          PROVIDER_INFO = j.providers;
+        }
+      } catch {}
+    }
+
+    function defaultModelForProviderMode(providerId, modeId) {
+      const info = PROVIDER_INFO[providerId] || PROVIDER_INFO.deepseek;
+      const mode = (info.modes || []).find((item) => item.id === modeId);
+      return mode?.model || info.defaultModel || info.models?.[0]?.id || "";
+    }
+
+    function findModelInfo(providerId, modelId) {
+      const info = PROVIDER_INFO[providerId] || PROVIDER_INFO.deepseek;
+      return (info.models || []).find((item) => item.id === modelId) || null;
+    }
 
     const newChatProviderPicker = document.getElementById("newChatProvider");
     const newChatModePicker = document.getElementById("newChatMode");
@@ -718,7 +749,7 @@ export function renderWindowHtml() {
           (isAuthed 
             ? '<span class="reconnectLink success" title="Вы авторизованы. Нажмите, если хотите войти под другим аккаунтом">✓ Подключено</span>'
             : '<span class="reconnectLink danger" title="Требуется авторизация. Нажмите, чтобы войти в аккаунт">🔑 Авторизоваться</span>');
-        btn.querySelector(".providerOptionTitle").textContent = info.label;
+        btn.querySelector(".providerOptionTitle").textContent = info.icon ? (info.icon + " " + info.label) : info.label;
         btn.querySelector(".providerOptionSub").textContent = info.sub;
         newChatProviderPicker.appendChild(btn);
       }
@@ -728,7 +759,7 @@ export function renderWindowHtml() {
       const info = PROVIDER_INFO[newChatSelectedProvider] || PROVIDER_INFO.deepseek;
       // Если текущий режим не подходит провайдеру — сбросим на первый.
       if (!info.modes.find((m) => m.id === newChatSelectedMode)) {
-        newChatSelectedMode = info.modes[0].id;
+        newChatSelectedMode = info.defaultMode || info.modes[0].id;
       }
       newChatModePicker.innerHTML = "";
       for (const m of info.modes) {
@@ -774,6 +805,7 @@ export function renderWindowHtml() {
 
     // На старте подтянем список доступных провайдеров и нарисуем picker'ы.
     (async () => {
+      await refreshModelCatalog();
       await refreshAvailableProviders();
       if (!availableProviders.includes(newChatSelectedProvider) && availableProviders.length) {
         newChatSelectedProvider = availableProviders[0];
@@ -912,18 +944,6 @@ export function renderWindowHtml() {
       }
     });
 
-    codeBtn.addEventListener("click", () => {
-      if (!activeConversation || sending) return;
-      const value = messageInput.value.trim();
-      if (value.startsWith("/code")) {
-        messageInput.focus();
-        return;
-      }
-      messageInput.value = value ? "/code " + value : "/code ";
-      messageInput.focus();
-      messageInput.setSelectionRange(messageInput.value.length, messageInput.value.length);
-    });
-
     async function loadState(nextActiveId = null) {
       appState = await api("/api/state");
       if (nextActiveId) appState.activeConversationId = nextActiveId;
@@ -938,6 +958,7 @@ export function renderWindowHtml() {
       }
       // Если есть фоновые задачи — запустить polling.
       if ((appState.runningTaskIds || []).length > 0) ensurePolling();
+      if (activeConversation?.pendingInstallRequest?.status === "running") ensureInstallPolling();
     }
 
     // Polling для отслеживания фоновых /code-задач. Один setInterval на всю сессию,
@@ -953,6 +974,26 @@ export function renderWindowHtml() {
         clearInterval(pollTimer);
         pollTimer = null;
       }
+    }
+    let installPollTimer = null;
+    function ensureInstallPolling() {
+      if (installPollTimer) return;
+      installPollTimer = setInterval(installPollTick, 1500);
+    }
+    function stopInstallPolling() {
+      if (!installPollTimer) return;
+      clearInterval(installPollTimer);
+      installPollTimer = null;
+    }
+    async function installPollTick() {
+      if (!activeConversation) return stopInstallPolling();
+      try {
+        const data = await api("/api/conversations/" + activeConversation.id);
+        activeConversation = data.conversation;
+        renderConversation(activeConversation);
+        const status = activeConversation.pendingInstallRequest?.status;
+        if (status !== "running") stopInstallPolling();
+      } catch {}
     }
     async function pollTick() {
       let nextState;
@@ -1054,6 +1095,7 @@ export function renderWindowHtml() {
     const activeModeBadge = document.getElementById("activeMode");
     const modelPickerEl = document.getElementById("modelPicker");
     const coderToggleEl = document.getElementById("coderToggle");
+    const hardwareToggleEl = document.getElementById("hardwareToggle");
 
     function renderNoConversation() {
       activeTitle.textContent = "No chat selected";
@@ -1061,6 +1103,7 @@ export function renderWindowHtml() {
       activeModeBadge.classList.add("hidden");
       modelPickerEl.classList.add("hidden");
       coderToggleEl.classList.add("hidden");
+      hardwareToggleEl.classList.add("hidden");
       messages.innerHTML = '<div class="empty">Создай чат слева. Каждый чат можно использовать как отдельный проект или рабочий контекст.</div>';
       setComposerEnabled(false);
     }
@@ -1082,7 +1125,17 @@ export function renderWindowHtml() {
     });
     coderToggleEl.addEventListener("click", () => {
       const next = !(activeConversation && activeConversation.coderMode === true);
-      patchActiveConversation({ coderMode: next }).catch((e) => setStatus(e.message, true));
+      patchActiveConversation({
+        coderMode: next,
+        hardwareMode: next ? activeConversation?.hardwareMode === true : false,
+      }).catch((e) => setStatus(e.message, true));
+    });
+    hardwareToggleEl.addEventListener("click", () => {
+      const next = !(activeConversation && activeConversation.hardwareMode === true);
+      patchActiveConversation({
+        hardwareMode: next,
+        coderMode: next ? true : activeConversation?.coderMode === true,
+      }).catch((e) => setStatus(e.message, true));
     });
 
     function renderConversation(conversation) {
@@ -1127,10 +1180,18 @@ export function renderWindowHtml() {
         coderToggleEl.classList.remove("active");
         coderToggleEl.textContent = "🛠 Coder";
       }
+      hardwareToggleEl.classList.remove("hidden");
+      if (conversation.hardwareMode === true) {
+        hardwareToggleEl.classList.add("active");
+        hardwareToggleEl.textContent = "ESP ON";
+      } else {
+        hardwareToggleEl.classList.remove("active");
+        hardwareToggleEl.textContent = "ESP";
+      }
 
       // Синхронизация и блокировка "Глубокого мышления" для моделей-рассуждалок (DeepSeek R1 / QwQ)
       const currentModel = conversation.model || info.defaultModel || (info.models && info.models[0]?.id);
-      const isReasoningModel = currentModel === "deepseek-v4-pro" || currentModel === "qwq-32b";
+      const isReasoningModel = findModelInfo(prov, currentModel)?.reasoning === true;
       if (isReasoningModel) {
         toggleThinking.classList.add("active");
         toggleThinking.disabled = true;
@@ -1170,13 +1231,146 @@ export function renderWindowHtml() {
         row.append(role, bubble);
         messages.appendChild(row);
       }
+      renderInstallRequest(conversation);
+      renderQuestionRequest(conversation);
       messages.scrollTop = messages.scrollHeight;
+    }
+
+    function renderQuestionRequest(conversation) {
+      const question = conversation.pendingQuestion;
+      if (!question || question.status !== "pending") return;
+      const row = document.createElement("article");
+      row.className = "msg assistant questionRequest";
+      const role = document.createElement("div");
+      role.className = "role";
+      role.textContent = "Question";
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      const title = document.createElement("div");
+      title.className = "installTitle";
+      title.textContent = question.question;
+      bubble.appendChild(title);
+      if (question.details) {
+        const details = document.createElement("div");
+        details.className = "installText";
+        details.textContent = question.details;
+        bubble.appendChild(details);
+      }
+      const choices = Array.isArray(question.choices) ? question.choices : [];
+      if (choices.length) {
+        const actions = document.createElement("div");
+        actions.className = "installActions";
+        for (const choice of choices) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "iconBtn";
+          btn.textContent = choice;
+          btn.addEventListener("click", () => fillQuestionAnswer(choice));
+          actions.appendChild(btn);
+        }
+        bubble.appendChild(actions);
+      }
+      row.append(role, bubble);
+      messages.appendChild(row);
+    }
+
+    function fillQuestionAnswer(text) {
+      messageInput.value = text;
+      messageInput.focus();
+      autoGrowInput();
+    }
+
+    function renderInstallRequest(conversation) {
+      const request = conversation.pendingInstallRequest;
+      if (!request || request.status === "rejected" || request.status === "installed") return;
+      const row = document.createElement("article");
+      row.className = "msg assistant installRequest";
+      const role = document.createElement("div");
+      role.className = "role";
+      role.textContent = "System";
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      const command = [request.command].concat(request.args || []).join(" ");
+      bubble.innerHTML =
+        '<div class="installTitle">' + escapeHtml(request.title || "Установить инструмент") + '</div>' +
+        '<div class="installText">' + escapeHtml(request.description || "") + '</div>' +
+        '<code>' + escapeHtml(command) + '</code>';
+      if (request.status === "pending") {
+        const actions = document.createElement("div");
+        actions.className = "installActions";
+        const approve = document.createElement("button");
+        approve.type = "button";
+        approve.className = "iconBtn primaryBtn";
+        approve.textContent = "Установить";
+        approve.addEventListener("click", () => answerInstallRequest("approve"));
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.className = "iconBtn";
+        reject.textContent = "Отмена";
+        reject.addEventListener("click", () => answerInstallRequest("reject"));
+        actions.append(approve, reject);
+        bubble.appendChild(actions);
+      } else {
+        const status = document.createElement("div");
+        status.className = "installText";
+        status.textContent = request.status === "running" ? "Установка выполняется..." : "Установка завершилась ошибкой.";
+        bubble.appendChild(status);
+      }
+      const logText = [request.stdout, request.stderr].filter(Boolean).join("\\n").trim();
+      if (logText) {
+        const log = document.createElement("pre");
+        log.className = "installLog";
+        log.textContent = logText.slice(-6000);
+        bubble.appendChild(log);
+      }
+      if (request.status === "running") ensureInstallPolling();
+      row.append(role, bubble);
+      messages.appendChild(row);
+    }
+
+    async function answerInstallRequest(action) {
+      if (!activeConversation) return;
+      const data = await api("/api/conversations/" + activeConversation.id + "/install-request/" + action, { method: "POST" });
+      activeConversation = data.conversation;
+      renderConversation(activeConversation);
+      renderList();
+      if (activeConversation.pendingInstallRequest?.status === "running") ensureInstallPolling();
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
 
     function setComposerEnabled(enabled) {
       messageInput.disabled = !enabled || !activeConversation;
-      codeBtn.disabled = !enabled || !activeConversation;
       sendBtn.disabled = !enabled || !activeConversation;
+    }
+
+    function setupTheme() {
+      const stored = localStorage.getItem(THEME_KEY);
+      applyTheme(THEMES.some((theme) => theme.id === stored) ? stored : "dark");
+      document.getElementById("themeBtn").addEventListener("click", () => {
+        const current = document.body.dataset.theme || "dark";
+        const idx = THEMES.findIndex((theme) => theme.id === current);
+        const next = THEMES[(idx + 1) % THEMES.length];
+        applyTheme(next.id);
+      });
+    }
+
+    function applyTheme(themeId) {
+      const theme = THEMES.find((item) => item.id === themeId) || THEMES[0];
+      document.body.dataset.theme = theme.id;
+      localStorage.setItem(THEME_KEY, theme.id);
+      const themeBtn = document.getElementById("themeBtn");
+      if (themeBtn) {
+        themeBtn.textContent = theme.icon;
+        themeBtn.title = "Тема: " + theme.label;
+      }
     }
 
     function setStatus(text, isError = false) {

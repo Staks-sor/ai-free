@@ -8,7 +8,13 @@ import path from "node:path";
 
 import { extractFirstJsonObject, parseToolCall } from "../src/code-agent/parser.mjs";
 import {
+  buildCommandPath,
+  createInstallRequestForMissingCommand,
+  createUserQuestion,
   executeWorkspaceTool,
+  getCommandExecutionEnv,
+  isAllowedDevicePath,
+  listSerialPorts,
   looksLikePath,
   resolveWorkspacePath,
   truncateOutput,
@@ -476,6 +482,100 @@ describe("COMMAND_CATALOG.chmod validateArgs", () => {
   it("allows normal chmod", () => {
     assert.doesNotThrow(() => v(["644", "file"]));
     assert.doesNotThrow(() => v(["+x", "file"]));
+  });
+});
+
+describe("COMMAND_CATALOG hardware validators", () => {
+  it("allows safe PlatformIO device/run commands and blocks account/network maintenance", () => {
+    const v = COMMAND_CATALOG.pio.validateArgs;
+    assert.doesNotThrow(() => v(["device", "list"]));
+    assert.doesNotThrow(() => v(["device", "monitor", "--port", "/dev/cu.usbserial-110"]));
+    assert.doesNotThrow(() => v(["run", "-t", "upload"]));
+    assert.throws(() => v(["pkg", "update"]));
+    assert.throws(() => v(["upgrade"]));
+  });
+
+  it("allows Arduino CLI compile/upload/monitor and blocks package management", () => {
+    const v = COMMAND_CATALOG["arduino-cli"].validateArgs;
+    assert.doesNotThrow(() => v(["board", "list"]));
+    assert.doesNotThrow(() => v(["compile", "--fqbn", "esp32:esp32:esp32"]));
+    assert.doesNotThrow(() => v(["upload", "-p", "/dev/cu.usbserial-110"]));
+    assert.throws(() => v(["core", "install", "esp32:esp32"]));
+    assert.throws(() => v(["lib", "install", "x"]));
+  });
+
+  it("allows esptool diagnostics/write_flash and blocks erase_flash", () => {
+    const v = COMMAND_CATALOG["esptool.py"].validateArgs;
+    assert.doesNotThrow(() => v(["--port", "/dev/cu.usbserial-110", "read_mac"]));
+    assert.doesNotThrow(() => v(["--chip", "esp32", "write_flash", "0x1000", "firmware.bin"]));
+    assert.throws(() => v(["--port", "/dev/cu.usbserial-110", "erase_flash"]));
+    assert.throws(() => v(["--port", "/dev/cu.usbserial-110"]));
+  });
+});
+
+describe("hardware tool helpers", () => {
+  it("adds common user install bins to command PATH", () => {
+    const env = getCommandExecutionEnv({ HOME: "/Users/example", PATH: "/usr/bin" });
+    const parts = env.PATH.split(path.delimiter);
+    assert.equal(parts.includes("/Users/example/.local/bin"), true);
+    assert.equal(parts.includes("/Users/example/Library/Python"), true);
+    assert.equal(parts.includes("/opt/homebrew/bin"), true);
+    assert.equal(parts.includes("/usr/local/bin"), true);
+    assert.equal(parts.includes("/usr/bin"), true);
+    assert.equal(buildCommandPath({ HOME: "/Users/example", PATH: "/usr/bin" }).includes("/Users/example/Library/Python"), true);
+  });
+
+  it("lists serial ports as a safe read-only tool", async () => {
+    const result = await executeWorkspaceTool(process.cwd(), { tool: "list_serial_ports" });
+    assert.equal(typeof result.ok, "boolean");
+    assert.ok(Array.isArray(result.ports));
+    assert.equal(result.count, result.ports.length);
+  });
+
+  it("formats serial port logs", () => {
+    const log = formatToolLog(
+      { tool: "list_serial_ports" },
+      { ok: true, ports: ["/dev/cu.usbserial-110"], count: 1 },
+    );
+    assert.match(log, /ports: 1/);
+    assert.match(log, /\/dev\/cu\.usbserial-110/);
+  });
+
+  it("creates fixed install requests only for hardware commands", () => {
+    assert.deepEqual(createInstallRequestForMissingCommand("node"), null);
+    assert.equal(createInstallRequestForMissingCommand("pio").id, "platformio");
+    assert.equal(createInstallRequestForMissingCommand("esptool.py").command, "python3");
+    assert.equal(createInstallRequestForMissingCommand("arduino-cli").command, "brew");
+  });
+});
+
+describe("ask_user helper", () => {
+  it("creates a bounded clarification request", () => {
+    const result = createUserQuestion({
+      question: "Which board?",
+      details: "Needed before flashing.",
+      choices: ["ESP32", "ESP8266", "Other", "A", "B", "C", "D"],
+    });
+    assert.equal(result.awaitingUser, true);
+    assert.equal(result.userQuestion.question, "Which board?");
+    assert.equal(result.userQuestion.details, "Needed before flashing.");
+    assert.deepEqual(result.userQuestion.choices, ["ESP32", "ESP8266", "Other", "A", "B", "C"]);
+  });
+
+  it("rejects empty questions", () => {
+    const result = createUserQuestion({ question: "" });
+    assert.equal(result.ok, false);
+    assert.equal(result.fatal, true);
+  });
+});
+
+describe("isAllowedDevicePath", () => {
+  it("allows serial ports only for hardware commands", () => {
+    assert.equal(isAllowedDevicePath("pio", "/dev/cu.usbserial-110"), true);
+    assert.equal(isAllowedDevicePath("arduino-cli", "/dev/ttyUSB0"), true);
+    assert.equal(isAllowedDevicePath("esptool.py", "/dev/cu.SLAB_USBtoUART"), true);
+    assert.equal(isAllowedDevicePath("node", "/dev/cu.usbserial-110"), false);
+    assert.equal(isAllowedDevicePath("pio", "/etc/passwd"), false);
   });
 });
 

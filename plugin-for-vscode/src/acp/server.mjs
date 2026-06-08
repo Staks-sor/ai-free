@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import readline from "node:readline";
 import { runCodeTask } from "../code-agent/run.mjs";
-import { DEFAULT_AUTH_FILE } from "../config.mjs";
+import { AI_FREE_VERSION, DEFAULT_AUTH_FILE } from "../config.mjs";
 import { readSavedAuth } from "../auth/files.mjs";
 import { DeepSeekChatClient } from "../deepseek/client.mjs";
 import { QWEN_AUTH_FILE } from "../providers/qwen/config.mjs";
@@ -100,7 +100,7 @@ export async function runAcpServer({
           agentInfo: {
             name: "ai-free-acp",
             title: config.title,
-            version: "0.2.0",
+            version: AI_FREE_VERSION,
           },
           authMethods: [],
         });

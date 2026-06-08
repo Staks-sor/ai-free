@@ -6,13 +6,14 @@
 // модалки (Settings, новый агент, файловый браузер) рендерятся и работают.
 
 import { STYLES } from "./ui-styles.mjs";
+import { AI_FREE_VERSION } from "../config.mjs";
 export function renderWindowHtml() {
   return `<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Free v0.2.0</title>
+  <title>AI Free v${AI_FREE_VERSION}</title>
   <style>${STYLES}</style>
 </head>
 <body>
@@ -31,7 +32,7 @@ export function renderWindowHtml() {
              <button id="newChatClose" class="iconBtn" type="button" aria-label="Close">✕</button>
           </div>
           <form id="newForm" class="newForm" autocomplete="off">
-            <div class="formField">
+            <div class="formField hidden">
               <span>Провайдер</span>
               <div class="providerPicker" id="newChatProvider">
                 <!-- кнопки рендерятся динамически по ответу /api/providers -->
@@ -82,9 +83,9 @@ export function renderWindowHtml() {
               <div id="browseTruncated" class="browseTruncated hidden">Показано не все папки — включи «Скрытые» или открой родительскую папку выше.</div>
             </div>
 
-            <div id="recentProjects" class="recentProjects"></div>
+            <div id="recentProjects" class="recentProjects hidden"></div>
 
-            <label class="checkboxRow">
+            <label class="checkboxRow hidden">
               <input id="newCreateFolder" type="checkbox">
               <span>Создать папку, если её ещё нет (только под твоим $HOME)</span>
             </label>
@@ -105,8 +106,10 @@ export function renderWindowHtml() {
           <div id="activeTitle" class="title">No chat selected</div>
           <span id="activeMode" class="modeBadge hidden"></span>
           <select id="modelPicker" class="modelPicker hidden" title="Модель"></select>
+          <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="ESP / прошивка плат — включает аппаратный профиль агента">ESP</button>
         </div>
         <div id="workspace" class="workspace"></div>
+        <button id="themeBtn" class="iconBtn themeBtn" type="button" title="Сменить тему">◐</button>
         <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="Settings / разрешённые команды">⚙</button>
       </header>
 
@@ -147,11 +150,7 @@ export function renderWindowHtml() {
   </div>
 
   <script>
-    // Принудительное переопределение confirm и alert для работы в VS Code Webview (блокирующем диалоги)
-    window.confirm = function(msg) {
-      console.log("[Confirm override]:", msg);
-      return true; // Автоматически подтверждаем все действия
-    };
+    // alert в webview может быть заблокирован, поэтому дублируем его в status bar.
     window.alert = function(msg) {
       console.warn("[Alert override]:", msg);
       const el = document.getElementById("status");
@@ -196,7 +195,14 @@ export function renderWindowHtml() {
     const sendBtn = document.getElementById("sendBtn");
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
+    const THEME_KEY = "deepseek.theme";
+    const THEMES = [
+      { id: "dark", label: "Тёмная", icon: "◐" },
+      { id: "light", label: "Светлая", icon: "☼" },
+      { id: "contrast", label: "Контраст", icon: "◑" },
+    ];
 
+    setupTheme();
     applySavedSidebarWidth();
     setupSidebarResize();
     applySavedComposerHeight();
@@ -231,23 +237,8 @@ export function renderWindowHtml() {
       recentProjects.innerHTML = "";
       newChatOverlay.classList.remove("hidden");
       newChatOverlay.setAttribute("aria-hidden", "false");
-      // Подтягиваем список ранее использованных проектов.
-      try {
-        const data = await api("/api/projects");
-        browseDefaultPath = data.defaultWorkspace || data.home || "";
-        newWorkspaceInput.value = browseDefaultPath;
-        for (const project of data.projects || []) {
-          const chip = document.createElement("button");
-          chip.type = "button";
-          chip.className = "chip" + (project.exists ? "" : " missing");
-          chip.title = project.path + (project.isDefault ? " (по умолчанию)" : "");
-          chip.textContent = project.name + (project.isDefault ? " ★" : "");
-          chip.addEventListener("click", () => { newWorkspaceInput.value = project.path; });
-          recentProjects.appendChild(chip);
-        }
-      } catch {
-        // не критично — просто не покажем список
-      }
+      browseDefaultPath = appState.workspaceRoot || "";
+      newWorkspaceInput.value = browseDefaultPath;
       newTitleInput.focus();
     }
     function closeNewChatModal() {
@@ -407,8 +398,8 @@ export function renderWindowHtml() {
     document.getElementById("newForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const title = newTitleInput.value.trim();
-      const workspace = newWorkspaceInput.value.trim();
-      const createFolder = newCreateFolder.checked;
+      const workspace = appState.workspaceRoot || newWorkspaceInput.value.trim();
+      const createFolder = false;
       newFormError.classList.add("hidden");
       newFormError.textContent = "";
       setStatus("Creating agent...");
@@ -961,6 +952,7 @@ export function renderWindowHtml() {
       }
       // Если есть фоновые задачи — запустить polling.
       if ((appState.runningTaskIds || []).length > 0) ensurePolling();
+      if (activeConversation?.pendingInstallRequest?.status === "running") ensureInstallPolling();
     }
 
     function normalizeFsPath(value) {
@@ -1003,6 +995,26 @@ export function renderWindowHtml() {
         clearInterval(pollTimer);
         pollTimer = null;
       }
+    }
+    let installPollTimer = null;
+    function ensureInstallPolling() {
+      if (installPollTimer) return;
+      installPollTimer = setInterval(installPollTick, 1500);
+    }
+    function stopInstallPolling() {
+      if (!installPollTimer) return;
+      clearInterval(installPollTimer);
+      installPollTimer = null;
+    }
+    async function installPollTick() {
+      if (!activeConversation) return stopInstallPolling();
+      try {
+        const data = await api("/api/conversations/" + activeConversation.id);
+        activeConversation = data.conversation;
+        renderConversation(activeConversation);
+        const status = activeConversation.pendingInstallRequest?.status;
+        if (status !== "running") stopInstallPolling();
+      } catch {}
     }
     async function pollTick() {
       let nextState;
@@ -1103,11 +1115,13 @@ export function renderWindowHtml() {
 
     const activeModeBadge = document.getElementById("activeMode");
     const modelPickerEl = document.getElementById("modelPicker");
+    const hardwareToggleEl = document.getElementById("hardwareToggle");
     function renderNoConversation() {
       activeTitle.textContent = "No chat selected";
       workspace.textContent = appState.workspaceRoot || "";
       activeModeBadge.classList.add("hidden");
       modelPickerEl.classList.add("hidden");
+      hardwareToggleEl.classList.add("hidden");
       messages.innerHTML = '<div class="empty">Открой проект в VS Code — агент подключится к нему автоматически.</div>';
       setComposerEnabled(false);
     }
@@ -1126,6 +1140,10 @@ export function renderWindowHtml() {
 
     modelPickerEl.addEventListener("change", () => {
       patchActiveConversation({ model: modelPickerEl.value }).catch((e) => setStatus(e.message, true));
+    });
+    hardwareToggleEl.addEventListener("click", () => {
+      const next = !(activeConversation && activeConversation.hardwareMode === true);
+      patchActiveConversation({ hardwareMode: next }).catch((e) => setStatus(e.message, true));
     });
 
     function renderConversation(conversation) {
@@ -1158,6 +1176,14 @@ export function renderWindowHtml() {
       } else {
         modelPickerEl.classList.add("hidden");
         activeModeBadge.classList.remove("hidden");
+      }
+      hardwareToggleEl.classList.remove("hidden");
+      if (conversation.hardwareMode === true) {
+        hardwareToggleEl.classList.add("active");
+        hardwareToggleEl.textContent = "ESP ON";
+      } else {
+        hardwareToggleEl.classList.remove("active");
+        hardwareToggleEl.textContent = "ESP";
       }
 
       // Синхронизация и блокировка "Глубокого мышления" для моделей-рассуждалок (DeepSeek R1 / QwQ)
@@ -1202,7 +1228,119 @@ export function renderWindowHtml() {
         row.append(role, bubble);
         messages.appendChild(row);
       }
+      renderInstallRequest(conversation);
+      renderQuestionRequest(conversation);
       messages.scrollTop = messages.scrollHeight;
+    }
+
+    function renderQuestionRequest(conversation) {
+      const question = conversation.pendingQuestion;
+      if (!question || question.status !== "pending") return;
+      const row = document.createElement("article");
+      row.className = "msg assistant questionRequest";
+      const role = document.createElement("div");
+      role.className = "role";
+      role.textContent = "Question";
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      const title = document.createElement("div");
+      title.className = "installTitle";
+      title.textContent = question.question;
+      bubble.appendChild(title);
+      if (question.details) {
+        const details = document.createElement("div");
+        details.className = "installText";
+        details.textContent = question.details;
+        bubble.appendChild(details);
+      }
+      const choices = Array.isArray(question.choices) ? question.choices : [];
+      if (choices.length) {
+        const actions = document.createElement("div");
+        actions.className = "installActions";
+        for (const choice of choices) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "iconBtn";
+          btn.textContent = choice;
+          btn.addEventListener("click", () => fillQuestionAnswer(choice));
+          actions.appendChild(btn);
+        }
+        bubble.appendChild(actions);
+      }
+      row.append(role, bubble);
+      messages.appendChild(row);
+    }
+
+    function fillQuestionAnswer(text) {
+      messageInput.value = text;
+      messageInput.focus();
+      autoGrowInput();
+    }
+
+    function renderInstallRequest(conversation) {
+      const request = conversation.pendingInstallRequest;
+      if (!request || request.status === "rejected" || request.status === "installed") return;
+      const row = document.createElement("article");
+      row.className = "msg assistant installRequest";
+      const role = document.createElement("div");
+      role.className = "role";
+      role.textContent = "System";
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      const command = [request.command].concat(request.args || []).join(" ");
+      bubble.innerHTML =
+        '<div class="installTitle">' + escapeHtml(request.title || "Установить инструмент") + '</div>' +
+        '<div class="installText">' + escapeHtml(request.description || "") + '</div>' +
+        '<code>' + escapeHtml(command) + '</code>';
+      if (request.status === "pending") {
+        const actions = document.createElement("div");
+        actions.className = "installActions";
+        const approve = document.createElement("button");
+        approve.type = "button";
+        approve.className = "iconBtn primaryBtn";
+        approve.textContent = "Установить";
+        approve.addEventListener("click", () => answerInstallRequest("approve"));
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.className = "iconBtn";
+        reject.textContent = "Отмена";
+        reject.addEventListener("click", () => answerInstallRequest("reject"));
+        actions.append(approve, reject);
+        bubble.appendChild(actions);
+      } else {
+        const status = document.createElement("div");
+        status.className = "installText";
+        status.textContent = request.status === "running" ? "Установка выполняется..." : "Установка завершилась ошибкой.";
+        bubble.appendChild(status);
+      }
+      const logText = [request.stdout, request.stderr].filter(Boolean).join("\\n").trim();
+      if (logText) {
+        const log = document.createElement("pre");
+        log.className = "installLog";
+        log.textContent = logText.slice(-6000);
+        bubble.appendChild(log);
+      }
+      if (request.status === "running") ensureInstallPolling();
+      row.append(role, bubble);
+      messages.appendChild(row);
+    }
+
+    async function answerInstallRequest(action) {
+      if (!activeConversation) return;
+      const data = await api("/api/conversations/" + activeConversation.id + "/install-request/" + action, { method: "POST" });
+      activeConversation = data.conversation;
+      renderConversation(activeConversation);
+      renderList();
+      if (activeConversation.pendingInstallRequest?.status === "running") ensureInstallPolling();
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
 
     function isActiveConversationRunning() {
@@ -1217,6 +1355,28 @@ export function renderWindowHtml() {
       const blockedByTask = isActiveConversationRunning();
       messageInput.disabled = !enabled || !activeConversation || blockedByTask;
       sendBtn.disabled = !enabled || !activeConversation || blockedByTask;
+    }
+
+    function setupTheme() {
+      const stored = localStorage.getItem(THEME_KEY);
+      applyTheme(THEMES.some((theme) => theme.id === stored) ? stored : "dark");
+      document.getElementById("themeBtn").addEventListener("click", () => {
+        const current = document.body.dataset.theme || "dark";
+        const idx = THEMES.findIndex((theme) => theme.id === current);
+        const next = THEMES[(idx + 1) % THEMES.length];
+        applyTheme(next.id);
+      });
+    }
+
+    function applyTheme(themeId) {
+      const theme = THEMES.find((item) => item.id === themeId) || THEMES[0];
+      document.body.dataset.theme = theme.id;
+      localStorage.setItem(THEME_KEY, theme.id);
+      const themeBtn = document.getElementById("themeBtn");
+      if (themeBtn) {
+        themeBtn.textContent = theme.icon;
+        themeBtn.title = "Тема: " + theme.label;
+      }
     }
 
     function setStatus(text, isError = false) {

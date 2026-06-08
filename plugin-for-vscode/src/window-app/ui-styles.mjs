@@ -17,6 +17,50 @@ export const STYLES = `
       --accent-soft: rgba(77, 124, 255, 0.12);
       --bubble: #1c212d;
       --danger: #ff776d;
+      --button-bg: #1a1f27;
+      --button-hover: #222936;
+      --input-bg: #10141a;
+      --shadow-soft: rgba(0, 0, 0, 0.22);
+    }
+    body[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --sidebar: #ffffff;
+      --panel: #ffffff;
+      --panel-2: #eef1f6;
+      --line: rgba(18, 24, 38, 0.10);
+      --line-strong: rgba(18, 24, 38, 0.20);
+      --text: #151923;
+      --muted: #5b6678;
+      --accent: #2557d6;
+      --accent-strong: #1746bd;
+      --accent-soft: rgba(37, 87, 214, 0.12);
+      --bubble: #ffffff;
+      --danger: #c9342f;
+      --button-bg: #ffffff;
+      --button-hover: #eef2f8;
+      --input-bg: #ffffff;
+      --shadow-soft: rgba(24, 32, 48, 0.12);
+    }
+    body[data-theme="contrast"] {
+      color-scheme: light;
+      --bg: #ffffff;
+      --sidebar: #f2f2f2;
+      --panel: #ffffff;
+      --panel-2: #e8e8e8;
+      --line: rgba(0, 0, 0, 0.22);
+      --line-strong: rgba(0, 0, 0, 0.44);
+      --text: #050505;
+      --muted: #343434;
+      --accent: #0047ff;
+      --accent-strong: #002fa8;
+      --accent-soft: rgba(0, 71, 255, 0.14);
+      --bubble: #ffffff;
+      --danger: #b00020;
+      --button-bg: #ffffff;
+      --button-hover: #e6edff;
+      --input-bg: #ffffff;
+      --shadow-soft: rgba(0, 0, 0, 0.16);
     }
     * { box-sizing: border-box; }
     html {
@@ -103,7 +147,7 @@ export const STYLES = `
     }
     .iconBtn, .sendBtn {
       border: 1px solid var(--line);
-      background: #1a1f27;
+      background: var(--button-bg);
       color: var(--text);
       height: 36px;
       min-width: 36px;
@@ -113,7 +157,7 @@ export const STYLES = `
     }
     .iconBtn:hover {
       border-color: var(--line-strong);
-      background: #222936;
+      background: var(--button-hover);
     }
     .newForm {
       flex: 1;
@@ -723,6 +767,41 @@ export const STYLES = `
       border: none;
       box-shadow: 0 4px 16px rgba(77, 124, 255, 0.2);
     }
+    .installRequest .bubble {
+      border: 1px solid rgba(245, 158, 11, 0.38);
+      background: rgba(245, 158, 11, 0.10);
+    }
+    .questionRequest .bubble {
+      border: 1px solid rgba(77, 124, 255, 0.38);
+      background: var(--accent-soft);
+    }
+    .installTitle {
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .installText {
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .installActions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .installLog {
+      margin: 10px 0 0;
+      padding: 10px;
+      max-height: 220px;
+      overflow: auto;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--text);
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.4;
+    }
     .composer {
       padding: 12px 18px 14px;
       display: flex;
@@ -781,7 +860,7 @@ export const STYLES = `
       padding: 4px 10px;
       border-radius: 6px;
       border: 1px solid var(--line);
-      background: #10141a;
+      background: var(--input-bg);
       color: var(--text);
       cursor: pointer;
       max-width: 200px;
@@ -789,6 +868,29 @@ export const STYLES = `
     }
     .modelPicker.hidden { display: none; }
     .modelPicker:hover { border-color: var(--line-strong); }
+
+    .coderToggle {
+      font-size: 11px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 120ms;
+    }
+    .coderToggle.hidden { display: none; }
+    .coderToggle:hover { color: var(--text); border-color: var(--line-strong); }
+    .hardwareToggle.active {
+      background: rgba(245, 158, 11, 0.16);
+      color: #fbbf24;
+      border-color: rgba(245, 158, 11, 0.50);
+    }
+    body[data-theme="light"] .hardwareToggle.active,
+    body[data-theme="contrast"] .hardwareToggle.active {
+      color: #92400e;
+    }
 
     .modeBadge.fast    { background: rgba(82, 126, 255, 0.14); color: #aabfff; border-color: rgba(82, 126, 255, 0.4); }
     .modeBadge.expert  { background: rgba(168, 85, 247, 0.14); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.4); }
@@ -943,8 +1045,8 @@ export const STYLES = `
     }
     .attachChip .remove:hover { color: #ef4444; }
     textarea {
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      background: #131720;
+      border: 1px solid var(--line);
+      background: var(--input-bg);
       color: var(--text);
       border-radius: 10px;
       padding: 12px;
@@ -952,7 +1054,7 @@ export const STYLES = `
       width: 100%;
       box-sizing: border-box;
       transition: all 150ms ease;
-      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.15);
+      box-shadow: inset 0 2px 4px var(--shadow-soft);
       resize: vertical;
       min-height: 56px;
       max-height: 60vh;
@@ -960,8 +1062,8 @@ export const STYLES = `
     textarea:focus {
       outline: none;
       border-color: rgba(77, 124, 255, 0.4);
-      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.15), 0 0 12px rgba(77, 124, 255, 0.12);
-      background: #161b25;
+      box-shadow: inset 0 2px 4px var(--shadow-soft), 0 0 12px var(--accent-soft);
+      background: var(--input-bg);
     }
     #messageInput { min-height: 72px; }
     .sendBtn {

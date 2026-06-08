@@ -3,7 +3,7 @@
 
 import { loadSettings } from "../state/settings.mjs";
 
-export const CODE_AGENT_PROMPT_VERSION = 3;
+export const CODE_AGENT_PROMPT_VERSION = 5;
 
 export function createCodeSystemPrompt(workspaceRoot, task, extraSystemPrompt = "") {
   const settings = loadSettings();
@@ -35,6 +35,8 @@ The JSON object MUST contain the string field "tool":
 {"tool":"append_file","path":"relative/file.txt","content":"text to append"}
 {"tool":"delete_file","path":"relative/file.txt"}
 {"tool":"mkdir","path":"relative/dir"}
+{"tool":"list_serial_ports"}
+{"tool":"ask_user","question":"What should I do next?","details":"Optional short context","choices":["Option A","Option B"]}
 {"tool":"run_command","cmd":"node","args":["relative/file.js"],"timeoutMs":20000}
 {"tool":"finish","message":"short summary for the user"}
 
@@ -52,6 +54,8 @@ Rules:
 - Use only RELATIVE paths inside the workspace. Do NOT prefix with the workspace root.
   Good: "src/app.js", "tests/foo.py", "README.md"
   Bad:  "/Users/.../workspace/src/app.js", "../something", "~/file.txt"
+- For ESP/Arduino serial port discovery, use list_serial_ports. Do NOT run ls/find on /dev.
+- If a required project choice is ambiguous and guessing could waste time or damage files/devices, call ask_user with a short question and 2-4 concrete choices.
 - Inspect files before editing when the task touches existing code.
 - Prefer small, focused edits.
 - You may run shell-like commands only through run_command. It is not a shell — no pipes, no redirects.

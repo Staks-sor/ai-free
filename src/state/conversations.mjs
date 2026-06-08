@@ -10,6 +10,7 @@ export function conversationList(state) {
     provider: conversation.provider || "deepseek",
     model: conversation.model || "",
     coderMode: conversation.coderMode === true,
+    hardwareMode: conversation.hardwareMode === true,
     updatedAt: conversation.updatedAt,
     messageCount: conversation.messages.length,
   }));

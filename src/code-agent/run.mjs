@@ -66,6 +66,12 @@ export async function runCodeTask(
         return { parentMessageId: parent, message: toolResult.message, toolLogs };
       }
 
+      if (toolResult.awaitingUser) {
+        const message = `Нужно уточнение: ${toolResult.userQuestion?.question || "ответ пользователя"}`;
+        options.onAssistant?.(message);
+        return { parentMessageId: parent, message, toolLogs, awaitingUser: true };
+      }
+
       if (toolResult.fatal) {
         const message = `Error: ${toolResult.error}`;
         options.onAssistant?.(message);
@@ -127,6 +133,29 @@ export function formatToolLog(call, result) {
     return lines.join("\n");
   }
 
+  if (call.tool === "list_serial_ports") {
+    const lines = [header];
+    if (result.error) {
+      lines.push(`error: ${result.error}`);
+      return lines.join("\n");
+    }
+    const ports = Array.isArray(result.ports) ? result.ports : [];
+    lines.push(`ports: ${ports.length}`);
+    if (ports.length) {
+      lines.push(ports.join("\n"));
+    } else {
+      lines.push("[none]");
+    }
+    return lines.join("\n");
+  }
+
+  if (call.tool === "ask_user") {
+    const lines = [header];
+    if (result.error) lines.push(`error: ${result.error}`);
+    if (result.userQuestion?.question) lines.push(result.userQuestion.question);
+    return lines.join("\n");
+  }
+
   if (call.tool !== "run_command") return header;
 
   const lines = [
@@ -136,6 +165,9 @@ export function formatToolLog(call, result) {
     lines.push(`status: ${result.status}${result.timedOut ? " (timed out)" : ""}`);
   } else if (result.error) {
     lines.push(`error: ${result.error}`);
+  }
+  if (result.installRequest) {
+    lines.push(`install request: ${result.installRequest.title}`);
   }
 
   if (result.stdout) lines.push(`stdout:\n${result.stdout.trimEnd()}`);

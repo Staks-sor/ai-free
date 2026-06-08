@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { AUTH_DIR, SETTINGS_FILE } from "../config.mjs";
+import { getProviderIds } from "../providers/model-catalog.mjs";
 
 export const COMMAND_CATALOG = {
   node:    { description: "Запуск JS-файлов через Node",                       risk: "low",    enabledByDefault: true },
@@ -75,6 +76,55 @@ export const COMMAND_CATALOG = {
     risk: "medium", enabledByDefault: false,
   },
 
+  pio: {
+    description: "PlatformIO: поиск плат, сборка, upload и monitor для ESP/Arduino",
+    risk: "high", enabledByDefault: false,
+    validateArgs: (args) => {
+      const sub = String(args[0] || "").toLowerCase();
+      if (!["device", "run", "boards"].includes(sub)) {
+        throw new Error("pio: разрешены только device, run и boards.");
+      }
+      if (sub === "device") {
+        const action = String(args[1] || "list").toLowerCase();
+        if (!["list", "monitor"].includes(action)) {
+          throw new Error("pio device: разрешены только list и monitor.");
+        }
+      }
+      if (args.some((arg) => ["account", "home", "pkg", "remote", "upgrade", "update"].includes(String(arg).toLowerCase()))) {
+        throw new Error("pio: сетевые/аккаунт операции заблокированы.");
+      }
+    },
+  },
+
+  "arduino-cli": {
+    description: "Arduino CLI: board list, compile, upload и monitor",
+    risk: "high", enabledByDefault: false,
+    validateArgs: (args) => {
+      const sub = String(args[0] || "").toLowerCase();
+      if (!["board", "compile", "upload", "monitor"].includes(sub)) {
+        throw new Error("arduino-cli: разрешены только board, compile, upload и monitor.");
+      }
+      if (args.some((arg) => ["core", "lib", "config", "daemon", "update", "upgrade"].includes(String(arg).toLowerCase()))) {
+        throw new Error("arduino-cli: установка, обновление и daemon заблокированы.");
+      }
+    },
+  },
+
+  "esptool.py": {
+    description: "esptool.py: диагностика и write_flash для ESP (erase_flash заблокирован)",
+    risk: "high", enabledByDefault: false,
+    validateArgs: (args) => {
+      const lowered = args.map((arg) => String(arg).toLowerCase());
+      if (lowered.includes("erase_flash")) {
+        throw new Error("esptool.py erase_flash заблокирован.");
+      }
+      const command = lowered.find((arg) => ["chip_id", "read_mac", "flash_id", "write_flash"].includes(arg));
+      if (!command) {
+        throw new Error("esptool.py: разрешены только chip_id, read_mac, flash_id и write_flash.");
+      }
+    },
+  },
+
   rm: {
     description: "Удаление файлов (БЕЗ -r/-R/-rf)",
     risk: "high", enabledByDefault: false,
@@ -92,12 +142,25 @@ export const COMMAND_CATALOG = {
   },
 };
 
+function emptyProviderApiKeys() {
+  return Object.fromEntries(getProviderIds().map((providerId) => [providerId, ""]));
+}
+
+function normalizeProviderApiKeys(rawKeys = {}, legacyKey = "") {
+  const normalized = emptyProviderApiKeys();
+  for (const providerId of Object.keys(normalized)) {
+    normalized[providerId] = typeof rawKeys[providerId] === "string" ? rawKeys[providerId] : "";
+  }
+  if (!normalized.deepseek && legacyKey) normalized.deepseek = legacyKey;
+  return normalized;
+}
+
 export function loadSettings() {
   const fallback = {
     allowedCommands: Object.keys(COMMAND_CATALOG).filter(
       (cmd) => COMMAND_CATALOG[cmd].enabledByDefault,
     ),
-    openAICompat: { apiKeys: { deepseek: "", qwen: "" } },
+    openAICompat: { apiKeys: emptyProviderApiKeys() },
   };
   if (!fs.existsSync(SETTINGS_FILE)) return fallback;
   try {
@@ -110,10 +173,7 @@ export function loadSettings() {
     return {
       allowedCommands: allowed,
       openAICompat: {
-        apiKeys: {
-          deepseek: typeof apiKeys.deepseek === "string" ? apiKeys.deepseek : legacyKey,
-          qwen: typeof apiKeys.qwen === "string" ? apiKeys.qwen : "",
-        },
+        apiKeys: normalizeProviderApiKeys(apiKeys, legacyKey),
       },
     };
   } catch {
@@ -127,13 +187,16 @@ export function saveSettings(settings) {
   const current = loadSettings();
   const requestedKeys = settings?.openAICompat?.apiKeys || {};
   const currentKeys = current.openAICompat?.apiKeys || {};
+  const nextKeys = emptyProviderApiKeys();
+  for (const providerId of Object.keys(nextKeys)) {
+    nextKeys[providerId] = typeof requestedKeys[providerId] === "string"
+      ? requestedKeys[providerId]
+      : currentKeys[providerId] || "";
+  }
   const payload = {
     allowedCommands: Array.from(new Set(valid)),
     openAICompat: {
-      apiKeys: {
-        deepseek: typeof requestedKeys.deepseek === "string" ? requestedKeys.deepseek : currentKeys.deepseek || "",
-        qwen: typeof requestedKeys.qwen === "string" ? requestedKeys.qwen : currentKeys.qwen || "",
-      },
+      apiKeys: nextKeys,
     },
     savedAt: new Date().toISOString(),
   };
@@ -143,7 +206,7 @@ export function saveSettings(settings) {
 }
 
 export function ensureOpenAICompatApiKey(provider) {
-  if (provider !== "deepseek" && provider !== "qwen") {
+  if (!getProviderIds().includes(provider)) {
     throw new Error(`Unknown OpenAI-compatible API provider: ${provider}`);
   }
   const current = loadSettings();
@@ -151,11 +214,7 @@ export function ensureOpenAICompatApiKey(provider) {
   if (existing) return existing;
 
   const apiKey = `sk-${randomBytes(32).toString("base64url")}`;
-  const apiKeys = {
-    deepseek: current.openAICompat?.apiKeys?.deepseek || "",
-    qwen: current.openAICompat?.apiKeys?.qwen || "",
-    [provider]: apiKey,
-  };
+  const apiKeys = { ...emptyProviderApiKeys(), ...(current.openAICompat?.apiKeys || {}), [provider]: apiKey };
   saveSettings({
     allowedCommands: current.allowedCommands,
     openAICompat: { apiKeys },

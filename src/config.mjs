@@ -3,12 +3,24 @@
 
 import os from "node:os";
 import path from "node:path";
+import fs from "node:fs";
 
 export const BASE_URL = "https://chat.deepseek.com";
 
+function readPackageVersion() {
+  try {
+    const packageJson = JSON.parse(
+      fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    return typeof packageJson.version === "string" ? packageJson.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 // Версия проекта (наша, отображается юзеру). НЕ путать с APP_VERSION ниже,
 // который имитирует фронт DeepSeek для их API.
-export const AI_FREE_VERSION = "0.2.0";
+export const AI_FREE_VERSION = readPackageVersion();
 
 // Версия фронта DeepSeek — используется в X-App-Version заголовке.
 export const APP_VERSION = "2.0.0";

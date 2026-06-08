@@ -83,6 +83,7 @@ describe("conversationList", () => {
         provider: "deepseek",
         model: "",
         coderMode: false,
+        hardwareMode: false,
         updatedAt: "2026-01-01T00:00:00Z",
         messageCount: 1,
       },
@@ -125,6 +126,8 @@ describe("conversationList", () => {
 // напрямую COMMAND_CATALOG целостность.
 
 import { COMMAND_CATALOG, loadSettings } from "../src/state/settings.mjs";
+import { getProviderIds } from "../src/providers/model-catalog.mjs";
+import { mergeWindowStates } from "../src/state/window-state.mjs";
 
 describe("COMMAND_CATALOG integrity", () => {
   it("has at least the legacy 7 base commands enabled by default", () => {
@@ -163,5 +166,33 @@ describe("loadSettings fallback", () => {
     assert.ok(result.allowedCommands.length > 0);
     // Должны быть base-команды.
     assert.ok(result.allowedCommands.includes("node"));
+    for (const providerId of getProviderIds()) {
+      assert.equal(typeof result.openAICompat.apiKeys[providerId], "string");
+    }
+  });
+});
+
+describe("mergeWindowStates", () => {
+  it("merges legacy workspace conversations into the primary global state", () => {
+    const primary = {
+      version: 2,
+      workspaceRoot: "/tmp/main",
+      activeConversationId: "a",
+      conversations: [
+        { id: "a", title: "main", updatedAt: "2026-01-02T00:00:00Z", messages: [] },
+      ],
+    };
+    const legacy = {
+      version: 2,
+      workspaceRoot: "/tmp/legacy",
+      activeConversationId: "b",
+      conversations: [
+        { id: "b", title: "legacy", updatedAt: "2026-01-01T00:00:00Z", messages: [] },
+      ],
+    };
+    const merged = mergeWindowStates(primary, [legacy], "/tmp/main");
+    assert.equal(merged.conversations.length, 2);
+    assert.deepEqual(merged.conversations.map((item) => item.id), ["a", "b"]);
+    assert.equal(merged.activeConversationId, "a");
   });
 });

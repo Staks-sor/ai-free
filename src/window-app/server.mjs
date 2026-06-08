@@ -6,9 +6,11 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { openAppWindow } from "../browser/launch.mjs";
+import { getCommandExecutionEnv } from "../code-agent/executor.mjs";
 import { runCodeTask } from "../code-agent/run.mjs";
 import { CODE_AGENT_PROMPT_VERSION } from "../code-agent/prompt.mjs";
 import {
@@ -26,6 +28,12 @@ import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
 import { setOpenAICorsHeaders } from "../../api/server.mjs";
+import {
+  findProviderModel,
+  getProviderCatalog,
+  getProviderDefaultModel,
+  uiModelCatalog,
+} from "../providers/model-catalog.mjs";
 
 export async function runWindowApp({
   client,
@@ -151,6 +159,10 @@ export async function runWindowApp({
           hasAuth: p.hasAuth(),
         }));
         return sendJson(res, { providers });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/model-catalog") {
+        return sendJson(res, uiModelCatalog());
       }
 
       // Подключить провайдера из UI (открывает окно логина в фоне).
@@ -398,11 +410,21 @@ export async function runWindowApp({
         const provider = allowedProviders.has(String(body.provider)) ? String(body.provider) : "deepseek";
         // Допустимые режимы per-provider. Если режим не из набора — fallback на дефолт провайдера.
         const PROVIDER_MODES = {
-          deepseek: { allowed: ["fast", "expert", "vision"], default: "fast" },
-          qwen: { allowed: ["default"], default: "default" },
+          deepseek: {
+            allowed: getProviderCatalog("deepseek").modes.map((item) => item.id),
+            default: getProviderCatalog("deepseek").defaultMode,
+          },
+          qwen: {
+            allowed: getProviderCatalog("qwen").modes.map((item) => item.id),
+            default: getProviderCatalog("qwen").defaultMode,
+          },
         };
         const modeCfg = PROVIDER_MODES[provider];
         const mode = modeCfg.allowed.includes(String(body.mode)) ? String(body.mode) : modeCfg.default;
+        const requestedModel = String(body.model || "").trim();
+        const model = findProviderModel(provider, requestedModel)
+          ? requestedModel
+          : getProviderDefaultModel(provider, mode);
         const conversation = {
           id: randomUUID(),
           sessionId,
@@ -411,6 +433,7 @@ export async function runWindowApp({
           autoTitle: !rawTitle,
           workspace,
           mode,
+          model,
           parentMessageId: null,
           // Отдельный chain для /code, чтобы Coding Agent system-prompt не загрязнял обычный чат.
           codeParentMessageId: null,
@@ -446,10 +469,72 @@ export async function runWindowApp({
         }
         if (typeof body.coderMode === "boolean") {
           conversation.coderMode = body.coderMode;
+          if (!body.coderMode) conversation.hardwareMode = false;
+        }
+        if (typeof body.hardwareMode === "boolean") {
+          conversation.hardwareMode = body.hardwareMode;
+          if (body.hardwareMode) conversation.coderMode = true;
         }
         conversation.updatedAt = new Date().toISOString();
         saveWindowState(workspaceRoot, state);
         return sendJson(res, { conversation });
+      }
+
+      const installMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/install-request\/(approve|reject)$/);
+      if (req.method === "POST" && installMatch) {
+        const conversation = state.conversations.find((item) => item.id === installMatch[1]);
+        if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
+        const request = conversation.pendingInstallRequest;
+        if (!request || request.status !== "pending") {
+          return sendJson(res, { error: "No pending install request" }, 400);
+        }
+        if (installMatch[2] === "reject") {
+          conversation.pendingInstallRequest = { ...request, status: "rejected", updatedAt: new Date().toISOString() };
+          conversation.updatedAt = new Date().toISOString();
+          saveWindowState(workspaceRoot, state);
+          return sendJson(res, { conversation });
+        }
+        conversation.pendingInstallRequest = { ...request, status: "running", updatedAt: new Date().toISOString() };
+        conversation.updatedAt = new Date().toISOString();
+        saveWindowState(workspaceRoot, state);
+        runApprovedInstall(request, workspaceRoot, (progress) => {
+          conversation.pendingInstallRequest = {
+            ...conversation.pendingInstallRequest,
+            ...progress,
+            status: "running",
+            updatedAt: new Date().toISOString(),
+          };
+          conversation.updatedAt = new Date().toISOString();
+          saveWindowState(workspaceRoot, state);
+        })
+          .then((result) => {
+            conversation.pendingInstallRequest = {
+              ...request,
+              status: result.ok ? "installed" : "failed",
+              result,
+              updatedAt: new Date().toISOString(),
+            };
+            conversation.messages.push({
+              role: "assistant",
+              content: result.ok
+                ? `Установка завершена: ${request.title}`
+                : `Установка не удалась: ${request.title}\n${result.stderr || result.error || ""}`.trim(),
+              createdAt: new Date().toISOString(),
+            });
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+          })
+          .catch((error) => {
+            conversation.pendingInstallRequest = {
+              ...request,
+              status: "failed",
+              result: { ok: false, error: error.message },
+              updatedAt: new Date().toISOString(),
+            };
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+          });
+        return sendJson(res, { conversation, runningInstall: true });
       }
 
       if (req.method === "DELETE" && conversationMatch) {
@@ -477,6 +562,7 @@ export async function runWindowApp({
 
         const prompt = String(body.content || "").trim();
         if (!prompt) return sendJson(res, { error: "Message is empty" }, 400);
+        conversation.pendingQuestion = null;
 
         // Маршрутизация по провайдеру.
         const convProvider = conversation.provider || "deepseek";
@@ -511,7 +597,8 @@ export async function runWindowApp({
             // сразу с running:true, UI делает polling до завершения.
             const slashCode = prompt === "/code" || prompt.startsWith("/code ");
             const coderMode = conversation.coderMode === true;
-            if (slashCode || coderMode) {
+            const hardwareMode = conversation.hardwareMode === true;
+            if (slashCode || coderMode || hardwareMode) {
               const task = slashCode ? prompt.slice(5).trim() : prompt;
               if (!task) {
                 conversation.messages.push({
@@ -554,7 +641,10 @@ export async function runWindowApp({
                 try {
                   logConsole(`[code] qwen started: ${summarizeForLog(task)}`);
                   const codeResult = await runCodeTask(adapter, baseOptions, workspacePath, task, parentId, {
-                    onTool: (_call, _result, log) => {
+                    systemPrompt: hardwareMode ? createHardwareAgentPrompt() : "",
+                    onTool: (_call, result, log) => {
+                      captureInstallRequest(conversation, result);
+                      captureQuestionRequest(conversation, result);
                       progressLogs.push(log);
                       progressMessage.content = formatCodeProgressMessage(task, progressLogs);
                       progressMessage.updatedAt = new Date().toISOString();
@@ -582,7 +672,7 @@ export async function runWindowApp({
               return sendJson(res, { conversation, running: true });
             }
 
-            const isQwenReasoning = conversation.model === "qwq-32b";
+            const isQwenReasoning = findProviderModel("qwen", conversation.model)?.reasoning === true;
             const result = await qwenApiCall((c) =>
               c.complete({
                 chatId: conversation.sessionId,
@@ -674,7 +764,8 @@ export async function runWindowApp({
 
         const dsSlashCode = prompt === "/code" || prompt.startsWith("/code ");
         const dsCoderMode = conversation.coderMode === true;
-        if (dsSlashCode || dsCoderMode) {
+        const dsHardwareMode = conversation.hardwareMode === true;
+        if (dsSlashCode || dsCoderMode || dsHardwareMode) {
           const task = dsSlashCode ? prompt.slice(5).trim() : prompt;
           if (!task) {
             conversation.messages.push({
@@ -723,7 +814,10 @@ export async function runWindowApp({
             try {
               logConsole(`[code] deepseek started: ${summarizeForLog(task)}`);
               const codeResult = await runCodeTask(client, baseOptions, workspacePath, task, parentId, {
-                onTool: (_call, _result, log) => {
+                systemPrompt: dsHardwareMode ? createHardwareAgentPrompt() : "",
+                onTool: (_call, result, log) => {
+                  captureInstallRequest(conversation, result);
+                  captureQuestionRequest(conversation, result);
                   progressLogs.push(log);
                   progressMessage.content = formatCodeProgressMessage(task, progressLogs);
                   progressMessage.updatedAt = new Date().toISOString();
@@ -815,6 +909,150 @@ function summarizeForLog(value, maxLength = 160) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength - 1)}...`;
+}
+
+function captureInstallRequest(conversation, toolResult) {
+  const install = toolResult?.installRequest;
+  if (!install || !install.id || !install.command || !Array.isArray(install.args)) return;
+  conversation.pendingInstallRequest = {
+    requestId: randomUUID(),
+    status: "pending",
+    ...install,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function captureQuestionRequest(conversation, toolResult) {
+  const question = toolResult?.userQuestion;
+  if (!question || !question.question) return;
+  conversation.pendingQuestion = {
+    questionId: randomUUID(),
+    status: "pending",
+    question: question.question,
+    details: question.details || "",
+    choices: Array.isArray(question.choices) ? question.choices : [],
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function approvedInstallRecipes() {
+  return {
+    platformio: {
+      command: "python3",
+      args: ["-m", "pip", "install", "--user", "platformio"],
+      verifyCommand: "pio",
+      verifyArgs: ["--version"],
+    },
+    esptool: {
+      command: "python3",
+      args: ["-m", "pip", "install", "--user", "esptool"],
+      verifyCommand: "esptool.py",
+      verifyArgs: ["--version"],
+    },
+    "arduino-cli": {
+      command: "brew",
+      args: ["install", "arduino-cli"],
+      verifyCommand: "arduino-cli",
+      verifyArgs: ["version"],
+    },
+  };
+}
+
+function runApprovedInstall(request, cwd, onProgress = () => {}) {
+  const recipe = approvedInstallRecipes()[request.id];
+  if (!recipe) return Promise.resolve({ ok: false, error: `Unknown install recipe: ${request.id}` });
+  if (request.command !== recipe.command || JSON.stringify(request.args) !== JSON.stringify(recipe.args)) {
+    return Promise.resolve({ ok: false, error: "Install command does not match approved recipe." });
+  }
+  return new Promise((resolve) => {
+    const env = getCommandExecutionEnv();
+    const child = spawn(recipe.command, recipe.args, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const startedAt = new Date().toISOString();
+    const publish = () => onProgress({
+      startedAt,
+      stdout: stdout.slice(-12000),
+      stderr: stderr.slice(-12000),
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      child.kill("SIGTERM");
+      stderr += "\nInstall timed out after 10 minutes.";
+      publish();
+    }, 10 * 60 * 1000);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      publish();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+      publish();
+    });
+    child.on("error", (error) => {
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok: false, error: error.message, stdout, stderr });
+    });
+    child.on("close", async (status, signal) => {
+      settled = true;
+      clearTimeout(timer);
+      const verify = status === 0
+        ? await verifyInstalledCommand(recipe, cwd, env)
+        : { ok: false, stdout: "", stderr: "" };
+      resolve({
+        ok: status === 0 && verify.ok,
+        status,
+        signal,
+        command: recipe.command,
+        args: recipe.args,
+        verifyCommand: recipe.verifyCommand,
+        verify,
+        stdout: stdout.slice(-12000),
+        stderr: [stderr, verify.ok ? "" : verify.stderr || verify.error || ""].filter(Boolean).join("\n").slice(-12000),
+      });
+    });
+  });
+}
+
+function verifyInstalledCommand(recipe, cwd, env) {
+  if (!recipe.verifyCommand) return Promise.resolve({ ok: true });
+  return new Promise((resolve) => {
+    const child = spawn(recipe.verifyCommand, recipe.verifyArgs || [], {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => resolve({ ok: false, error: error.message, stdout, stderr }));
+    child.on("close", (status, signal) => resolve({
+      ok: status === 0,
+      status,
+      signal,
+      stdout: stdout.slice(-12000),
+      stderr: stderr.slice(-12000),
+    }));
+  });
+}
+
+function createHardwareAgentPrompt() {
+  return `ESP / hardware mode is enabled.
+- Treat the task as work with a real microcontroller project in this workspace.
+- First inspect the project files and identify whether it uses PlatformIO, Arduino CLI, ESP-IDF, or raw esptool artifacts.
+- Prefer PlatformIO when platformio.ini exists. Use arduino-cli only for Arduino projects, and esptool.py only for direct ESP diagnostics/flashing.
+- Before upload/flash, identify the target board and serial port with safe read-only checks such as list_serial_ports, pio device list, arduino-cli board list, or project file inspection.
+- If PlatformIO, arduino-cli, or esptool.py are not installed, still use list_serial_ports for port discovery and then tell the user which external flashing tool must be installed.
+- Do not run erase_flash. Do not invent a serial port or board. If the exact port/board/firmware path is missing, ask the user for it.
+- Only upload/flash when the user explicitly asks to прошить/upload/flash. For analysis tasks, stop after reporting the plan and required commands.`;
 }
 
 function createCodeProgressMessage(task) {

@@ -26,6 +26,7 @@ import { QwenChatClient } from "../src/providers/qwen/client.mjs";
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/deepseek/client.mjs";
+import { parseModelToolCalls } from "./tool-calls.mjs";
 
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.
 let qwenClient = null;
@@ -82,11 +83,15 @@ export async function handleRequest(req, res) {
     return handleChatCompletions(req, res);
   }
 
+  if (req.method === "POST" && url.pathname === "/v1/responses") {
+    return handleResponses(req, res);
+  }
+
   if (req.method === "GET" && url.pathname === "/") {
     return sendJson(res, {
       name: "AI Free openai-compat",
       version: "0.1.0-prototype",
-      endpoints: ["GET /v1/models", "POST /v1/chat/completions"],
+      endpoints: ["GET /v1/models", "POST /v1/chat/completions", "POST /v1/responses"],
       docs: "see README.md in api/",
     });
   }
@@ -122,9 +127,70 @@ async function handleChatCompletions(req, res) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   if (!messages.length) return sendError(res, 400, "Missing 'messages' array");
 
+  const prompt = buildPromptFromChatBody(body, modelName, mapping);
+
+  try {
+    if (mapping.provider === "qwen") {
+      const runQwen = async (client) => {
+        const chatId = await client.createChat({ model: mapping.model, title: "API request" });
+        if (body.stream === true) {
+          return handleQwenStream(client, chatId, prompt, modelName, mapping.model, res);
+        }
+        const result = await client.complete({
+          chatId,
+          prompt,
+          thinking: false,
+          search: false,
+          model: mapping.model,
+        });
+        return sendJson(res, toOpenAIResponse(modelName, result.text));
+      };
+
+      let client = await getQwenClient();
+      try {
+        return await runQwen(client);
+      } catch (e) {
+        const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
+        if (!isQwenAuthError(e)) throw e;
+        qwenClient = null;
+        const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
+        client = new QwenChatClient({
+          token: fresh.token,
+          cookieHeader: fresh.cookieHeader,
+          debug: Boolean(process.env.API_DEBUG),
+        });
+        qwenClient = client;
+        return await runQwen(client);
+      }
+    }
+    if (mapping.provider === "deepseek") {
+      const client = await getDeepSeekClient();
+      // DeepSeek: создаём сессию и отправляем completion.
+      const sessionId = await client.createSession();
+
+      if (body.stream === true) {
+        return handleDeepSeekStream(client, sessionId, prompt, modelName, mapping.model, res);
+      }
+
+      const result = await client.complete({
+        sessionId,
+        prompt,
+        modelType: mapping.model,
+      });
+      return sendJson(res, toOpenAIResponse(modelName, result.text));
+    }
+    return sendError(res, 500, `Unknown provider: ${mapping.provider}`);
+  } catch (e) {
+    console.error("[API] Upstream error:", e.message);
+    return sendError(res, 500, humanizeUpstreamError(e.message));
+  }
+}
+
+function buildPromptFromChatBody(body, modelName, mapping) {
   // OpenAI присылает ВСЮ историю каждый раз. Мы её сжимаем в один prompt —
   // конкатенируем с лейблами ролей. Это упрощение прототипа; для качества контекста
   // потом сделаем proper multi-turn через persistent sessionId + parent_id chain.
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
   let prompt = "";
   if (body.tools && body.tools.length > 0) {
     // DeepSeek-Reasoner (R1) и Qwen QwQ часто игнорируют мягкие инструкции —
@@ -219,66 +285,257 @@ Do not copy model identity from earlier assistant messages in the conversation h
     prompt += `\n\n---\n[SYSTEM REMINDER]: You MUST use the exact JSON array format wrapped in \`\`\`tool_calls\`\`\` to call tools. If you output plain bash commands, it will fail.`;
   }
 
+  return prompt;
+}
+
+async function handleResponses(req, res) {
+  let body;
   try {
-    if (mapping.provider === "qwen") {
-      const runQwen = async (client) => {
-        const chatId = await client.createChat({ model: mapping.model, title: "API request" });
-        if (body.stream === true) {
-          return handleQwenStream(client, chatId, prompt, modelName, mapping.model, res);
-        }
-        const result = await client.complete({
-          chatId,
-          prompt,
-          thinking: false,
-          search: false,
-          model: mapping.model,
-        });
-        return sendJson(res, toOpenAIResponse(modelName, result.text));
-      };
-
-      let client = await getQwenClient();
-      try {
-        return await runQwen(client);
-      } catch (e) {
-        const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
-        if (!isQwenAuthError(e)) throw e;
-        qwenClient = null;
-        const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
-        client = new QwenChatClient({
-          token: fresh.token,
-          cookieHeader: fresh.cookieHeader,
-          debug: Boolean(process.env.API_DEBUG),
-        });
-        qwenClient = client;
-        return await runQwen(client);
-      }
-    }
-    if (mapping.provider === "deepseek") {
-      const client = await getDeepSeekClient();
-      // DeepSeek: создаём сессию и отправляем completion.
-      const sessionId = await client.createSession();
-
-      if (body.stream === true) {
-        return handleDeepSeekStream(client, sessionId, prompt, modelName, mapping.model, res);
-      }
-
-      const result = await client.complete({
-        sessionId,
-        prompt,
-        modelType: mapping.model,
-      });
-      return sendJson(res, toOpenAIResponse(modelName, result.text));
-    }
-    return sendError(res, 500, `Unknown provider: ${mapping.provider}`);
+    body = await readJson(req);
   } catch (e) {
-    console.error("[API] Upstream error:", e.message);
+    return sendError(res, 400, `Invalid JSON: ${e.message}`);
+  }
+
+  const modelName = body?.model;
+  if (!modelName) return sendError(res, 400, "Missing 'model' field");
+
+  console.log(`[API] POST /v1/responses (model: ${modelName}, stream: ${Boolean(body.stream)})`);
+
+  const mapping = findModel(modelName);
+  if (!mapping) return sendError(res, 404, `Unknown model: ${modelName}`);
+  if (req.openAICompatProvider && mapping.provider !== req.openAICompatProvider) {
+    return sendError(
+      res,
+      403,
+      `API key for ${req.openAICompatProvider} cannot be used with ${mapping.provider} model '${modelName}'`,
+    );
+  }
+
+  const messages = responsesInputToMessages(body.input);
+  if (!messages.length) return sendError(res, 400, "Missing 'input' field");
+  const prompt = buildPromptFromChatBody({ messages, tools: body.tools }, modelName, mapping);
+
+  try {
+    const text = await completeText(mapping, prompt);
+    const response = toResponsesResponse(modelName, text);
+    if (body.stream === true) {
+      return sendResponsesStream(res, response);
+    }
+    return sendJson(res, response);
+  } catch (e) {
+    console.error("[API] Responses upstream error:", e.message);
+    if (body.stream === true) return sendResponsesStreamError(res, modelName, e.message);
     return sendError(res, 500, humanizeUpstreamError(e.message));
   }
+}
+
+async function completeText(mapping, prompt) {
+  if (mapping.provider === "qwen") {
+    const runQwen = async (client) => {
+      const chatId = await client.createChat({ model: mapping.model, title: "Responses API request" });
+      const result = await client.complete({
+        chatId,
+        prompt,
+        thinking: false,
+        search: false,
+        model: mapping.model,
+      });
+      return result.text || "";
+    };
+
+    let client = await getQwenClient();
+    try {
+      return await runQwen(client);
+    } catch (e) {
+      const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
+      if (!isQwenAuthError(e)) throw e;
+      qwenClient = null;
+      const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
+      client = new QwenChatClient({
+        token: fresh.token,
+        cookieHeader: fresh.cookieHeader,
+        debug: Boolean(process.env.API_DEBUG),
+      });
+      qwenClient = client;
+      return await runQwen(client);
+    }
+  }
+
+  if (mapping.provider === "deepseek") {
+    const client = await getDeepSeekClient();
+    const sessionId = await client.createSession();
+    const result = await client.complete({
+      sessionId,
+      prompt,
+      modelType: mapping.model,
+    });
+    return result.text || "";
+  }
+
+  throw new Error(`Unknown provider: ${mapping.provider}`);
 }
 
 // Отправка SSE-события в OpenAI формате.
 function sendSseEvent(res, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function sendNamedSseEvent(res, event, data) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function responsesInputToMessages(input) {
+  if (typeof input === "string") return [{ role: "user", content: input }];
+  if (!Array.isArray(input)) return [];
+
+  return input.map((item) => {
+    if (typeof item === "string") return { role: "user", content: item };
+    const role = typeof item?.role === "string" ? item.role : "user";
+    return { role, content: responsesContentToText(item?.content ?? item) };
+  }).filter((message) => String(message.content || "").trim());
+}
+
+function responsesContentToText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === "string") return part;
+      if (typeof part?.text === "string") return part.text;
+      if (typeof part?.input_text === "string") return part.input_text;
+      if (typeof part?.output_text === "string") return part.output_text;
+      return JSON.stringify(part);
+    }).join("\n");
+  }
+  if (typeof content?.text === "string") return content.text;
+  return JSON.stringify(content ?? "");
+}
+
+function toResponsesResponse(model, text) {
+  const createdAt = Math.floor(Date.now() / 1000);
+  const id = `resp_${createdAt}${Math.random().toString(36).slice(2, 10)}`;
+  const itemId = `msg_${Math.random().toString(36).slice(2, 10)}`;
+  const parsed = parseModelToolCalls(text);
+  const toolOutput = parsed.calls.map((call) => ({
+    id: `fc_${Math.random().toString(36).slice(2, 10)}`,
+    type: "function_call",
+    status: "completed",
+    call_id: `call_${Math.random().toString(36).slice(2, 10)}`,
+    name: call.name,
+    arguments: call.arguments,
+  }));
+  const messageOutput = parsed.content
+    ? [
+        {
+          id: itemId,
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: parsed.content,
+              annotations: [],
+            },
+          ],
+        },
+      ]
+    : [];
+  return {
+    id,
+    object: "response",
+    created_at: createdAt,
+    status: "completed",
+    model,
+    output: [...messageOutput, ...toolOutput],
+    output_text: parsed.content || "",
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+    },
+  };
+}
+
+function sendResponsesStream(res, response) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const inProgress = { ...response, status: "in_progress", output: [] };
+
+  sendNamedSseEvent(res, "response.created", {
+    type: "response.created",
+    response: inProgress,
+  });
+  response.output.forEach((outputItem, outputIndex) => {
+    sendNamedSseEvent(res, "response.output_item.added", {
+      type: "response.output_item.added",
+      output_index: outputIndex,
+      item: outputItem.type === "message" ? { ...outputItem, content: [] } : outputItem,
+    });
+
+    if (outputItem.type === "message") {
+      const contentPart = outputItem.content[0];
+      sendNamedSseEvent(res, "response.content_part.added", {
+        type: "response.content_part.added",
+        item_id: outputItem.id,
+        output_index: outputIndex,
+        content_index: 0,
+        part: { type: "output_text", text: "", annotations: [] },
+      });
+      sendNamedSseEvent(res, "response.output_text.delta", {
+        type: "response.output_text.delta",
+        item_id: outputItem.id,
+        output_index: outputIndex,
+        content_index: 0,
+        delta: contentPart.text,
+      });
+      sendNamedSseEvent(res, "response.output_text.done", {
+        type: "response.output_text.done",
+        item_id: outputItem.id,
+        output_index: outputIndex,
+        content_index: 0,
+        text: contentPart.text,
+      });
+      sendNamedSseEvent(res, "response.content_part.done", {
+        type: "response.content_part.done",
+        item_id: outputItem.id,
+        output_index: outputIndex,
+        content_index: 0,
+        part: contentPart,
+      });
+    }
+
+    sendNamedSseEvent(res, "response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item: outputItem,
+    });
+  });
+  sendNamedSseEvent(res, "response.completed", {
+    type: "response.completed",
+    response,
+  });
+  res.end();
+}
+
+function sendResponsesStreamError(res, model, rawMessage) {
+  const message = humanizeUpstreamError(rawMessage);
+  const response = toResponsesResponse(model, "");
+  response.status = "failed";
+  response.error = { message, type: "server_error", code: "upstream_error" };
+
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  sendNamedSseEvent(res, "response.failed", {
+    type: "response.failed",
+    response,
+  });
+  res.end();
 }
 
 // Превращает сырое сообщение об ошибке от апстрима в читабельную фразу.
@@ -409,53 +666,18 @@ function toOpenAIResponse(model, text) {
   let content = text;
   let finish_reason = "stop";
 
-  const idx = text.indexOf("```tool_calls");
-  if (idx !== -1) {
-    const firstBracket = text.indexOf("[", idx);
-    const lastBracket = text.lastIndexOf("]");
-    
-    let jsonStr = "";
-    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket >= firstBracket) {
-      jsonStr = text.slice(firstBracket, lastBracket + 1);
-      content = text.slice(0, idx).trim();
-    }
-
-    if (jsonStr) {
-      try {
-        let calls = JSON.parse(jsonStr);
-        if (!Array.isArray(calls)) calls = [calls];
-        tool_calls = calls.map((call, i) => ({
-          id: `call_${Math.random().toString(36).slice(2, 10)}`,
-          type: "function",
-          function: {
-            name: call.name,
-            arguments: typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments)
-          }
-        }));
-        finish_reason = "tool_calls";
-      } catch (e) {
-        try {
-           let fixedJson = jsonStr.trim();
-           if (fixedJson.startsWith('[\n') || fixedJson.startsWith('[')) {
-              fixedJson = fixedJson.replace(/\[\s*"name"/g, '[{"name"');
-              fixedJson = fixedJson.replace(/}\s*\]/g, '}]');
-           }
-           let calls = JSON.parse(fixedJson);
-           if (!Array.isArray(calls)) calls = [calls];
-           tool_calls = calls.map((call, i) => ({
-             id: `call_${Math.random().toString(36).slice(2, 10)}`,
-             type: "function",
-             function: {
-               name: call.name,
-               arguments: typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments)
-             }
-           }));
-           finish_reason = "tool_calls";
-        } catch (e2) {
-           console.error("[API] Error parsing tool calls from non-streaming response:", e.message);
-        }
-      }
-    }
+  const parsed = parseModelToolCalls(text);
+  if (parsed.calls.length) {
+    content = parsed.content;
+    tool_calls = parsed.calls.map((call) => ({
+      id: `call_${Math.random().toString(36).slice(2, 10)}`,
+      type: "function",
+      function: {
+        name: call.name,
+        arguments: call.arguments,
+      },
+    }));
+    finish_reason = "tool_calls";
   }
 
   return {
