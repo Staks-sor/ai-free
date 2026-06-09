@@ -82,6 +82,8 @@ describe("conversationList", () => {
         mode: "fast",
         provider: "deepseek",
         model: "",
+        roleId: "assistant",
+        pipelineMode: false,
         coderMode: false,
         hardwareMode: false,
         updatedAt: "2026-01-01T00:00:00Z",

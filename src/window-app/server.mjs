@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { openAppWindow } from "../browser/launch.mjs";
+import { AGENT_ROLES, getAgentRole, normalizeRoleId } from "../agent-runtime/roles.mjs";
 import { getCommandExecutionEnv } from "../code-agent/executor.mjs";
 import { runCodeTask } from "../code-agent/run.mjs";
 import { CODE_AGENT_PROMPT_VERSION } from "../code-agent/prompt.mjs";
@@ -117,6 +118,168 @@ export async function runWindowApp({
     throw new Error("unreachable: qwenApiCall retry budget");
   }
 
+  async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}) {
+    const edges = state.pipeline?.edges || [];
+    const queue = [{ conversationId: startConversationId, input: initialPrompt, sourceTitle: "User", depth: 0 }];
+    const visited = new Set();
+    const maxSteps = 12;
+    let steps = 0;
+
+    while (queue.length && steps < maxSteps) {
+      const item = queue.shift();
+      const conversation = state.conversations.find((candidate) => candidate.id === item.conversationId);
+      if (!conversation) continue;
+      const visitKey = `${item.conversationId}:${item.depth}`;
+      if (visited.has(visitKey)) continue;
+      visited.add(visitKey);
+      steps += 1;
+
+      let output = "";
+      try {
+        output = await completePipelineConversation(conversation, item.input, {
+          sourceTitle: item.sourceTitle,
+          appendUser: item.conversationId !== startConversationId,
+          thinking: requestOptions.thinking === true,
+          search: requestOptions.search === true,
+        });
+      } catch (error) {
+        output = `⚠️ Pipeline step failed: ${error.message}`;
+        conversation.messages.push({
+          role: "assistant",
+          content: output,
+          createdAt: new Date().toISOString(),
+          pipelineStatus: "failed",
+        });
+        conversation.updatedAt = new Date().toISOString();
+        saveWindowState(workspaceRoot, state);
+      }
+
+      const targets = edges
+        .filter((edge) => edge.from === item.conversationId)
+        .map((edge) => state.conversations.find((candidate) => candidate.id === edge.to))
+        .filter(Boolean);
+      for (const target of targets) {
+        queue.push({
+          conversationId: target.id,
+          input: output,
+          sourceTitle: conversation.title || getAgentRole(conversation.roleId).label,
+          depth: item.depth + 1,
+        });
+      }
+    }
+
+    const startConversation = state.conversations.find((candidate) => candidate.id === startConversationId);
+    if (startConversation) {
+      startConversation.messages.push({
+        role: "assistant",
+        content: steps >= maxSteps
+          ? `Pipeline stopped after ${maxSteps} steps. Проверь цепочку на циклы.`
+          : "Pipeline completed.",
+        createdAt: new Date().toISOString(),
+        pipelineStatus: steps >= maxSteps ? "stopped" : "done",
+      });
+      startConversation.updatedAt = new Date().toISOString();
+      saveWindowState(workspaceRoot, state);
+    }
+  }
+
+  async function completePipelineConversation(conversation, input, options = {}) {
+    const role = getAgentRole(conversation.roleId);
+    const prompt = buildPipelinePrompt(conversation, role, input, options.sourceTitle);
+    const now = new Date().toISOString();
+    if (options.appendUser) {
+      conversation.messages.push({
+        role: "user",
+        content: `Pipeline input from ${options.sourceTitle || "previous step"}:\n\n${input}`,
+        createdAt: now,
+        pipelineRun: true,
+      });
+    }
+
+    const provider = conversation.provider || "deepseek";
+    if (provider === "qwen") {
+      const clientForQwen = await getOrCreateQwenClient();
+      if (!conversation.sessionId) {
+        conversation.sessionId = await qwenApiCall((c) =>
+          c.createChat({ model: conversation.model || undefined }),
+        );
+        saveWindowState(workspaceRoot, state);
+      }
+      const isReasoning = findProviderModel("qwen", conversation.model)?.reasoning === true;
+      const result = await qwenApiCall((c) =>
+        c.complete({
+          chatId: conversation.sessionId,
+          prompt,
+          parentId: conversation.parentMessageId,
+          thinking: isReasoning ? true : options.thinking === true,
+          search: options.search === true,
+          model: conversation.model || undefined,
+        }),
+      );
+      void clientForQwen;
+      conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
+      const text = result.thinkingText
+        ? `🧠 ${result.thinkingText.trim()}\n\n---\n\n${result.text.trim()}`
+        : result.text.trim();
+      conversation.messages.push({
+        role: "assistant",
+        content: text || "[empty]",
+        createdAt: new Date().toISOString(),
+        roleId: role.id,
+        pipelineRun: true,
+      });
+      conversation.updatedAt = new Date().toISOString();
+      saveWindowState(workspaceRoot, state);
+      return text || "[empty]";
+    }
+
+    if (provider !== "deepseek") {
+      throw new Error(`Pipeline provider is not supported: ${provider}`);
+    }
+
+    if (!conversation.sessionId) {
+      conversation.sessionId = await client.createSession();
+      saveWindowState(workspaceRoot, state);
+    }
+    const messageMode = modeForConversation(conversation);
+    const result = await client.complete({
+      sessionId: conversation.sessionId,
+      prompt,
+      parentMessageId: conversation.parentMessageId,
+      modelType: mapModeToModelType(messageMode, modelType),
+      thinkingEnabled: messageMode === "expert" ? true : options.thinking === true,
+      searchEnabled: options.search === true,
+    });
+    conversation.parentMessageId = result.lastAssistantMessageId ?? conversation.parentMessageId;
+    const text = result.text.trimEnd();
+    conversation.messages.push({
+      role: "assistant",
+      content: text || "[empty]",
+      createdAt: new Date().toISOString(),
+      roleId: role.id,
+      pipelineRun: true,
+    });
+    conversation.updatedAt = new Date().toISOString();
+    saveWindowState(workspaceRoot, state);
+    return text || "[empty]";
+  }
+
+  function buildPipelinePrompt(conversation, role, input, sourceTitle) {
+    return [
+      `Pipeline role: ${role.label}`,
+      role.prompt,
+      "",
+      `Current chat: ${conversation.title || "Untitled"}`,
+      `Input source: ${sourceTitle || "User"}`,
+      "",
+      "Work only on this step. Return output that can be passed to the next connected step.",
+      "Do not claim files were changed. In pipeline MVP, tools are not executed automatically.",
+      "",
+      "Input:",
+      input,
+    ].join("\n");
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
@@ -163,6 +326,10 @@ export async function runWindowApp({
 
       if (req.method === "GET" && url.pathname === "/api/model-catalog") {
         return sendJson(res, uiModelCatalog());
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/agent-roles") {
+        return sendJson(res, { roles: AGENT_ROLES });
       }
 
       // Подключить провайдера из UI (открывает окно логина в фоне).
@@ -234,8 +401,16 @@ export async function runWindowApp({
           stateFile: getStateFile(),
           activeConversationId: state.activeConversationId,
           conversations: conversationList(state),
+          pipeline: state.pipeline || { edges: [] },
           runningTaskIds: getRunningIds(),
         });
+      }
+
+      if (req.method === "PATCH" && url.pathname === "/api/pipeline") {
+        const body = await readJsonBody(req);
+        state.pipeline = normalizePipelinePatch(body, state.conversations);
+        saveWindowState(workspaceRoot, state);
+        return sendJson(res, { pipeline: state.pipeline });
       }
 
       // ===== Файловый браузер для модалки «Новый чат» =====
@@ -434,6 +609,8 @@ export async function runWindowApp({
           workspace,
           mode,
           model,
+          roleId: normalizeRoleId(body.roleId),
+          pipelineMode: body.pipelineMode === true,
           parentMessageId: null,
           // Отдельный chain для /code, чтобы Coding Agent system-prompt не загрязнял обычный чат.
           codeParentMessageId: null,
@@ -466,6 +643,12 @@ export async function runWindowApp({
         const body = await readJsonBody(req);
         if (typeof body.model === "string" && body.model.length > 0) {
           conversation.model = body.model;
+        }
+        if (typeof body.roleId === "string") {
+          conversation.roleId = normalizeRoleId(body.roleId);
+        }
+        if (typeof body.pipelineMode === "boolean") {
+          conversation.pipelineMode = body.pipelineMode;
         }
         if (typeof body.coderMode === "boolean") {
           conversation.coderMode = body.coderMode;
@@ -563,6 +746,38 @@ export async function runWindowApp({
         const prompt = String(body.content || "").trim();
         if (!prompt) return sendJson(res, { error: "Message is empty" }, 400);
         conversation.pendingQuestion = null;
+
+        if (body.pipeline === true || conversation.pipelineMode === true) {
+          if (isRunning(conversation.id)) {
+            conversation.messages.push({
+              role: "assistant",
+              content: "⏳ В этом чате уже выполняется задача. Подожди завершения.",
+              createdAt: new Date().toISOString(),
+            });
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+            return sendJson(res, { conversation, running: true });
+          }
+          conversation.messages.push({
+            role: "user",
+            content: prompt,
+            createdAt: new Date().toISOString(),
+            pipelineRun: true,
+          });
+          conversation.messages.push({
+            role: "assistant",
+            content: "Pipeline started. Передаю задачу по связям...",
+            createdAt: new Date().toISOString(),
+            pipelineStatus: "running",
+          });
+          conversation.updatedAt = new Date().toISOString();
+          state.activeConversationId = conversation.id;
+          saveWindowState(workspaceRoot, state);
+          startTask(conversation.id, "pipeline", async () => {
+            await runPipelineFromConversation(conversation.id, prompt, body);
+          }, "Pipeline");
+          return sendJson(res, { conversation, running: true });
+        }
 
         // Маршрутизация по провайдеру.
         const convProvider = conversation.provider || "deepseek";
@@ -909,6 +1124,35 @@ function summarizeForLog(value, maxLength = 160) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength - 1)}...`;
+}
+
+function normalizePipelinePatch(body, conversations) {
+  const ids = new Set(conversations.map((conversation) => conversation.id));
+  const edges = Array.isArray(body?.edges)
+    ? body.edges
+        .map((edge) => ({
+          from: String(edge?.from || ""),
+          to: String(edge?.to || ""),
+        }))
+        .filter((edge) => edge.from && edge.to && edge.from !== edge.to && ids.has(edge.from) && ids.has(edge.to))
+    : [];
+  const seen = new Set();
+  return {
+    edges: edges.filter((edge) => {
+      const key = `${edge.from}->${edge.to}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function modeForConversation(conversation) {
+  if (conversation.model === "deepseek-v4-pro" || conversation.model === "deepseek-reasoner") return "expert";
+  if (conversation.model === "deepseek-v4-flash" || conversation.model === "deepseek-chat") return "fast";
+  if (conversation.model === "deepseek-v4-vision") return "vision";
+  return String(conversation.mode || "fast");
 }
 
 function captureInstallRequest(conversation, toolResult) {

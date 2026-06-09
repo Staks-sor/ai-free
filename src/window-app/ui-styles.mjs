@@ -213,6 +213,13 @@ export const STYLES = `
     .chatTitle {
       font-size: 13px;
       font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .chatTitleText {
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -855,7 +862,8 @@ export const STYLES = `
     }
     .modeBadge.hidden { display: none; }
 
-    .modelPicker {
+    .modelPicker,
+    .rolePicker {
       font-size: 11px;
       padding: 4px 10px;
       border-radius: 6px;
@@ -866,8 +874,11 @@ export const STYLES = `
       max-width: 200px;
       font-weight: 600;
     }
-    .modelPicker.hidden { display: none; }
-    .modelPicker:hover { border-color: var(--line-strong); }
+    .modelPicker.hidden,
+    .rolePicker.hidden { display: none; }
+    .modelPicker:hover,
+    .rolePicker:hover { border-color: var(--line-strong); }
+    .rolePicker { max-width: 150px; }
 
     .coderToggle {
       font-size: 11px;
@@ -892,6 +903,11 @@ export const STYLES = `
       color: #fbbf24;
       border-color: rgba(245, 158, 11, 0.50);
     }
+    .pipelineToggle.active {
+      background: rgba(20, 184, 166, 0.18);
+      color: #5eead4;
+      border-color: rgba(20, 184, 166, 0.45);
+    }
     body[data-theme="light"] .coderToggle.active,
     body[data-theme="contrast"] .coderToggle.active {
       color: #6d28d9;
@@ -900,12 +916,99 @@ export const STYLES = `
     body[data-theme="contrast"] .hardwareToggle.active {
       color: #92400e;
     }
+    .pipelinePanelBtn {
+      position: absolute;
+      right: 58px;
+      top: 10px;
+    }
+    .pipelinePanel {
+      position: absolute;
+      top: 58px;
+      right: 14px;
+      z-index: 20;
+      width: min(720px, calc(100% - 28px));
+      max-height: min(560px, calc(100% - 150px));
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .pipelinePanel.hidden { display: none; }
+    .pipelineHead {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .pipelineTitle {
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .pipelineSub {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .pipelineBody {
+      overflow: auto;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .pipelineRow {
+      display: grid;
+      grid-template-columns: minmax(160px, 1fr) minmax(130px, 160px) minmax(150px, 220px);
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--bg-soft);
+    }
+    .pipelineNodeMeta { min-width: 0; }
+    .pipelineNodeTitle {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .pipelineNodeSub {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .pipelineSelect {
+      width: 100%;
+      min-width: 0;
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--input-bg);
+      color: var(--text);
+      font-size: 12px;
+      padding: 0 8px;
+    }
+    .smallEmpty {
+      padding: 20px;
+      font-size: 13px;
+    }
     .modeBadge.fast    { background: rgba(82, 126, 255, 0.14); color: #aabfff; border-color: rgba(82, 126, 255, 0.4); }
     .modeBadge.expert  { background: rgba(168, 85, 247, 0.14); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.4); }
     .modeBadge.vision  { background: rgba(34, 197, 94, 0.14);  color: #86efac; border-color: rgba(34, 197, 94, 0.4); }
 
     .providerBadge {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      flex: 0 0 auto;
       font-size: 10px;
       padding: 1px 6px;
       border-radius: 3px;

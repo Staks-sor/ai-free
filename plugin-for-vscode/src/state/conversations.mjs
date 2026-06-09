@@ -9,6 +9,8 @@ export function conversationList(state) {
     mode: conversation.mode || "fast",
     provider: conversation.provider || "deepseek",
     model: conversation.model || "",
+    roleId: conversation.roleId || "assistant",
+    pipelineMode: conversation.pipelineMode === true,
     agentMode: conversation.agentMode === true,
     hardwareMode: conversation.hardwareMode === true,
     updatedAt: conversation.updatedAt,

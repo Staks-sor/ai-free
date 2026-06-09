@@ -144,5 +144,30 @@ export function normalizeWindowState(state, workspaceRoot) {
       ? state.activeByWorkspace
       : {},
     conversations,
+    pipeline: normalizePipeline(state?.pipeline, conversations),
+  };
+}
+
+function normalizePipeline(pipeline, conversations) {
+  const ids = new Set(conversations.map((conversation) => conversation.id));
+  const edges = Array.isArray(pipeline?.edges)
+    ? pipeline.edges
+        .map((edge) => ({
+          from: String(edge?.from || ""),
+          to: String(edge?.to || ""),
+        }))
+        .filter((edge) => edge.from && edge.to && edge.from !== edge.to && ids.has(edge.from) && ids.has(edge.to))
+    : [];
+  const deduped = [];
+  const seen = new Set();
+  for (const edge of edges) {
+    const key = `${edge.from}->${edge.to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(edge);
+  }
+  return {
+    edges: deduped,
+    updatedAt: pipeline?.updatedAt || null,
   };
 }

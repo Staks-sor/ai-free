@@ -106,7 +106,10 @@ export function renderWindowHtml() {
           <div id="activeTitle" class="title">No chat selected</div>
           <span id="activeMode" class="modeBadge hidden"></span>
           <select id="modelPicker" class="modelPicker hidden" title="Модель"></select>
+          <select id="rolePicker" class="rolePicker hidden" title="Роль этого чата в pipeline"></select>
           <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="ESP / прошивка плат — включает аппаратный профиль агента">ESP</button>
+          <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="Передавать сообщения по связям pipeline">Pipeline</button>
+          <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="Pipeline flow">Flow</button>
         </div>
         <div id="workspace" class="workspace"></div>
         <button id="themeBtn" class="iconBtn themeBtn" type="button" title="Сменить тему">◐</button>
@@ -126,6 +129,16 @@ export function renderWindowHtml() {
           </p>
           <div id="settingsBody" class="settingsBody">Loading…</div>
         </div>
+      </div>
+      <div id="pipelinePanel" class="pipelinePanel hidden" aria-hidden="true">
+        <div class="pipelineHead">
+          <div>
+            <div class="pipelineTitle">Pipeline Flow</div>
+            <div class="pipelineSub">Задай роль каждому чату и выбери следующий шаг.</div>
+          </div>
+          <button id="pipelineClose" class="iconBtn" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="pipelineBody" class="pipelineBody"></div>
       </div>
       <section id="messages" class="messages">
         <div class="empty">Открой проект в VS Code — агент подключится к нему автоматически.</div>
@@ -193,6 +206,10 @@ export function renderWindowHtml() {
     const statusEl = document.getElementById("status");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
+    const pipelinePanel = document.getElementById("pipelinePanel");
+    const pipelineBody = document.getElementById("pipelineBody");
+    const pipelinePanelBtn = document.getElementById("pipelinePanelBtn");
+    const pipelineClose = document.getElementById("pipelineClose");
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
     const THEME_KEY = "deepseek.theme";
@@ -676,6 +693,9 @@ export function renderWindowHtml() {
     const newChatModePicker = document.getElementById("newChatMode");
 
     let availableProviders = ["deepseek"]; // подтянем с сервера через /api/providers
+    let AGENT_ROLES = [
+      { id: "assistant", label: "Assistant", description: "Обычный помощник" },
+    ];
     let newChatSelectedProvider = localStorage.getItem(PROVIDER_PICK_KEY) || "deepseek";
     let newChatSelectedMode = localStorage.getItem(NEWCHAT_MODE_KEY) || "fast";
 
@@ -740,6 +760,18 @@ export function renderWindowHtml() {
       }
     }
 
+    async function refreshAgentRoles() {
+      try {
+        const r = await fetch("/api/agent-roles");
+        const j = await r.json();
+        if (Array.isArray(j.roles) && j.roles.length) AGENT_ROLES = j.roles;
+      } catch {}
+    }
+
+    function roleLabel(roleId) {
+      return (AGENT_ROLES.find((role) => role.id === roleId) || AGENT_ROLES[0]).label;
+    }
+
     function renderModePickerForProvider() {
       const info = PROVIDER_INFO[newChatSelectedProvider] || PROVIDER_INFO.deepseek;
       // Если текущий режим не подходит провайдеру — сбросим на первый.
@@ -791,6 +823,7 @@ export function renderWindowHtml() {
     // На старте подтянем список доступных провайдеров и нарисуем picker'ы.
     (async () => {
       await refreshModelCatalog();
+      await refreshAgentRoles();
       await refreshAvailableProviders();
       if (!availableProviders.includes(newChatSelectedProvider) && availableProviders.length) {
         newChatSelectedProvider = availableProviders[0];
@@ -953,6 +986,7 @@ export function renderWindowHtml() {
       // Если есть фоновые задачи — запустить polling.
       if ((appState.runningTaskIds || []).length > 0) ensurePolling();
       if (activeConversation?.pendingInstallRequest?.status === "running") ensureInstallPolling();
+      if (!pipelinePanel.classList.contains("hidden")) renderPipelinePanel();
     }
 
     function normalizeFsPath(value) {
@@ -1072,12 +1106,14 @@ export function renderWindowHtml() {
           sp.title = "Агент выполняет задачу";
           titleEl.appendChild(sp);
         }
-        titleEl.appendChild(document.createTextNode(conversation.title));
+        const titleText = document.createElement("span");
+        titleText.className = "chatTitleText";
+        titleText.textContent = conversation.title;
+        titleEl.appendChild(titleText);
         const prov = conversation.provider || "deepseek";
         const pb = document.createElement("span");
         pb.className = "providerBadge " + prov;
         pb.textContent = prov;
-        titleEl.appendChild(document.createTextNode(" "));
         titleEl.appendChild(pb);
         // Папка проекта — короткое имя (basename) с полным путём в tooltip.
         const folderEl = button.querySelector(".chatFolder");
@@ -1115,13 +1151,17 @@ export function renderWindowHtml() {
 
     const activeModeBadge = document.getElementById("activeMode");
     const modelPickerEl = document.getElementById("modelPicker");
+    const rolePickerEl = document.getElementById("rolePicker");
     const hardwareToggleEl = document.getElementById("hardwareToggle");
+    const pipelineToggleEl = document.getElementById("pipelineToggle");
     function renderNoConversation() {
       activeTitle.textContent = "No chat selected";
       workspace.textContent = appState.workspaceRoot || "";
       activeModeBadge.classList.add("hidden");
       modelPickerEl.classList.add("hidden");
+      rolePickerEl.classList.add("hidden");
       hardwareToggleEl.classList.add("hidden");
+      pipelineToggleEl.classList.add("hidden");
       messages.innerHTML = '<div class="empty">Открой проект в VS Code — агент подключится к нему автоматически.</div>';
       setComposerEnabled(false);
     }
@@ -1141,9 +1181,25 @@ export function renderWindowHtml() {
     modelPickerEl.addEventListener("change", () => {
       patchActiveConversation({ model: modelPickerEl.value }).catch((e) => setStatus(e.message, true));
     });
+    rolePickerEl.addEventListener("change", () => {
+      patchActiveConversation({ roleId: rolePickerEl.value }).catch((e) => setStatus(e.message, true));
+    });
     hardwareToggleEl.addEventListener("click", () => {
       const next = !(activeConversation && activeConversation.hardwareMode === true);
       patchActiveConversation({ hardwareMode: next }).catch((e) => setStatus(e.message, true));
+    });
+    pipelineToggleEl.addEventListener("click", () => {
+      const next = !(activeConversation && activeConversation.pipelineMode === true);
+      patchActiveConversation({ pipelineMode: next }).catch((e) => setStatus(e.message, true));
+    });
+    pipelinePanelBtn.addEventListener("click", () => {
+      pipelinePanel.classList.remove("hidden");
+      pipelinePanel.setAttribute("aria-hidden", "false");
+      renderPipelinePanel();
+    });
+    pipelineClose.addEventListener("click", () => {
+      pipelinePanel.classList.add("hidden");
+      pipelinePanel.setAttribute("aria-hidden", "true");
     });
 
     function renderConversation(conversation) {
@@ -1177,6 +1233,15 @@ export function renderWindowHtml() {
         modelPickerEl.classList.add("hidden");
         activeModeBadge.classList.remove("hidden");
       }
+      rolePickerEl.innerHTML = "";
+      for (const roleDef of AGENT_ROLES) {
+        const opt = document.createElement("option");
+        opt.value = roleDef.id;
+        opt.textContent = roleDef.label;
+        if (roleDef.id === (conversation.roleId || "assistant")) opt.selected = true;
+        rolePickerEl.appendChild(opt);
+      }
+      rolePickerEl.classList.remove("hidden");
       hardwareToggleEl.classList.remove("hidden");
       if (conversation.hardwareMode === true) {
         hardwareToggleEl.classList.add("active");
@@ -1184,6 +1249,14 @@ export function renderWindowHtml() {
       } else {
         hardwareToggleEl.classList.remove("active");
         hardwareToggleEl.textContent = "ESP";
+      }
+      pipelineToggleEl.classList.remove("hidden");
+      if (conversation.pipelineMode === true) {
+        pipelineToggleEl.classList.add("active");
+        pipelineToggleEl.textContent = "Pipeline ON";
+      } else {
+        pipelineToggleEl.classList.remove("active");
+        pipelineToggleEl.textContent = "Pipeline";
       }
 
       // Синхронизация и блокировка "Глубокого мышления" для моделей-рассуждалок (DeepSeek R1 / QwQ)
@@ -1220,7 +1293,9 @@ export function renderWindowHtml() {
         const role = document.createElement("div");
         role.className = "role";
         // Подпись assistant'а — провайдер-специфичная.
-        const assistantLabel = ({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || "Assistant";
+        const assistantLabel = message.roleId
+          ? roleLabel(message.roleId)
+          : (({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || "Assistant");
         role.textContent = message.role === "user" ? "You" : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
@@ -1231,6 +1306,74 @@ export function renderWindowHtml() {
       renderInstallRequest(conversation);
       renderQuestionRequest(conversation);
       messages.scrollTop = messages.scrollHeight;
+    }
+
+    async function updatePipelineEdges(edges) {
+      const data = await api("/api/pipeline", { method: "PATCH", body: { edges } });
+      appState.pipeline = data.pipeline;
+      renderPipelinePanel();
+    }
+
+    function renderPipelinePanel() {
+      const conversations = appState?.conversations || [];
+      const edges = appState?.pipeline?.edges || [];
+      const nextByFrom = new Map(edges.map((edge) => [edge.from, edge.to]));
+      pipelineBody.innerHTML = "";
+      if (!conversations.length) {
+        pipelineBody.innerHTML = '<div class="empty smallEmpty">Создай несколько чатов, затем свяжи их здесь.</div>';
+        return;
+      }
+      for (const conversation of conversations) {
+        const row = document.createElement("div");
+        row.className = "pipelineRow";
+        const meta = document.createElement("div");
+        meta.className = "pipelineNodeMeta";
+        const title = document.createElement("div");
+        title.className = "pipelineNodeTitle";
+        title.textContent = conversation.title;
+        const sub = document.createElement("div");
+        sub.className = "pipelineNodeSub";
+        sub.textContent = (conversation.provider || "deepseek") + " · " + (conversation.model || conversation.mode || "model");
+        meta.append(title, sub);
+
+        const roleSelect = document.createElement("select");
+        roleSelect.className = "pipelineSelect";
+        for (const roleDef of AGENT_ROLES) {
+          const opt = document.createElement("option");
+          opt.value = roleDef.id;
+          opt.textContent = roleDef.label;
+          if (roleDef.id === (conversation.roleId || "assistant")) opt.selected = true;
+          roleSelect.appendChild(opt);
+        }
+        roleSelect.addEventListener("change", async () => {
+          await api("/api/conversations/" + conversation.id, { method: "PATCH", body: { roleId: roleSelect.value } });
+          await loadState(activeConversation?.id || conversation.id);
+        });
+
+        const nextSelect = document.createElement("select");
+        nextSelect.className = "pipelineSelect";
+        const none = document.createElement("option");
+        none.value = "";
+        none.textContent = "End";
+        nextSelect.appendChild(none);
+        for (const target of conversations) {
+          if (target.id === conversation.id) continue;
+          const opt = document.createElement("option");
+          opt.value = target.id;
+          opt.textContent = "→ " + target.title;
+          if (target.id === nextByFrom.get(conversation.id)) opt.selected = true;
+          nextSelect.appendChild(opt);
+        }
+        nextSelect.addEventListener("change", async () => {
+          const nextEdges = edges.filter((edge) => edge.from !== conversation.id);
+          if (nextSelect.value) nextEdges.push({ from: conversation.id, to: nextSelect.value });
+          await updatePipelineEdges(nextEdges);
+          await loadState(activeConversation?.id || conversation.id);
+        });
+
+        row.append(meta, roleSelect, nextSelect);
+        pipelineBody.appendChild(row);
+      }
     }
 
     function renderQuestionRequest(conversation) {

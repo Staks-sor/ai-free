@@ -377,12 +377,22 @@ async function completeText(mapping, prompt) {
 
 // Отправка SSE-события в OpenAI формате.
 function sendSseEvent(res, data) {
+  if (res.destroyed || res.writableEnded) return false;
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+  return true;
 }
 
 function sendNamedSseEvent(res, event, data) {
+  if (res.destroyed || res.writableEnded) return false;
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+  return true;
+}
+
+function writeSseRaw(res, text) {
+  if (res.destroyed || res.writableEnded) return false;
+  res.write(text);
+  return true;
 }
 
 function responsesInputToMessages(input) {
@@ -574,6 +584,7 @@ function humanizeUpstreamError(rawMessage) {
 //      смотрят именно сюда. error — ОБЪЕКТ (string ломает Zod-схему).
 // После — обязательный data: [DONE].
 function sendStreamError(res, modelName, rawMessage) {
+  if (res.destroyed || res.writableEnded) return;
   const message = humanizeUpstreamError(rawMessage);
   const ts = Math.floor(Date.now() / 1000);
   const id = `chatcmpl-${ts}${Math.random().toString(36).slice(2, 10)}`;
@@ -591,8 +602,8 @@ function sendStreamError(res, modelName, rawMessage) {
   sendSseEvent(res, {
     error: { message, type: "server_error", code: "upstream_error" },
   });
-  res.write("data: [DONE]\n\n");
-  res.end();
+  writeSseRaw(res, "data: [DONE]\n\n");
+  if (!res.destroyed && !res.writableEnded) res.end();
 }
 
 // Формирует SSE-чанк в OpenAI формате.
@@ -616,6 +627,10 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res) {
   res.setHeader("Connection", "keep-alive");
 
   const parser = new StreamParser(modelName, res);
+  let sawDelta = false;
+  const heartbeat = setInterval(() => {
+    if (!sawDelta) writeSseRaw(res, ": qwen waiting\n\n");
+  }, 10_000);
   try {
     await client.complete({
       chatId,
@@ -623,12 +638,18 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res) {
       thinking: false,
       search: false,
       model,
-      onText: (textDelta) => parser.onText(textDelta),
+      onText: (textDelta) => {
+        sawDelta = true;
+        parser.onText(textDelta);
+      },
     });
+    clearInterval(heartbeat);
+    if (res.destroyed || res.writableEnded) return;
     parser.onEnd();
-    res.write("data: [DONE]\n\n");
-    res.end();
+    writeSseRaw(res, "data: [DONE]\n\n");
+    if (!res.destroyed && !res.writableEnded) res.end();
   } catch (e) {
+    clearInterval(heartbeat);
     console.error("[API] Qwen stream error:", e.message);
     sendStreamError(res, modelName, e.message);
   }
