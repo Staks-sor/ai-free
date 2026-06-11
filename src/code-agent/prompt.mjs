@@ -34,6 +34,7 @@ The JSON object MUST contain the string field "tool":
 {"tool":"write_file","path":"relative/file.txt","content":"full file content"}
 {"tool":"append_file","path":"relative/file.txt","content":"text to append"}
 {"tool":"delete_file","path":"relative/file.txt"}
+{"tool":"delete_dir","path":"relative/dir"}
 {"tool":"mkdir","path":"relative/dir"}
 {"tool":"list_serial_ports"}
 {"tool":"ask_user","question":"What should I do next?","details":"Optional short context","choices":["Option A","Option B"]}
@@ -46,10 +47,11 @@ Rules:
 - Never use OpenAI function-call shape. Bad: {"name":"write_file","arguments":{"path":"a.txt"}}
 - Correct shape: {"tool":"write_file","path":"a.txt","content":""}
 - Do not say a file/folder was created until the matching tool result says ok:true.
-- If asked to delete/remove a file, use delete_file. Do not emulate deletion by overwriting the file with empty content.
+- If asked to delete/remove a file, use delete_file. If asked to delete/remove a directory, use delete_dir.
+- Never use rm -r, rm -R, or rm -rf. Directory deletion is handled by delete_dir inside workspace safety checks.
 - After write_file/mkdir, finish with a short factual summary only after seeing ok:true.
 - For file and folder changes, use built-in file tools directly:
-  create folder -> mkdir, create/overwrite file -> write_file, append -> append_file, delete file -> delete_file.
+  create folder -> mkdir, create/overwrite file -> write_file, append -> append_file, delete file -> delete_file, delete folder -> delete_dir.
   Do NOT use run_command python/node/rm/mkdir/touch for file creation or deletion.
 - Use only RELATIVE paths inside the workspace. Do NOT prefix with the workspace root.
   Good: "src/app.js", "tests/foo.py", "README.md"

@@ -154,6 +154,7 @@ describe("COMMAND_CATALOG integrity", () => {
 
   it("dangerous commands have validateArgs hook", () => {
     assert.ok(typeof COMMAND_CATALOG.rm.validateArgs === "function");
+    assert.ok(typeof COMMAND_CATALOG.rmdir.validateArgs === "function");
     assert.ok(typeof COMMAND_CATALOG.git.validateArgs === "function");
     assert.ok(typeof COMMAND_CATALOG.find.validateArgs === "function");
     assert.ok(typeof COMMAND_CATALOG.chmod.validateArgs === "function");

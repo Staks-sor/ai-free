@@ -253,6 +253,49 @@ describe("executeWorkspaceTool delete_file", () => {
   });
 });
 
+describe("executeWorkspaceTool delete_dir", () => {
+  it("deletes an empty directory inside the workspace", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-delete-dir-"));
+    fs.mkdirSync(path.join(dir, "empty"));
+    try {
+      const result = await executeWorkspaceTool(dir, { tool: "delete_dir", path: "empty" });
+      assert.equal(result.ok, true);
+      assert.equal(result.deleted, true);
+      assert.equal(fs.existsSync(path.join(dir, "empty")), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("deletes non-empty directories inside the workspace", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-delete-dir-"));
+    fs.mkdirSync(path.join(dir, "nonempty"));
+    fs.writeFileSync(path.join(dir, "nonempty", "file.txt"), "x");
+    try {
+      const result = await executeWorkspaceTool(dir, { tool: "delete_dir", path: "nonempty" });
+      assert.equal(result.ok, true);
+      assert.equal(result.deleted, true);
+      assert.equal(fs.existsSync(path.join(dir, "nonempty")), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delete a plain file through delete_dir", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-delete-dir-"));
+    fs.writeFileSync(path.join(dir, "file.txt"), "x");
+    try {
+      await assert.rejects(
+        () => executeWorkspaceTool(dir, { tool: "delete_dir", path: "file.txt" }),
+        /not a directory/i,
+      );
+      assert.equal(fs.existsSync(path.join(dir, "file.txt")), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("executeWorkspaceTool list_files", () => {
   it("lists nested project files beyond the old shallow depth", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
@@ -417,6 +460,19 @@ describe("COMMAND_CATALOG.rm validateArgs", () => {
   it("allows simple rm without recursive flag", () => {
     assert.doesNotThrow(() => v(["file.txt"]));
     assert.doesNotThrow(() => v(["-f", "file.txt"]));
+  });
+});
+
+describe("COMMAND_CATALOG.rmdir validateArgs", () => {
+  const v = COMMAND_CATALOG.rmdir.validateArgs;
+
+  it("blocks flags", () => {
+    assert.throws(() => v(["-p", "dir"]));
+    assert.throws(() => v(["--ignore-fail-on-non-empty", "dir"]));
+  });
+
+  it("allows a plain directory path", () => {
+    assert.doesNotThrow(() => v(["empty_dir"]));
   });
 });
 

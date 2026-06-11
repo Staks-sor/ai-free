@@ -80,6 +80,19 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
     return { ok: true, path: path.relative(workspaceRoot, target), deleted: true, existed: true };
   }
 
+  if (tool === "delete_dir") {
+    const target = resolveWorkspacePath(workspaceRoot, call.path);
+    if (!fs.existsSync(target)) {
+      return { ok: true, path: path.relative(workspaceRoot, target), deleted: false, existed: false };
+    }
+    const stat = fs.lstatSync(target);
+    if (!stat.isDirectory()) {
+      throw new Error("delete_dir target is not a directory.");
+    }
+    fs.rmSync(target, { recursive: true, force: false });
+    return { ok: true, path: path.relative(workspaceRoot, target), deleted: true, existed: true };
+  }
+
   if (tool === "mkdir") {
     const target = resolveWorkspacePath(workspaceRoot, call.path);
     fs.mkdirSync(target, { recursive: true });

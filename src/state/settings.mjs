@@ -19,6 +19,17 @@ export const COMMAND_CATALOG = {
   pwd:     { description: "Текущая рабочая папка",                             risk: "low",    enabledByDefault: true },
 
   mkdir:   { description: "Создание папок",                                    risk: "low",    enabledByDefault: false },
+  rmdir: {
+    description: "Удаление пустых папок без рекурсивных флагов",
+    risk: "low", enabledByDefault: false,
+    validateArgs: (args) => {
+      for (const arg of args) {
+        if (arg.startsWith("-")) {
+          throw new Error(`rmdir: флаг ${arg} заблокирован. Удалять можно только явно указанную пустую папку.`);
+        }
+      }
+    },
+  },
   cp:      { description: "Копирование файлов",                                risk: "low",    enabledByDefault: false },
   touch:   { description: "Создание пустого файла / обновление mtime",         risk: "low",    enabledByDefault: false },
   grep:    { description: "Поиск по тексту",                                   risk: "low",    enabledByDefault: false },
