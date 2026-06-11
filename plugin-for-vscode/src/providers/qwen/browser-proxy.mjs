@@ -18,6 +18,7 @@
 
 import { QWEN_AUTH_FILE, QWEN_BASE_URL, QWEN_BROWSER_PROFILE } from "./config.mjs";
 import { applyQwenCookiesToContext, readQwenAuth } from "./auth-files.mjs";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
@@ -26,13 +27,21 @@ import { spawnSync } from "node:child_process";
 let proxyPromise = null;
 const QWEN_NAV_TIMEOUT_MS = Number(process.env.QWEN_NAV_TIMEOUT_MS || 90_000);
 const QWEN_READY_DELAY_MS = Number(process.env.QWEN_READY_DELAY_MS || 3000);
+const QWEN_FETCH_TIMEOUT_MS = Number(process.env.QWEN_FETCH_TIMEOUT_MS || 120_000);
+const QWEN_STREAM_IDLE_TIMEOUT_MS = Number(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS || 45_000);
+const QWEN_PROXY_MAX_ATTEMPTS = Math.max(1, Math.min(5, Number(process.env.QWEN_PROXY_MAX_ATTEMPTS || 3)));
 const QWEN_BROWSER_CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.QWEN_BROWSER_CONCURRENCY || 1)));
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, "../../..");
 
 function isTransientBrowserError(error) {
   const message = String(error?.message || error || "");
-  return /Execution context was destroyed|most likely because of a navigation|Target closed|Page closed|Context closed|Timeout .* exceeded|net::ERR_ABORTED|Failed to fetch|request is finished/i.test(message);
+  return /Execution context was destroyed|most likely because of a navigation|Target closed|Page closed|Context closed|Timeout .* exceeded|qwen_page_evaluate_timeout|net::ERR_ABORTED|Failed to fetch|request is finished/i.test(message);
+}
+
+function isClosedBrowserError(error) {
+  const message = String(error?.message || error || "");
+  return /Target closed|Page closed|Context closed|Browser has been closed/i.test(message);
 }
 
 function hashChatId(chatId) {
@@ -221,6 +230,17 @@ async function createProxy({ debug }) {
     worker.currentChatId = chatId;
   }
 
+  async function ensureNewChatPage(worker) {
+    if (worker.currentChatId === "new-chat") return;
+    if (debug) console.log(`[qwen-proxy:${worker.label}] navigating to /c/new-chat`);
+    await worker.page.goto(`${QWEN_BASE_URL}/c/new-chat`, {
+      waitUntil: "domcontentloaded",
+      timeout: QWEN_NAV_TIMEOUT_MS,
+    });
+    await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
+    worker.currentChatId = "new-chat";
+  }
+
   function latestFailureFor(requestUrl) {
     for (let i = recentRequestFailures.length - 1; i >= 0; i -= 1) {
       const item = recentRequestFailures[i];
@@ -242,35 +262,108 @@ async function createProxy({ debug }) {
     return run;
   }
 
+  async function recreateWorkerPage(worker) {
+    try { await worker.page?.close?.(); } catch {}
+    worker.currentChatId = null;
+    const page = await context.newPage();
+    attachPageDiagnostics(page, worker.label);
+    worker.page = page;
+    await reloadWorker(worker);
+  }
+
   async function reloadWorker(worker) {
     worker.currentChatId = null;
     await worker.page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: QWEN_NAV_TIMEOUT_MS });
     await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
   }
 
-  async function runProxyFetch(worker, { url, body, chatId }) {
+  async function runProxyFetch(worker, { url, body, chatId, timeoutMs, streamIdleTimeoutMs, maxAttempts }) {
     let result = null;
     let lastError = null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const fetchTimeoutMs = Number(timeoutMs || QWEN_FETCH_TIMEOUT_MS);
+    const idleTimeoutMs = Number(streamIdleTimeoutMs || QWEN_STREAM_IDLE_TIMEOUT_MS);
+    const attempts = Math.max(1, Math.min(5, Number(maxAttempts || QWEN_PROXY_MAX_ATTEMPTS)));
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         if (chatId) await ensureChatPage(worker, chatId);
-        result = await worker.page.evaluate(
-          async ({ url, body }) => {
+        else if (/\/api\/v2\/chats\/new(?:$|\?)/.test(url)) await ensureNewChatPage(worker);
+        const requestId = randomUUID();
+        const isCompletionRequest = /\/api\/v2\/chat\/completions(?:$|\?)/.test(url);
+        const accept = isCompletionRequest
+          ? "application/json"
+          : "application/json, text/plain, */*";
+        result = await Promise.race([
+          worker.page.evaluate(
+          async ({ url, body, fetchTimeoutMs, streamIdleTimeoutMs, requestId, accept, isCompletionRequest }) => {
             const requestUrl = new URL(url);
             const sameOrigin = requestUrl.origin === window.location.origin;
             const fetchUrl = sameOrigin ? `${requestUrl.pathname}${requestUrl.search}` : url;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort("qwen_fetch_timeout"), fetchTimeoutMs);
+            const readWithTimeout = (reader, timeoutMs) =>
+              Promise.race([
+                reader.read(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("qwen_stream_idle_timeout")), timeoutMs)),
+              ]);
+            const readTextBody = async (res) => {
+              const contentType = res.headers.get("content-type") || "";
+              if (!res.body?.getReader) {
+                return { text: await res.text(), contentType };
+              }
+              const isStreamingResponse = /text\/event-stream|application\/x-ndjson|stream/i.test(contentType);
+              const isHtmlResponse = /text\/html/i.test(contentType);
+              const reader = res.body.getReader();
+              const decoder = new TextDecoder();
+              let text = "";
+              try {
+                while (true) {
+                  let chunk;
+                  try {
+                    chunk = await readWithTimeout(reader, streamIdleTimeoutMs);
+                  } catch (error) {
+                    if (String(error?.message || error) === "qwen_stream_idle_timeout" && text) break;
+                    throw error;
+                  }
+                  const { done, value } = chunk;
+                  if (done) break;
+                  text += decoder.decode(value, { stream: true });
+                  if (isHtmlResponse && text) {
+                    try { await reader.cancel(); } catch {}
+                    break;
+                  }
+                  if (isStreamingResponse && /(^|\n)data:\s*\[DONE\](\n|$)/.test(text)) {
+                    try { await reader.cancel(); } catch {}
+                    break;
+                  }
+                }
+                text += decoder.decode();
+              } finally {
+                try { reader.releaseLock(); } catch {}
+              }
+              return { text, contentType };
+            };
             try {
+              const headers = {
+                "Content-Type": "application/json",
+                Accept: accept,
+                source: "web",
+                version: "0.2.64",
+                timezone: new Date().toString().replace(/\s*\(.+\)$/, ""),
+                "x-request-id": requestId,
+              };
+              if (isCompletionRequest) headers["x-accel-buffering"] = "no";
               const res = await fetch(fetchUrl, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                headers,
                 body,
                 credentials: "include",
+                signal: controller.signal,
               });
-              const text = await res.text();
+              const { text, contentType } = await readTextBody(res);
               return {
                 ok: res.ok,
                 status: res.status,
-                contentType: res.headers.get("content-type") || "",
+                contentType,
                 text,
               };
             } catch (e) {
@@ -283,18 +376,30 @@ async function createProxy({ debug }) {
                   `page=${window.location.href}\n` +
                   `request=${fetchUrl}`,
               };
+            } finally {
+              clearTimeout(timeoutId);
             }
           },
-          { url, body },
-        );
-        if (result.status !== 0 || attempt === 2) break;
+          { url, body, fetchTimeoutMs, streamIdleTimeoutMs: idleTimeoutMs, requestId, accept, isCompletionRequest },
+          ),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("qwen_page_evaluate_timeout")), fetchTimeoutMs + 5000),
+          ),
+        ]);
+        if (result.status !== 0 || attempt === attempts - 1) break;
         if (debug) console.log(`[qwen-proxy:${worker.label}] fetch failed before HTTP response; reloading page and retrying`);
         await reloadWorker(worker);
       } catch (error) {
         lastError = error;
-        if (!isTransientBrowserError(error) || attempt === 2) throw error;
+        if (!isTransientBrowserError(error) || attempt === attempts - 1) throw error;
         if (debug) console.log(`[qwen-proxy:${worker.label}] transient browser error; reloading page and retrying: ${error.message}`);
-        await reloadWorker(worker);
+        try {
+          if (isClosedBrowserError(error)) await recreateWorkerPage(worker);
+          else await reloadWorker(worker);
+        } catch (recoverError) {
+          proxyPromise = null;
+          throw recoverError;
+        }
       }
     }
     if (!result && lastError) throw lastError;
@@ -311,9 +416,16 @@ async function createProxy({ debug }) {
     // Прокинуть fetch через контекст страницы. Перед запросом обязательно
     // переходим на /c/<chatId>, чтобы чат был зарегистрирован SPA-роутером.
     // Возвращает { ok, status, contentType, text } — Node парсит text сам.
-    async proxyFetch({ url, body, chatId }) {
+    async proxyFetch({ url, body, chatId, timeoutMs, streamIdleTimeoutMs, maxAttempts }) {
       const worker = pickWorker(chatId);
-      return enqueue(worker, () => runProxyFetch(worker, { url, body, chatId }));
+      return enqueue(worker, () => runProxyFetch(worker, {
+        url,
+        body,
+        chatId,
+        timeoutMs,
+        streamIdleTimeoutMs,
+        maxAttempts,
+      }));
     },
     async close() { await close(); },
   };

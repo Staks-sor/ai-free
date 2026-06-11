@@ -148,14 +148,41 @@ export async function runWindowApp({
     return qwenClient;
   }
 
+  function isQwenTransportError(error) {
+    const message = String(error?.message || error || "");
+    return /Execution context was destroyed|Target page, context or browser has been closed|Target closed|Page closed|Context closed|Failed to fetch|request is finished/i.test(message);
+  }
+
+  function formatQwenError(error) {
+    const message = String(error?.message || error || "");
+    if (/qwen_page_evaluate_timeout/i.test(message)) {
+      return (
+        "Qwen browser transport timed out while creating/sending the request. " +
+        "Это происходит до ответа модели: chat.qwen.ai не отдаёт API JSON для создания чата. " +
+        "Обычно причина в web anti-bot/session challenge на стороне Qwen."
+      );
+    }
+    return message;
+  }
+
   // Вызов Qwen API с авто-refresh сессии при auth-ошибке (до 2 попыток).
   async function qwenApiCall(fn) {
     const { isQwenAuthError } = await import("../providers/qwen/auth-manager.mjs");
     let client = await getOrCreateQwenClient();
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    let transportResetDone = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         return await fn(client);
       } catch (error) {
+        if (isQwenTransportError(error) && !transportResetDone) {
+          console.log(`[qwen] browser transport error, resetting proxy: ${error.message}`);
+          const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
+          resetQwenBrowserProxy();
+          qwenClient = null;
+          client = await getOrCreateQwenClient({ forceRebuild: true });
+          transportResetDone = true;
+          continue;
+        }
         if (!isQwenAuthError(error) || attempt >= 1) throw error;
         console.log("[qwen] auth error, refreshing session…");
         const manager = await getQwenAuthManager();
@@ -285,62 +312,57 @@ export async function runWindowApp({
 
     const provider = conversation.provider || "deepseek";
     if (provider === "qwen") {
-      if (!conversation.sessionId) {
-        conversation.sessionId = await qwenApiCall((c) =>
-          c.createChat({ model: conversation.model || getProviderDefaultModel("qwen") }),
-        );
-        saveWindowState(workspaceRoot, state);
-      }
       const qwenModel = conversation.model || getProviderDefaultModel("qwen");
+      // Pipeline steps must not inherit the normal chat context. A fresh upstream
+      // chat keeps old user turns (for example "видишь плату?") out of the step.
+      const chatId = await qwenApiCall((c) =>
+        c.createChat({ model: qwenModel }),
+      );
       const isReasoning = findProviderModel("qwen", qwenModel)?.reasoning === true;
       const result = await qwenApiCall((c) =>
         c.complete({
-          chatId: conversation.sessionId,
+          chatId,
           prompt,
-          parentId: conversation.parentMessageId,
           thinking: isReasoning ? true : options.thinking === true,
           search: options.search === true,
           model: qwenModel,
         }),
       );
-      conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
       const text = result.thinkingText
         ? `🧠 ${result.thinkingText.trim()}\n\n---\n\n${result.text.trim()}`
         : result.text.trim();
+      const cleanText = extractPipelineResult(text);
       conversation.messages.push({
         role: "assistant",
-        content: text || "[empty]",
+        content: cleanText || "[empty]",
         createdAt: new Date().toISOString(),
         roleId: role.id,
         pipelineRun: true,
       });
       conversation.updatedAt = new Date().toISOString();
       saveWindowState(workspaceRoot, state);
-      return text || "[empty]";
+      return cleanText || "[empty]";
     }
 
     if (provider !== "deepseek") {
       throw new Error(`Pipeline provider is not supported: ${provider}`);
     }
-    if (!conversation.sessionId) {
-      conversation.sessionId = await client.createSession();
-      saveWindowState(workspaceRoot, state);
-    }
+    // Pipeline steps run in a fresh upstream session by design. The UI chat still
+    // stores the step transcript, but the provider does not see stale turns.
+    const pipelineSessionId = await client.createSession();
     const runtime = resolveDeepSeekRuntime(conversation, {
       thinking: options.thinking,
       search: options.search,
       refFileIds: [],
     });
     const result = await client.complete({
-      sessionId: conversation.sessionId,
+      sessionId: pipelineSessionId,
       prompt,
-      parentMessageId: conversation.parentMessageId,
       modelType: runtime.effectiveModelType,
       thinkingEnabled: runtime.useThinking,
       searchEnabled: runtime.useSearch,
     });
-    conversation.parentMessageId = result.lastAssistantMessageId ?? conversation.parentMessageId;
-    const text = result.text.trimEnd();
+    const text = extractPipelineResult(result.text.trimEnd());
     conversation.messages.push({
       role: "assistant",
       content: text || "[empty]",
@@ -355,18 +377,32 @@ export async function runWindowApp({
 
   function buildPipelinePrompt(conversation, role, input, sourceTitle) {
     return [
-      `Pipeline role: ${role.label}`,
-      role.prompt,
+      "Ты выполняешь один шаг агентного pipeline.",
+      `Текущая роль: ${role.label}.`,
+      `Инструкция роли: ${role.prompt}`,
       "",
-      `Current chat: ${conversation.title || "Untitled"}`,
-      `Input source: ${sourceTitle || "User"}`,
+      `Чат шага: ${conversation.title || "Untitled"}`,
+      `Источник входа: ${sourceTitle || "User"}`,
       "",
-      "Work only on this step. Return output that can be passed to the next connected step.",
-      "Do not claim files were changed. In pipeline MVP, tools are not executed automatically.",
+      "Правила выполнения:",
+      "- Работай только с входом ниже и с инструкцией роли. Игнорируй старый диалог, если он противоречит входу.",
+      "- Не пересказывай эти правила и не рассуждай о том, что ты являешься pipeline-шагом.",
+      "- Не пиши фразы вроде «я получил запрос», «что конкретно нужно сделать», «уточните».",
+      "- Верни готовый результат своей роли, который следующий агент сможет использовать сразу.",
+      "- Если вход неполный, сформулируй лучший возможный результат и явно отметь недостающие допущения.",
+      "- Не утверждай, что файлы изменены или команды выполнены. В pipeline MVP инструменты не запускаются автоматически.",
+      "- Начни ответ строго с строки RESULT:. Перед RESULT: не должно быть ни одного слова.",
       "",
-      "Input:",
+      "Вход:",
       input,
     ].join("\n");
+  }
+
+  function extractPipelineResult(text) {
+    const raw = String(text || "").trim();
+    const match = raw.match(/(?:^|\n)(?:RESULT|РЕЗУЛЬТАТ)\s*:\s*/i);
+    if (!match) return raw;
+    return raw.slice((match.index || 0) + match[0].length).trim();
   }
 
   async function runAgentMessage({ conversation, task, body, provider }) {
@@ -1114,7 +1150,7 @@ export async function runWindowApp({
           } catch (error) {
             conversation.messages.push({
               role: "assistant",
-              content: `⚠️ Qwen error: ${error.message}`,
+              content: `⚠️ Qwen error: ${formatQwenError(error)}`,
               createdAt: new Date().toISOString(),
             });
             conversation.updatedAt = new Date().toISOString();

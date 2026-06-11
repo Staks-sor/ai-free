@@ -30,6 +30,7 @@ export function readQwenAuth(file) {
       userId: raw.userId || "",
       cookieHeader: qwenCookieHeaderFromArray(cookies),
       cookies,
+      profileDir: raw.profileDir || "",
       source: file,
     };
   } catch {

@@ -147,7 +147,7 @@ export function renderWindowHtml() {
       <div class="bottomBar">
         <form id="composer" class="composer">
           <div id="attachmentList" class="attachmentList"></div>
-          <textarea id="messageInput" placeholder="Спроси или дай задачу по открытому проекту" disabled></textarea>
+          <textarea id="messageInput" placeholder="Выбери чат слева..." disabled></textarea>
           <input type="file" id="fileInput" multiple style="display:none">
           <div class="composerControls">
             <button type="button" id="toggleThinking" class="togglePill" title="Глубокое мышление — модель показывает chain-of-thought">⚛ Глубокое мышление</button>
@@ -653,9 +653,10 @@ export function renderWindowHtml() {
         sub: "chat.qwen.ai",
         defaultMode: "default",
         modes: [
-          { id: "default", title: "Qwen Chat", sub: "выбор модели в шапке чата", model: "qwen3.7-max" },
+          { id: "default", title: "Qwen Chat", sub: "выбор модели в шапке чата", model: "qwen3.7-plus" },
         ],
         models: [
+          { id: "qwen3.7-plus",  label: "Qwen3.7 Plus" },
           { id: "qwen3.7-max",   label: "Qwen3.7 MAX" },
           { id: "qwen3.6-plus",  label: "Qwen3.6 Plus" },
           { id: "qwen3-max",     label: "Qwen3 Max" },
@@ -663,7 +664,7 @@ export function renderWindowHtml() {
           { id: "qwq-32b",       label: "QwQ-32B (reasoning)" },
           { id: "qwen-vl-max",   label: "Qwen-VL Max (vision)" },
         ],
-        defaultModel: "qwen3.7-max",
+        defaultModel: "qwen3.7-plus",
       },
     };
 
@@ -1494,7 +1495,18 @@ export function renderWindowHtml() {
       );
     }
 
+    function updateMessagePlaceholder() {
+      if (!activeConversation) {
+        messageInput.placeholder = "Выбери чат слева...";
+        return;
+      }
+      const provider = activeConversation.provider || "deepseek";
+      const label = ((PROVIDER_INFO[provider] || {}).label) || ({ deepseek: "DeepSeek", qwen: "Qwen" })[provider] || "AI";
+      messageInput.placeholder = "Сообщение " + label + "...";
+    }
+
     function setComposerEnabled(enabled) {
+      updateMessagePlaceholder();
       const blockedByTask = isActiveConversationRunning();
       messageInput.disabled = !enabled || !activeConversation || blockedByTask;
       sendBtn.disabled = !enabled || !activeConversation || blockedByTask;

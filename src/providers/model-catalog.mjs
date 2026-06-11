@@ -46,17 +46,18 @@ export const PROVIDER_CATALOG = {
     icon: "QW",
     sub: "chat.qwen.ai",
     defaultMode: "default",
-    defaultModel: "qwen3.7-max",
+    defaultModel: "qwen3.7-plus",
     modes: [
       {
         id: "default",
         title: "Qwen Chat",
         sub: "выбор модели в шапке чата",
-        model: "qwen3.7-max",
+        model: "qwen3.7-plus",
       },
     ],
     models: [
-      { id: "qwen3.7-max", label: "Qwen3.7 MAX", sub: "default, быстрый баланс" },
+      { id: "qwen3.7-plus", label: "Qwen3.7 Plus", sub: "default, актуальный web-default" },
+      { id: "qwen3.7-max", label: "Qwen3.7 MAX", sub: "мощнее, может требовать доступ" },
       { id: "qwen3.6-plus", label: "Qwen3.6 Plus", sub: "стабильный быстрый чат" },
       { id: "qwen3-max", label: "Qwen3 Max", sub: "мощнее, медленнее" },
       { id: "qwen2.5-plus", label: "Qwen 2.5 Plus", sub: "legacy, стабильный" },

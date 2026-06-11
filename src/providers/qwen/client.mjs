@@ -33,6 +33,7 @@ function throwIfQwenAuthFailure(status, text, context) {
 //  - "direct" — старый прямой fetch с bx-ua из .env. НЕ РАБОТАЕТ из-за anti-bot.
 //    Оставлен как fallback и для отладки.
 const QWEN_TRANSPORT = process.env.QWEN_TRANSPORT || "browser";
+const QWEN_CREATE_CHAT_TIMEOUT_MS = Number(process.env.QWEN_CREATE_CHAT_TIMEOUT_MS || 10_000);
 
 // Куда дампим исходящие запросы и сырой стрим при DEEPSEEK_DEBUG_QWEN=1.
 // Юзер потом diff'ает с рабочим cURL — сразу видно, где расхождение.
@@ -84,7 +85,14 @@ export class QwenChatClient {
     });
 
     // chatId: null — навигировать никуда не нужно, остаёмся на главной.
-    const result = await proxy.proxyFetch({ url, body, chatId: null });
+    const result = await proxy.proxyFetch({
+      url,
+      body,
+      chatId: null,
+      timeoutMs: QWEN_CREATE_CHAT_TIMEOUT_MS,
+      streamIdleTimeoutMs: 5_000,
+      maxAttempts: 1,
+    });
     if (!result.ok) {
       throwIfQwenAuthFailure(result.status, result.text, "createChat");
     }
@@ -93,6 +101,14 @@ export class QwenChatClient {
     try {
       json = JSON.parse(result.text);
     } catch {
+      const looksLikeHtml = /<!doctype html|<html[\s>]/i.test(result.text || "");
+      if (looksLikeHtml || /text\/html/i.test(result.contentType || "")) {
+        throw new Error(
+          "Qwen createChat returned HTML instead of JSON. " +
+          "Обычно это значит, что chat.qwen.ai отдал login/anti-bot страницу вместо API. " +
+          "Открой Qwen login заново и повтори запрос.",
+        );
+      }
       throw new Error(`Qwen createChat: non-JSON response: ${result.text.slice(0, 500)}`);
     }
 
