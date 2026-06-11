@@ -1,6 +1,6 @@
 {
   "name": "ai-free",
-  "version": "0.2.9",
+  "version": "0.2.12",
   "private": true,
   "type": "module",
   "bin": {

@@ -51,10 +51,16 @@ export function readSavedAuth(file) {
 
   const token = normalizeToken(parsed.userToken || parsed.token || "");
   const cookieHeader = cookieHeaderFromArray(parsed.cookies || []);
-  return { token, cookieHeader, source: file };
+  return {
+    token,
+    cookieHeader,
+    hifLeim: normalizeToken(parsed.hifLeim || ""),
+    hifDliq: normalizeToken(parsed.hifDliq || ""),
+    source: file,
+  };
 }
 
-export function writeSavedAuth(file, { cookies, userToken, profileDir }) {
+export function writeSavedAuth(file, { cookies, userToken, profileDir, hifLeim = "", hifDliq = "" }) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const payload = {
     version: 1,
@@ -62,6 +68,8 @@ export function writeSavedAuth(file, { cookies, userToken, profileDir }) {
     baseUrl: BASE_URL,
     profileDir,
     userToken,
+    hifLeim,
+    hifDliq,
     cookies,
   };
   fs.writeFileSync(file, JSON.stringify(payload, null, 2), { mode: 0o600 });

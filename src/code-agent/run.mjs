@@ -15,7 +15,9 @@ export async function runCodeTask(
   parentMessageId = null,
   options = {},
 ) {
-  let prompt = createCodeSystemPrompt(workspaceRoot, task, options.systemPrompt);
+  let prompt = createCodeSystemPrompt(workspaceRoot, task, options.systemPrompt, {
+    searchEnabled: baseOptions?.searchEnabled === true,
+  });
   let parent = parentMessageId;
   const toolLogs = [];
   const maxToolSteps = resolveMaxToolSteps(options.maxToolSteps);

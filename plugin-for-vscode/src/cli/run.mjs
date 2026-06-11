@@ -16,55 +16,10 @@ import { runCodeTask } from "../code-agent/run.mjs";
 import { runWindowApp } from "../window-app/server.mjs";
 import { askLine, printAssistantMessage, printWelcome } from "./repl.mjs";
 
-function createLazyDeepSeekClient(args) {
-  let clientPromise = null;
-
-  async function getClient() {
-    if (clientPromise) return clientPromise;
-    clientPromise = (async () => {
-      const auth = await resolveAuth(args, { loginAndSaveAuth, refreshAuthFromProfile });
-      const authManager = new AuthManager({
-        authFile: args.authFile,
-        debug: args.debug,
-        autoVisible: true,
-      });
-      const client = new DeepSeekChatClient({
-        cookieHeader: auth.cookieHeader,
-        token: auth.token,
-        debug: args.debug,
-        authManager,
-      });
-      if (!auth.token) {
-        console.log("⚠️ Token missing in cached auth. Triggering re-login...");
-        const fresh = await authManager.refresh({ forceVisible: true });
-        client._applyAuth(fresh);
-      }
-      return client;
-    })().catch((error) => {
-      clientPromise = null;
-      throw error;
-    });
-    return clientPromise;
-  }
-
-  return {
-    async createSession(...callArgs) {
-      return (await getClient()).createSession(...callArgs);
-    },
-    async complete(...callArgs) {
-      return (await getClient()).complete(...callArgs);
-    },
-    async uploadFile(...callArgs) {
-      return (await getClient()).uploadFile(...callArgs);
-    },
-  };
-}
-
 export async function run() {
   loadDotEnv();
   const args = parseArgs(process.argv.slice(2));
   const workspaceRoot = path.resolve(args.workspace);
-  const isVsCodeMode = process.env.AI_FREE_VSCODE === "1";
 
   if (args.saveCreds) {
     await saveCredentialsInteractive();
@@ -100,20 +55,6 @@ export async function run() {
     return;
   }
 
-  if (args.window && isVsCodeMode) {
-    await runWindowApp({
-      client: createLazyDeepSeekClient(args),
-      workspaceRoot,
-      port: args.port,
-      modelType: args.model,
-      thinkingEnabled: args.thinking,
-      searchEnabled: args.search,
-      openWindow: !args.noWindow,
-      consoleLog: args.noWindow,
-    });
-    return;
-  }
-
   // Welcome TUI: показывается ТОЛЬКО если ни один провайдер не залогинен,
   // ИЛИ если юзер явно попросил через --welcome (для добавления провайдера).
   const { configuredCount } = await import("../providers/registry.mjs");
@@ -133,6 +74,7 @@ export async function run() {
   const client = new DeepSeekChatClient({
     cookieHeader: auth.cookieHeader,
     token: auth.token,
+    hifLeim: auth.hifLeim,
     debug: args.debug,
     authManager,
   });

@@ -7,9 +7,13 @@
 
 import { STYLES } from "./ui-styles.mjs";
 import { AI_FREE_VERSION } from "../config.mjs";
-export function renderWindowHtml() {
+import { createTranslator, resolveUserLanguage } from "../i18n/index.mjs";
+
+export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } = {}) {
+  const { language, messages, t } = createTranslator(resolveUserLanguage(requestedLanguage));
+  const i18nPayload = JSON.stringify({ language, messages, ui });
   return `<!doctype html>
-<html lang="ru">
+<html lang="${language.code}" dir="${language.dir}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -20,78 +24,78 @@ export function renderWindowHtml() {
   <div class="app">
     <aside class="sidebar">
       <div class="sideHead">
-        <div class="brand">Workspace</div>
-        <button id="refreshBtn" class="iconBtn" title="Refresh">↻</button>
+        <div class="brand">${t("app.workspace")}</div>
+        <button id="refreshBtn" class="iconBtn" title="${t("app.refresh")}">↻</button>
       </div>
-      <button id="openNewChat" class="iconBtn newChatBtn" type="button">+ New chat</button>
+      <button id="openNewChat" class="iconBtn newChatBtn" type="button">${t("app.newChat")}</button>
 
       <div id="newChatOverlay" class="settingsOverlay hidden" aria-hidden="true">
         <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="newChatTitle">
           <div class="settingsHead">
-             <h2 id="newChatTitle">Новый чат</h2>
-             <button id="newChatClose" class="iconBtn" type="button" aria-label="Close">✕</button>
+             <h2 id="newChatTitle">${t("newChat.title")}</h2>
+             <button id="newChatClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
           </div>
           <form id="newForm" class="newForm" autocomplete="off">
             <div class="formField">
-              <span>Провайдер</span>
+              <span>${t("newChat.provider")}</span>
               <div class="providerPicker" id="newChatProvider">
                 <!-- кнопки рендерятся динамически по ответу /api/providers -->
               </div>
             </div>
 
             <div class="formField">
-              <span>Режим (модель)</span>
+              <span>${t("newChat.mode")}</span>
               <div class="modePicker" id="newChatMode">
                 <!-- кнопки режимов рендерятся динамически в зависимости от выбранного провайдера -->
               </div>
-              <div class="modeHint">Режим зафиксируется при создании чата. Переключить потом нельзя — создавай новый чат в нужном режиме.</div>
+              <div class="modeHint">${t("newChat.modeHint")}</div>
             </div>
 
             <label class="formField">
-              <span>Название чата (опционально)</span>
-              <input id="newTitle" placeholder="Например: рефакторинг auth" autocomplete="off">
+              <span>${t("newChat.chatTitle")}</span>
+              <input id="newTitle" placeholder="${t("newChat.chatTitlePlaceholder")}" autocomplete="off">
             </label>
 
             <div class="formField">
-              <span>Папка проекта</span>
+              <span>${t("newChat.workspace")}</span>
               <div class="pathRow">
-                <input id="newWorkspace" placeholder="/Users/.../project или ~/Projects/new-thing" autocomplete="off">
-                <button type="button" id="browseBtn" class="iconBtn">📁 Обзор</button>
+                <input id="newWorkspace" placeholder="${t("newChat.workspacePlaceholder")}" autocomplete="off">
+                <button type="button" id="browseBtn" class="iconBtn">${t("newChat.browse")}</button>
               </div>
             </div>
 
             <div id="browseSection" class="browseSection hidden">
               <div class="browsePath" id="browsePath"></div>
               <div class="browseControls">
-                <button type="button" id="browseUp" class="iconBtn">↑ Вверх</button>
+                <button type="button" id="browseUp" class="iconBtn">${t("newChat.up")}</button>
                 <button type="button" id="browseHome" class="iconBtn">🏠 Home</button>
-                <button type="button" id="browseNewFolder" class="iconBtn">➕ Новая папка</button>
+                <button type="button" id="browseNewFolder" class="iconBtn">${t("newChat.newFolder")}</button>
                 <label class="checkboxRow inline">
                   <input type="checkbox" id="browseShowHidden">
-                  <span>Скрытые</span>
+                  <span>${t("newChat.hidden")}</span>
                 </label>
-                <button type="button" id="browsePick" class="iconBtn primaryBtn">Выбрать эту папку</button>
+                <button type="button" id="browsePick" class="iconBtn primaryBtn">${t("newChat.pickFolder")}</button>
               </div>
               <div id="createFolderRow" class="createFolderRow hidden">
-                <input id="createFolderInput" placeholder="Имя новой папки" autocomplete="off">
-                <button type="button" id="createFolderConfirm" class="iconBtn primaryBtn">Создать</button>
-                <button type="button" id="createFolderCancel" class="iconBtn">Отмена</button>
+                <input id="createFolderInput" placeholder="${t("newChat.newFolderPlaceholder")}" autocomplete="off">
+                <button type="button" id="createFolderConfirm" class="iconBtn primaryBtn">${t("newChat.create")}</button>
+                <button type="button" id="createFolderCancel" class="iconBtn">${t("newChat.cancel")}</button>
               </div>
               <div id="createFolderError" class="formError hidden"></div>
               <div id="browseCount" class="browseCount hidden"></div>
-              <div id="browseList" class="browseList">Loading...</div>
-              <div id="browseTruncated" class="browseTruncated hidden">Показано не все папки — включи «Скрытые» или открой родительскую папку выше.</div>
+              <div id="browseList" class="browseList">${t("app.loading")}</div>
+              <div id="browseTruncated" class="browseTruncated hidden">${t("newChat.truncated")}</div>
             </div>
 
             <div id="recentProjects" class="recentProjects"></div>
 
             <label class="checkboxRow">
               <input id="newCreateFolder" type="checkbox">
-              <span>Создать папку, если её ещё нет (только под твоим $HOME)</span>
+              <span>${t("newChat.createFolder")}</span>
             </label>
 
             <div class="formActions">
-              <button type="submit" class="iconBtn primaryBtn">Создать чат</button>
+              <button type="submit" class="iconBtn primaryBtn">${t("newChat.submit")}</button>
             </div>
             <div id="newFormError" class="formError hidden"></div>
           </form>
@@ -99,61 +103,59 @@ export function renderWindowHtml() {
       </div>
       <div id="chatList" class="chatList"></div>
     </aside>
-    <div id="sidebarResizer" class="sidebarResizer" title="Изменить ширину списка чатов"></div>
+      <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
     <main class="main">
       <header class="topbar">
         <div id="activeTitleRow" class="titleRow">
-          <div id="activeTitle" class="title">No chat selected</div>
+          <div id="activeTitle" class="title">${t("app.noChat")}</div>
           <span id="activeMode" class="modeBadge hidden"></span>
-          <select id="modelPicker" class="modelPicker hidden" title="Модель"></select>
-          <select id="rolePicker" class="rolePicker hidden" title="Роль этого чата в pipeline"></select>
-          <button id="coderToggle" class="coderToggle hidden" type="button" title="Включить режим агента — модель сама создаёт/редактирует файлы">🛠 Coder</button>
-          <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="ESP / прошивка плат — включает аппаратный профиль агента">ESP</button>
-          <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="Передавать сообщения по связям pipeline">Pipeline</button>
-          <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="Pipeline flow">Flow</button>
+          <select id="modelPicker" class="modelPicker hidden" title="${t("topbar.model")}"></select>
+          <select id="rolePicker" class="rolePicker hidden" title="${t("topbar.role")}"></select>
+          <button id="coderToggle" class="coderToggle hidden" type="button" title="${t("topbar.coderTitle")}">🛠 Coder</button>
+          <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="${t("topbar.hardwareTitle")}">ESP</button>
+          <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">Pipeline</button>
+          <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="${t("topbar.flowTitle")}">${t("topbar.flow")}</button>
         </div>
         <div id="workspace" class="workspace"></div>
-        <button id="themeBtn" class="iconBtn themeBtn" type="button" title="Сменить тему">◐</button>
-        <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="Settings / разрешённые команды">⚙</button>
+        <button id="themeBtn" class="iconBtn themeBtn" type="button" title="${t("topbar.theme")}">◐</button>
+        <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="${t("topbar.settings")}">⚙</button>
       </header>
 
       <div id="settingsOverlay" class="settingsOverlay hidden" aria-hidden="true">
         <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
           <div class="settingsHead">
-            <h2 id="settingsTitle">Settings</h2>
-            <button id="settingsClose" class="iconBtn" type="button" aria-label="Close">✕</button>
+            <h2 id="settingsTitle">${t("settings.title")}</h2>
+            <button id="settingsClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
           </div>
           <p class="settingsHint">
-            OpenAI-compatible API работает как локальный прокси к подключённым чатам.
-            Для DeepSeek и Qwen создаются отдельные ключи формата <code>sk-...</code>.
-            Файл настроек: <code>~/.deepseek-cli/settings.json</code>.
+            ${t("settings.hint")}
           </p>
-          <div id="settingsBody" class="settingsBody">Loading…</div>
+          <div id="settingsBody" class="settingsBody">${t("app.loading")}</div>
         </div>
       </div>
       <div id="pipelinePanel" class="pipelinePanel hidden" aria-hidden="true">
         <div class="pipelineHead">
           <div>
-            <div class="pipelineTitle">Pipeline Flow</div>
-            <div class="pipelineSub">Задай роль каждому чату и выбери следующий шаг.</div>
+            <div class="pipelineTitle">${t("pipeline.title")}</div>
+            <div class="pipelineSub">${t("pipeline.sub")}</div>
           </div>
-          <button id="pipelineClose" class="iconBtn" type="button" aria-label="Close">✕</button>
+          <button id="pipelineClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
         </div>
         <div id="pipelineBody" class="pipelineBody"></div>
       </div>
       <section id="messages" class="messages">
-        <div class="empty">Создай чат слева. Каждый чат можно использовать как отдельный проект или рабочий контекст.</div>
+        <div class="empty">${t("app.createChatHint")}</div>
       </section>
-      <div id="composerResizer" class="composerResizer" title="Изменить высоту формы ввода"></div>
+      <div id="composerResizer" class="composerResizer" title="${t("app.resizeComposer")}"></div>
       <div class="bottomBar">
         <form id="composer" class="composer">
           <div id="attachmentList" class="attachmentList"></div>
-          <textarea id="messageInput" placeholder="Выбери чат слева..." disabled></textarea>
+          <textarea id="messageInput" placeholder="${t("composer.chooseChat")}" disabled></textarea>
           <input type="file" id="fileInput" multiple style="display:none">
           <div class="composerControls">
-            <button type="button" id="toggleThinking" class="togglePill" title="Глубокое мышление — модель показывает chain-of-thought">⚛ Глубокое мышление</button>
-            <button type="button" id="toggleSearch" class="togglePill" title="Умный поиск — модель использует веб-поиск для актуальной инфы">🌐 Умный поиск</button>
-            <button type="button" id="attachBtn" class="togglePill attachBtn" title="Прикрепить текстовый файл для чтения">📎 Файл</button>
+            <button type="button" id="toggleThinking" class="togglePill" title="${t("composer.thinkingTitle")}">${t("composer.thinking")}</button>
+            <button type="button" id="toggleSearch" class="togglePill" title="${t("composer.searchTitle")}">${t("composer.search")}</button>
+            <button type="button" id="attachBtn" class="togglePill attachBtn" title="${t("composer.attachTitle")}">${t("composer.attach")}</button>
             <div class="composerSpacer"></div>
             <button id="sendBtn" class="sendBtn" type="submit" disabled>↑</button>
           </div>
@@ -164,6 +166,13 @@ export function renderWindowHtml() {
   </div>
 
   <script>
+    const I18N = ${i18nPayload};
+    function t(key, vars = {}) {
+      const template = (I18N.messages && I18N.messages[key]) || key;
+      return String(template).replace(/\\{([a-zA-Z0-9_]+)\\}/g, (match, name) => (
+        Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match
+      ));
+    }
     // alert в webview может быть заблокирован, поэтому дублируем его в status bar.
     window.alert = function(msg) {
       console.warn("[Alert override]:", msg);
@@ -215,9 +224,9 @@ export function renderWindowHtml() {
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
     const THEME_KEY = "deepseek.theme";
     const THEMES = [
-      { id: "dark", label: "Тёмная", icon: "◐" },
-      { id: "light", label: "Светлая", icon: "☼" },
-      { id: "contrast", label: "Контраст", icon: "◑" },
+      { id: "dark", label: t("theme.dark"), icon: "◐" },
+      { id: "light", label: t("theme.light"), icon: "☼" },
+      { id: "contrast", label: t("theme.contrast"), icon: "◑" },
     ];
 
     setupTheme();
@@ -264,7 +273,7 @@ export function renderWindowHtml() {
           const chip = document.createElement("button");
           chip.type = "button";
           chip.className = "chip" + (project.exists ? "" : " missing");
-          chip.title = project.path + (project.isDefault ? " (по умолчанию)" : "");
+          chip.title = project.path + (project.isDefault ? " (" + t("newChat.defaultProject") + ")" : "");
           chip.textContent = project.name + (project.isDefault ? " ★" : "");
           chip.addEventListener("click", () => { newWorkspaceInput.value = project.path; });
           recentProjects.appendChild(chip);
@@ -354,7 +363,7 @@ export function renderWindowHtml() {
     createFolderConfirm.addEventListener("click", async () => {
       const name = createFolderInput.value.trim();
       if (!name) {
-        createFolderError.textContent = "Введи имя.";
+        createFolderError.textContent = t("newChat.emptyFolderName");
         createFolderError.classList.remove("hidden");
         return;
       }
@@ -375,7 +384,7 @@ export function renderWindowHtml() {
     });
 
     async function navigateBrowse(targetPath) {
-      browseList.textContent = "Загружаю...";
+      browseList.textContent = t("app.loadingShort");
       browseTruncated.classList.add("hidden");
       browseCount.classList.add("hidden");
       try {
@@ -396,16 +405,16 @@ export function renderWindowHtml() {
         const shown = data.entries.length;
         if (total > 0) {
           browseCount.textContent = shown === total
-            ? "Папок: " + total + (browseShowHidden.checked ? "" : " (скрытые .папки — чекбокс «Скрытые»)")
-            : "Показано " + shown + " из " + total + " папок";
+            ? t("newChat.folderCount", { total, suffix: browseShowHidden.checked ? "" : t("newChat.hiddenSuffix") })
+            : t("newChat.folderShown", { shown, total });
           browseCount.classList.remove("hidden");
         }
         if (!data.entries.length) {
           const empty = document.createElement("div");
           empty.className = "browseEmpty";
           empty.textContent = total > 0 && data.truncated
-            ? "(слишком много папок — уточни путь или включи «Скрытые»)"
-            : "(нет подпапок — можно выбрать эту папку кнопкой «Выбрать»)";
+            ? t("newChat.tooManyFolders")
+            : t("newChat.noSubfolders");
           browseList.appendChild(empty);
         } else {
           for (const entry of data.entries) {
@@ -420,11 +429,11 @@ export function renderWindowHtml() {
         }
         if (data.truncated) {
           browseTruncated.textContent =
-            "Показано первые " + shown + " из " + total + " — сузь путь или включи «Скрытые».";
+            t("newChat.truncatedInline", { shown, total });
           browseTruncated.classList.remove("hidden");
         }
       } catch (err) {
-        browseList.textContent = "Ошибка: " + err.message;
+        browseList.textContent = t("app.error", { message: err.message });
       }
     }
 
@@ -435,7 +444,7 @@ export function renderWindowHtml() {
       const createFolder = newCreateFolder.checked;
       newFormError.classList.add("hidden");
       newFormError.textContent = "";
-      setStatus("Creating chat...");
+      setStatus(t("newChat.creating"));
       try {
         const data = await api("/api/conversations", {
           method: "POST",
@@ -465,14 +474,15 @@ export function renderWindowHtml() {
     // Mode (Fast/Expert/Vision) теперь выбирается ТОЛЬКО при создании чата —
     // переключать посреди разговора нельзя (DeepSeek API завязывает chain на одну модель).
     const THINKING_KEY = "deepseek.composer.thinking";
-    const SEARCH_KEY = "deepseek.composer.search";
+    const SEARCH_KEY = "deepseek.composer.search.v2";
     const NEWCHAT_MODE_KEY = "deepseek.newchat.mode";
 
     const toggleThinking = document.getElementById("toggleThinking");
     const toggleSearch = document.getElementById("toggleSearch");
 
     let thinkingActive = localStorage.getItem(THINKING_KEY) === "1";
-    let searchActive = localStorage.getItem(SEARCH_KEY) === "1";
+    const savedSearch = localStorage.getItem(SEARCH_KEY);
+    let searchActive = savedSearch === null ? I18N.ui?.webSearchDefault !== false : savedSearch === "1";
 
     function applyToggleUI() {
       toggleThinking.classList.toggle("active", thinkingActive);
@@ -540,19 +550,19 @@ export function renderWindowHtml() {
           || visionImageExts.includes(ext);
 
         if (file.type === "image/svg+xml" || ext === "svg") {
-          alert(\`SVG ("\${file.name}") не поддерживается для распознавания. Сохрани как PNG или JPG.\`);
+          alert(t("file.svgUnsupported", { name: file.name }));
           continue;
         }
 
         if (isImage) {
           // Картинки — заливаем на DeepSeek. Рекомендуем ≤4 МБ (большие PNG часто дают CONTENT_EMPTY).
           if (file.size > 10 * 1024 * 1024) {
-            alert(\`Картинка "\${file.name}" слишком большая (\${Math.round(file.size/1024/1024)} МБ). Лимит 10 МБ.\`);
+            alert(t("file.imageTooLarge", { name: file.name, mb: Math.round(file.size/1024/1024) }));
             continue;
           }
           if (file.size > 4 * 1024 * 1024) {
             const ok = confirm(
-              \`"\${file.name}" — \${Math.round(file.size / 1024 / 1024)} МБ. Большие файлы часто получают CONTENT_EMPTY на DeepSeek.\\n\\nЗагрузить всё равно?\`,
+              t("file.largeImageConfirm", { name: file.name, mb: Math.round(file.size / 1024 / 1024) }),
             );
             if (!ok) continue;
           }
@@ -566,19 +576,19 @@ export function renderWindowHtml() {
               dataBase64,
             });
           } catch (err) {
-            alert(\`Не удалось прочитать "\${file.name}": \${err.message}\`);
+            alert(t("file.readFailed", { name: file.name, message: err.message }));
           }
           continue;
         }
 
         if (BINARY_EXTENSIONS.has(ext)) {
-          alert(\`Файл "\${file.name}" — бинарный (\${ext}). Сейчас поддерживаются текстовые файлы и изображения (PNG/JPG/GIF/WEBP).\\n\\nPDF и Office-документы пока не работают — для них нужна отдельная фаза.\`);
+          alert(t("file.binaryUnsupported", { name: file.name, ext }));
           continue;
         }
 
         // Текстовый файл — читаем как UTF-8 и инлайним в промпт.
         if (file.size > MAX_FILE_BYTES) {
-          alert(\`Файл "\${file.name}" слишком большой (\${Math.round(file.size/1024)} КБ). Лимит \${MAX_FILE_BYTES/1024} КБ для текстовых.\`);
+          alert(t("file.textTooLarge", { name: file.name, kb: Math.round(file.size/1024), limitKb: MAX_FILE_BYTES/1024 }));
           continue;
         }
         try {
@@ -591,12 +601,12 @@ export function renderWindowHtml() {
             if (code < 32 && code !== 9 && code !== 10 && code !== 13) nonPrintable += 1;
           }
           if (sample.length > 0 && nonPrintable / sample.length > 0.1) {
-            alert(\`Файл "\${file.name}" похож на бинарный. Если уверен, что текстовый — переименуй в .txt.\`);
+            alert(t("file.looksBinary", { name: file.name }));
             continue;
           }
           attachments.push({ name: file.name, size: file.size, kind: "text", content });
         } catch (err) {
-          alert(\`Не удалось прочитать "\${file.name}": \${err.message}\`);
+          alert(t("file.readFailed", { name: file.name, message: err.message }));
         }
       }
       fileInput.value = "";
@@ -613,11 +623,11 @@ export function renderWindowHtml() {
         name.textContent = "📎 " + att.name;
         const size = document.createElement("span");
         size.className = "size";
-        size.textContent = Math.round(att.size / 1024) + " КБ";
+        size.textContent = t("file.sizeKb", { kb: Math.round(att.size / 1024) });
         const remove = document.createElement("button");
         remove.className = "remove";
         remove.type = "button";
-        remove.title = "Удалить";
+        remove.title = t("file.remove");
         remove.textContent = "✕";
         remove.addEventListener("click", () => {
           attachments.splice(index, 1);
@@ -632,12 +642,15 @@ export function renderWindowHtml() {
     // их инлайнить в текст не надо.
     function buildAttachmentsPrefix(textAttachments) {
       if (!textAttachments.length) return "";
-      const parts = ["Я прикрепил файл" + (textAttachments.length > 1 ? "ы" : "") + " — прочитай и учитывай при ответе:"];
+      const filePlural = textAttachments.length > 1
+        ? (I18N.language.code === "ru" ? "ы" : "s")
+        : "";
+      const parts = [t("file.promptPrefix", { plural: filePlural })];
       for (const att of textAttachments) {
         const ext = (att.name.split(".").pop() || "").toLowerCase();
-        parts.push(\`\\n--- Файл: \${att.name} (\${Math.round(att.size/1024)} КБ) ---\\n\\\`\\\`\\\`\${ext}\\n\${att.content}\\n\\\`\\\`\\\`\`);
+        parts.push("\\n--- " + t("file.promptHeader", { name: att.name, kb: Math.round(att.size/1024) }) + \` ---\\n\\\`\\\`\\\`\${ext}\\n\${att.content}\\n\\\`\\\`\\\`\`);
       }
-      parts.push("\\n---\\n\\nМой вопрос:");
+      parts.push("\\n---\\n\\n" + t("file.promptQuestion"));
       return parts.join("\\n");
     }
 
@@ -652,9 +665,9 @@ export function renderWindowHtml() {
         sub: "chat.deepseek.com",
         defaultMode: "fast",
         modes: [
-          { id: "fast", title: "DeepSeek v4 Flash", sub: "быстрый обычный чат", model: "deepseek-v4-flash" },
-          { id: "expert", title: "DeepSeek v4 Pro", sub: "reasoning / R1", model: "deepseek-v4-pro", reasoning: true },
-          { id: "vision", title: "DeepSeek v4 Vision", sub: "распознавание изображений", model: "deepseek-v4-vision", vision: true },
+          { id: "fast", title: "DeepSeek v4 Flash", sub: t("provider.deepseekFast"), model: "deepseek-v4-flash" },
+          { id: "expert", title: "DeepSeek v4 Pro", sub: t("provider.deepseekExpert"), model: "deepseek-v4-pro", reasoning: true },
+          { id: "vision", title: "DeepSeek v4 Vision", sub: t("provider.deepseekVision"), model: "deepseek-v4-vision", vision: true },
         ],
         models: [
           { id: "deepseek-v4-flash", label: "DeepSeek v4 Flash" },
@@ -668,7 +681,7 @@ export function renderWindowHtml() {
         sub: "chat.qwen.ai",
         defaultMode: "default",
         modes: [
-          { id: "default", title: "Qwen Chat", sub: "выбор модели в шапке чата", model: "qwen3.7-plus" },
+          { id: "default", title: "Qwen Chat", sub: t("provider.qwenDefault"), model: "qwen3.7-plus" },
         ],
         models: [
           { id: "qwen3.7-plus",  label: "Qwen3.7 Plus" },
@@ -710,7 +723,7 @@ export function renderWindowHtml() {
 
     let availableProviders = ["deepseek"]; // подтянем с сервера через /api/providers
     let AGENT_ROLES = [
-      { id: "assistant", label: "Assistant", description: "Обычный помощник" },
+      { id: "assistant", label: "Assistant", description: t("role.assistantDescription") },
     ];
     let newChatSelectedProvider = localStorage.getItem(PROVIDER_PICK_KEY) || "deepseek";
     let newChatSelectedMode = localStorage.getItem(NEWCHAT_MODE_KEY) || "fast";
@@ -720,8 +733,7 @@ export function renderWindowHtml() {
       if (!info) return;
       const label = info.label;
       if (!confirm(
-        "Подключить " + label + "?\\n\\nОткроется окно браузера — залогинься на сайте. " +
-        "Окно закроется само после входа.",
+        t("provider.connectConfirm", { label }),
       )) return;
       try {
         const r = await fetch("/api/providers/" + id + "/login", { method: "POST" });
@@ -733,12 +745,12 @@ export function renderWindowHtml() {
           localStorage.setItem(PROVIDER_PICK_KEY, id);
           renderProviderPicker();
           renderModePickerForProvider();
-          alert(label + " подключён.");
+          alert(t("provider.connectedAlert", { label }));
         } else {
-          alert("Логин завершён, но токен не найден. Попробуй ещё раз или: npm run login-" + id);
+          alert(t("provider.tokenMissing", { id }));
         }
       } catch (e) {
-        alert("Не удалось подключить " + label + ": " + e.message);
+        alert(t("provider.connectFailed", { label, message: e.message }));
       }
     }
 
@@ -768,8 +780,8 @@ export function renderWindowHtml() {
           '<div class="providerOptionTitle"></div>' +
           '<div class="providerOptionSub"></div>' +
           (isAuthed 
-            ? '<span class="reconnectLink success" title="Вы авторизованы. Нажмите, если хотите войти под другим аккаунтом">✓ Подключено</span>'
-            : '<span class="reconnectLink danger" title="Требуется авторизация. Нажмите, чтобы войти в аккаунт">🔑 Авторизоваться</span>');
+            ? '<span class="reconnectLink success" title="' + t("provider.connectedTitle") + '">' + t("provider.connected") + '</span>'
+            : '<span class="reconnectLink danger" title="' + t("provider.authorizeTitle") + '">' + t("provider.authorize") + '</span>');
         btn.querySelector(".providerOptionTitle").textContent = info.icon ? (info.icon + " " + info.label) : info.label;
         btn.querySelector(".providerOptionSub").textContent = info.sub;
         newChatProviderPicker.appendChild(btn);
@@ -861,7 +873,7 @@ export function renderWindowHtml() {
       // промпт. DeepSeek API не принимает пустой prompt, и сам по себе file_id
       // ничего не значит без текстового вопроса.
       const userMessage = rawUserMessage || (imageFiles.length
-        ? "Что на этом изображении? Опиши подробно."
+        ? t("composer.defaultImageQuestion")
         : "");
 
       const attachPrefix = buildAttachmentsPrefix(textFiles);
@@ -870,7 +882,7 @@ export function renderWindowHtml() {
       // Если юзер ничего не печатал — показываем placeholder про дефолтный вопрос.
       const displayParts = [];
       if (rawUserMessage) displayParts.push(rawUserMessage);
-      if (!rawUserMessage && imageFiles.length) displayParts.push("(вопрос по изображению)");
+      if (!rawUserMessage && imageFiles.length) displayParts.push(t("composer.imageQuestionLabel"));
       if (attachments.length) {
         displayParts.push(attachments.map((a) => "📎 " + a.name).join("\\n"));
       }
@@ -896,7 +908,7 @@ export function renderWindowHtml() {
           for (let i = 0; i < imageFiles.length; i += 1) {
             const img = imageFiles[i];
             const num = imageFiles.length > 1 ? \` (\${i + 1}/\${imageFiles.length})\` : "";
-            setStatus(\`Заливаю и обрабатываю изображение\${num}: \${img.name}...\`);
+            setStatus(t("composer.uploadingImage", { num, name: img.name }));
             const result = await api("/api/upload", {
               method: "POST",
               body: {
@@ -911,7 +923,7 @@ export function renderWindowHtml() {
           }
         }
 
-        setStatus("Thinking...");
+        setStatus(t("composer.thinkingStatus"));
         const sentConvId = activeConversation.id;
         const data = await api("/api/conversations/" + sentConvId + "/messages", {
           method: "POST",
@@ -929,7 +941,7 @@ export function renderWindowHtml() {
           activeConversation = data.conversation;
           await loadState(activeConversation.id);
           renderConversation(activeConversation);
-          setStatus("⚙️ Задача выполняется в фоне — можно перейти в другой чат");
+          setStatus(t("composer.backgroundTask"));
           ensurePolling();
           return; // sending снимет в finally, polling завершит UI
         }
@@ -1077,13 +1089,13 @@ export function renderWindowHtml() {
           + (conversation.id === appState.activeConversationId ? " active" : "")
           + (isRunning ? " running" : "");
         button.innerHTML =
-          '<div class="chatTitle"></div><div class="chatFolder"></div><div class="chatMeta"></div><button class="chatDelete" type="button" title="Удалить чат">×</button>';
+          '<div class="chatTitle"></div><div class="chatFolder"></div><div class="chatMeta"></div><button class="chatDelete" type="button" title="' + t("chat.delete") + '">×</button>';
         // Заголовок + спиннер (если задача в работе) + бейдж провайдера.
         const titleEl = button.querySelector(".chatTitle");
         if (isRunning) {
           const sp = document.createElement("span");
           sp.className = "taskSpinner";
-          sp.title = "Выполняется /code-задача";
+          sp.title = t("chat.running");
           titleEl.appendChild(sp);
         }
         const titleText = document.createElement("span");
@@ -1106,11 +1118,11 @@ export function renderWindowHtml() {
           folderEl.style.display = "none";
         }
         button.querySelector(".chatMeta").textContent =
-          conversation.messageCount + " messages";
+          t("chat.messages", { count: conversation.messageCount });
         button.querySelector(".chatDelete").addEventListener("click", async (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!confirm("Удалить чат?")) return;
+          if (!confirm(t("chat.deleteConfirm"))) return;
           await api("/api/conversations/" + conversation.id, { method: "DELETE" });
           if (activeConversation && activeConversation.id === conversation.id) {
             activeConversation = null;
@@ -1137,7 +1149,7 @@ export function renderWindowHtml() {
     const pipelineToggleEl = document.getElementById("pipelineToggle");
 
     function renderNoConversation() {
-      activeTitle.textContent = "No chat selected";
+      activeTitle.textContent = t("app.noChat");
       workspace.textContent = appState.workspaceRoot || "";
       activeModeBadge.classList.add("hidden");
       modelPickerEl.classList.add("hidden");
@@ -1145,7 +1157,7 @@ export function renderWindowHtml() {
       coderToggleEl.classList.add("hidden");
       hardwareToggleEl.classList.add("hidden");
       pipelineToggleEl.classList.add("hidden");
-      messages.innerHTML = '<div class="empty">Создай чат слева. Каждый чат можно использовать как отдельный проект или рабочий контекст.</div>';
+      messages.innerHTML = '<div class="empty">' + t("app.createChatHint") + '</div>';
       setComposerEnabled(false);
     }
 
@@ -1271,24 +1283,24 @@ export function renderWindowHtml() {
         toggleThinking.classList.add("active");
         toggleThinking.disabled = true;
         toggleThinking.classList.add("disabled");
-        toggleThinking.title = "Глубокое мышление обязательно для этой модели";
+        toggleThinking.title = t("composer.thinkingRequired");
       } else {
         toggleThinking.disabled = false;
         toggleThinking.classList.remove("disabled");
         toggleThinking.classList.toggle("active", thinkingActive);
-        toggleThinking.title = "Глубокое мышление — модель показывает chain-of-thought";
+        toggleThinking.title = t("composer.thinkingTitle");
       }
 
       // Раньше я думал, что search не работает в Expert — но юзер подтвердил
       // что в реальном DeepSeek UI работает в Fast и Expert. Vision ещё не проверяли.
       toggleSearch.disabled = false;
       toggleSearch.classList.remove("disabled");
-      toggleSearch.title = "Умный поиск — модель использует веб-поиск для актуальной инфы";
+      toggleSearch.title = t("composer.searchTitle");
       setComposerEnabled(!sending);
       messages.innerHTML = "";
 
       if (!conversation.messages.length) {
-        messages.innerHTML = '<div class="empty">Напиши первое сообщение для этого проекта.</div>';
+        messages.innerHTML = '<div class="empty">' + t("app.firstMessage") + '</div>';
         return;
       }
 
@@ -1301,7 +1313,7 @@ export function renderWindowHtml() {
         const assistantLabel = message.roleId
           ? roleLabel(message.roleId)
           : (({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || "Assistant");
-        role.textContent = message.role === "user" ? "You" : assistantLabel;
+        role.textContent = message.role === "user" ? t("chat.you") : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
         bubble.textContent = message.content;
@@ -1325,7 +1337,7 @@ export function renderWindowHtml() {
       const nextByFrom = new Map(edges.map((edge) => [edge.from, edge.to]));
       pipelineBody.innerHTML = "";
       if (!conversations.length) {
-        pipelineBody.innerHTML = '<div class="empty smallEmpty">Создай несколько чатов, затем свяжи их здесь.</div>';
+        pipelineBody.innerHTML = '<div class="empty smallEmpty">' + t("pipeline.empty") + '</div>';
         return;
       }
       for (const conversation of conversations) {
@@ -1338,7 +1350,7 @@ export function renderWindowHtml() {
         title.textContent = conversation.title;
         const sub = document.createElement("div");
         sub.className = "pipelineNodeSub";
-        sub.textContent = (conversation.provider || "deepseek") + " · " + (conversation.model || conversation.mode || "model");
+        sub.textContent = (conversation.provider || "deepseek") + " · " + (conversation.model || conversation.mode || t("pipeline.model"));
         meta.append(title, sub);
 
         const roleSelect = document.createElement("select");
@@ -1359,7 +1371,7 @@ export function renderWindowHtml() {
         nextSelect.className = "pipelineSelect";
         const none = document.createElement("option");
         none.value = "";
-        none.textContent = "End";
+        none.textContent = t("pipeline.end");
         nextSelect.appendChild(none);
         for (const target of conversations) {
           if (target.id === conversation.id) continue;
@@ -1388,7 +1400,7 @@ export function renderWindowHtml() {
       row.className = "msg assistant questionRequest";
       const role = document.createElement("div");
       role.className = "role";
-      role.textContent = "Question";
+      role.textContent = t("chat.question");
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       const title = document.createElement("div");
@@ -1432,12 +1444,12 @@ export function renderWindowHtml() {
       row.className = "msg assistant installRequest";
       const role = document.createElement("div");
       role.className = "role";
-      role.textContent = "System";
+      role.textContent = t("chat.system");
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       const command = [request.command].concat(request.args || []).join(" ");
       bubble.innerHTML =
-        '<div class="installTitle">' + escapeHtml(request.title || "Установить инструмент") + '</div>' +
+        '<div class="installTitle">' + escapeHtml(request.title || t("install.title")) + '</div>' +
         '<div class="installText">' + escapeHtml(request.description || "") + '</div>' +
         '<code>' + escapeHtml(command) + '</code>';
       if (request.status === "pending") {
@@ -1446,19 +1458,19 @@ export function renderWindowHtml() {
         const approve = document.createElement("button");
         approve.type = "button";
         approve.className = "iconBtn primaryBtn";
-        approve.textContent = "Установить";
+        approve.textContent = t("install.approve");
         approve.addEventListener("click", () => answerInstallRequest("approve"));
         const reject = document.createElement("button");
         reject.type = "button";
         reject.className = "iconBtn";
-        reject.textContent = "Отмена";
+        reject.textContent = t("install.reject");
         reject.addEventListener("click", () => answerInstallRequest("reject"));
         actions.append(approve, reject);
         bubble.appendChild(actions);
       } else {
         const status = document.createElement("div");
         status.className = "installText";
-        status.textContent = request.status === "running" ? "Установка выполняется..." : "Установка завершилась ошибкой.";
+        status.textContent = request.status === "running" ? t("install.running") : t("install.failed");
         bubble.appendChild(status);
       }
       const logText = [request.stdout, request.stderr].filter(Boolean).join("\\n").trim();
@@ -1493,12 +1505,12 @@ export function renderWindowHtml() {
 
     function updateMessagePlaceholder() {
       if (!activeConversation) {
-        messageInput.placeholder = "Выбери чат слева...";
+        messageInput.placeholder = t("composer.chooseChat");
         return;
       }
       const provider = activeConversation.provider || "deepseek";
       const label = ((PROVIDER_INFO[provider] || {}).label) || ({ deepseek: "DeepSeek", qwen: "Qwen" })[provider] || "AI";
-      messageInput.placeholder = "Сообщение " + label + "...";
+      messageInput.placeholder = t("composer.message", { label });
     }
 
     function setComposerEnabled(enabled) {
@@ -1525,7 +1537,7 @@ export function renderWindowHtml() {
       const themeBtn = document.getElementById("themeBtn");
       if (themeBtn) {
         themeBtn.textContent = theme.icon;
-        themeBtn.title = "Тема: " + theme.label;
+        themeBtn.title = t("theme.title", { label: theme.label });
       }
     }
 
@@ -1542,7 +1554,7 @@ export function renderWindowHtml() {
       if (options.body) fetchOptions.body = JSON.stringify(options.body);
       const res = await fetch(url, fetchOptions);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Request failed");
+      if (!res.ok) throw new Error(data.error || t("app.requestFailed"));
       return data;
     }
 
@@ -1564,8 +1576,8 @@ export function renderWindowHtml() {
           // Показываем чистую заглушку и закрываем.
           document.body.innerHTML =
             '<div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px;color:#888;font-family:system-ui;background:#0a0a0a;text-align:center;padding:24px">' +
-            '<div style="font-size:18px">CLI остановлен</div>' +
-            '<div style="font-size:13px;color:#666">Сервер больше не отвечает. Окно закроется автоматически.</div>' +
+            '<div style="font-size:18px">' + t("shutdown.title") + '</div>' +
+            '<div style="font-size:13px;color:#666">' + t("shutdown.sub") + '</div>' +
             "</div>";
           setTimeout(() => {
             try { window.close(); } catch {}
@@ -1593,12 +1605,12 @@ export function renderWindowHtml() {
     async function openSettings() {
       settingsOverlay.classList.remove("hidden");
       settingsOverlay.setAttribute("aria-hidden", "false");
-      settingsBody.textContent = "Loading…";
+      settingsBody.textContent = t("app.loading");
       try {
         const data = await api("/api/settings");
         renderSettings(data);
       } catch (err) {
-        settingsBody.textContent = "Не удалось загрузить настройки: " + err.message;
+        settingsBody.textContent = t("settings.loadFailed", { message: err.message });
       }
     }
     function closeSettings() {
@@ -1606,16 +1618,50 @@ export function renderWindowHtml() {
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands, openAICompat }) {
+    function renderSettings({ catalog, allowedCommands, openAICompat, ui }) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
         (groups[item.risk] || groups.low).push(item);
       }
-      const labels = { low: "Низкий риск", medium: "Средний риск", high: "Высокий риск" };
+      const labels = { low: t("settings.low"), medium: t("settings.medium"), high: t("settings.high") };
       const order = ["low", "medium", "high"];
       settingsBody.innerHTML = "";
-      renderOpenAISettings(openAICompat);
+      const shell = document.createElement("div");
+      shell.className = "settingsShell";
+      const nav = document.createElement("div");
+      nav.className = "settingsTabs";
+      nav.setAttribute("role", "tablist");
+      const content = document.createElement("div");
+      content.className = "settingsTabContent";
+      const tabs = [
+        { id: "language", label: t("settings.tabLanguage") },
+        { id: "api", label: t("settings.tabApi") },
+        { id: "permissions", label: t("settings.tabPermissions") },
+      ];
+      const panels = {};
+      for (const tab of tabs) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "settingsTab";
+        btn.textContent = tab.label;
+        btn.dataset.tab = tab.id;
+        btn.setAttribute("role", "tab");
+        btn.addEventListener("click", () => selectSettingsTab(tab.id));
+        nav.appendChild(btn);
+
+        const panel = document.createElement("div");
+        panel.className = "settingsTabPanel";
+        panel.dataset.panel = tab.id;
+        panel.setAttribute("role", "tabpanel");
+        panels[tab.id] = panel;
+        content.appendChild(panel);
+      }
+      shell.append(nav, content);
+      settingsBody.appendChild(shell);
+
+      renderUiSettings(panels.language, ui, allowedCommands || []);
+      renderOpenAISettings(panels.api, openAICompat);
       for (const key of order) {
         const items = groups[key];
         if (!items.length) continue;
@@ -1652,23 +1698,101 @@ export function renderWindowHtml() {
           row.appendChild(badge);
           groupEl.appendChild(row);
         }
-        settingsBody.appendChild(groupEl);
+        panels.permissions.appendChild(groupEl);
+      }
+      selectSettingsTab("language");
+    }
+
+    function selectSettingsTab(tabId) {
+      const tabs = settingsBody.querySelectorAll(".settingsTab");
+      const panels = settingsBody.querySelectorAll(".settingsTabPanel");
+      for (const tab of tabs) {
+        const active = tab.dataset.tab === tabId;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+      }
+      for (const panel of panels) {
+        panel.classList.toggle("active", panel.dataset.panel === tabId);
       }
     }
 
-    function renderOpenAISettings(info) {
+    function renderUiSettings(target, ui, allowedCommands) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup";
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.interface");
+      groupEl.appendChild(heading);
+
+      const languageRow = document.createElement("label");
+      languageRow.className = "settingsItem";
+      const languageText = document.createElement("div");
+      const languageName = document.createElement("div");
+      languageName.className = "name";
+      languageName.textContent = t("settings.language");
+      languageText.appendChild(languageName);
+      const languageSelect = document.createElement("select");
+      languageSelect.className = "modelPicker";
+      for (const language of ui?.languages || []) {
+        const opt = document.createElement("option");
+        opt.value = language.code;
+        opt.textContent = language.name;
+        if (language.code === (ui?.language || I18N.language.code)) opt.selected = true;
+        languageSelect.appendChild(opt);
+      }
+      languageSelect.addEventListener("change", async () => {
+        await saveUiSettings({ language: languageSelect.value }, allowedCommands);
+        setStatus(t("settings.languageSaved"));
+        window.location.reload();
+      });
+      languageRow.append(languageText, languageSelect);
+      groupEl.appendChild(languageRow);
+
+      const searchRow = document.createElement("label");
+      searchRow.className = "settingsItem";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = ui?.webSearchDefault !== false;
+      const searchText = document.createElement("div");
+      const searchName = document.createElement("div");
+      searchName.className = "name";
+      searchName.textContent = t("settings.webSearchDefault");
+      searchText.appendChild(searchName);
+      cb.addEventListener("change", async () => {
+        await saveUiSettings({ webSearchDefault: cb.checked }, allowedCommands);
+        localStorage.setItem(SEARCH_KEY, cb.checked ? "1" : "0");
+        searchActive = cb.checked;
+        applyToggleUI();
+      });
+      searchRow.append(cb, searchText);
+      groupEl.appendChild(searchRow);
+
+      target.appendChild(groupEl);
+    }
+
+    async function saveUiSettings(uiPatch, allowedCommands) {
+      const currentUi = I18N.ui || {};
+      const nextUi = { ...currentUi, ...uiPatch };
+      const saved = await api("/api/settings", {
+        method: "PUT",
+        body: { allowedCommands, ui: nextUi },
+      });
+      I18N.ui = saved.ui || nextUi;
+      return saved;
+    }
+
+    function renderOpenAISettings(target, info) {
       if (!info) return;
       const groupEl = document.createElement("div");
       groupEl.className = "settingsGroup apiSettings";
 
       const heading = document.createElement("h3");
-      heading.textContent = "OpenAI-compatible API";
+      heading.textContent = t("settings.apiTitle");
       groupEl.appendChild(heading);
 
       const grid = document.createElement("div");
       grid.className = "apiSettingsGrid";
 
-      grid.appendChild(makeApiField("Base URL", info.embeddedBaseUrl));
+      grid.appendChild(makeApiField(t("settings.baseUrl"), info.embeddedBaseUrl));
       groupEl.appendChild(grid);
 
       const keyList = document.createElement("div");
@@ -1680,10 +1804,34 @@ export function renderWindowHtml() {
 
       const note = document.createElement("div");
       note.className = "apiModels";
-      note.textContent = "В OpenAI-compatible клиенте укажи Base URL и Bearer API key нужного провайдера. Модели: " + (info.models || []).join(", ");
+      note.textContent = t("settings.apiNote", { models: (info.models || []).join(", ") });
       groupEl.appendChild(note);
 
-      settingsBody.appendChild(groupEl);
+      target.appendChild(groupEl);
+      renderAnthropicSettings(target, info);
+    }
+
+    function renderAnthropicSettings(target, info) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup apiSettings";
+
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.anthropicApiTitle");
+      groupEl.appendChild(heading);
+
+      const grid = document.createElement("div");
+      grid.className = "apiSettingsGrid";
+      grid.appendChild(makeApiField(t("settings.anthropicBaseUrl"), info.anthropicBaseUrl || ""));
+      grid.appendChild(makeApiField(t("settings.anthropicEndpoint"), info.anthropicMessagesUrl || ""));
+      grid.appendChild(makeApiField(t("settings.anthropicAuth"), "x-api-key: <provider API key>"));
+      groupEl.appendChild(grid);
+
+      const note = document.createElement("div");
+      note.className = "apiModels";
+      note.textContent = t("settings.anthropicNote", { models: (info.models || []).join(", ") });
+      groupEl.appendChild(note);
+
+      target.appendChild(groupEl);
     }
 
     function makeApiKeyRow(provider, label, key) {
@@ -1695,21 +1843,21 @@ export function renderWindowHtml() {
       title.textContent = label;
 
       const code = document.createElement("code");
-      code.textContent = key || "Ключ не создан";
+      code.textContent = key || t("settings.noKey");
 
       const createBtn = document.createElement("button");
       createBtn.type = "button";
       createBtn.className = "apiKeyBtn";
-      createBtn.textContent = key ? "Ключ создан" : "Создать";
+      createBtn.textContent = key ? t("settings.keyCreated") : t("settings.createKey");
       createBtn.disabled = Boolean(key);
       createBtn.addEventListener("click", async () => {
         try {
           await api("/api/settings/openai-key", { method: "POST", body: { provider } });
           const nextSettings = await api("/api/settings");
           renderSettings(nextSettings);
-          setStatus(label + " API key готов", false);
+          setStatus(t("settings.keyReady", { label }), false);
         } catch (err) {
-          setStatus("Не удалось создать " + label + " API key: " + err.message, true);
+          setStatus(t("settings.keyCreateFailed", { label, message: err.message }), true);
         }
       });
 
@@ -1734,7 +1882,7 @@ export function renderWindowHtml() {
 
     async function onToggle() {
       // Собираем актуальный список из всех чекбоксов и пушим на сервер.
-      const allCheckboxes = settingsBody.querySelectorAll('input[type="checkbox"]');
+      const allCheckboxes = settingsBody.querySelectorAll('input[type="checkbox"][data-cmd]');
       const selected = Array.from(allCheckboxes)
         .filter((cb) => cb.checked)
         .map((cb) => cb.dataset.cmd);
@@ -1744,7 +1892,7 @@ export function renderWindowHtml() {
         // Откат UI на серверное состояние при ошибке.
         const data = await api("/api/settings").catch(() => null);
         if (data) renderSettings(data);
-        alert("Не удалось сохранить: " + err.message);
+        alert(t("settings.saveFailed", { message: err.message }));
       }
     }
 

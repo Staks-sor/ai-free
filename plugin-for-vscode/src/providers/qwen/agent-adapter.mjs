@@ -17,11 +17,10 @@ export function createQwenAgentAdapter(qwenClient) {
       sessionId,
       prompt,
       parentMessageId = null,
-      // modelType, thinkingEnabled, searchEnabled, refFileIds — у Qwen не используются как у DeepSeek.
-      // thinkingEnabled пробросим как thinking, search — отключим (для /code это лишний шум).
+      // modelType/refFileIds у Qwen не используются как у DeepSeek.
+      // thinkingEnabled и searchEnabled пробрасываем в Qwen-формат.
       thinkingEnabled = false,
       searchEnabled = false,
-      model = null,
     }) {
       const result = await qwenClient.complete({
         chatId: sessionId,
@@ -29,7 +28,6 @@ export function createQwenAgentAdapter(qwenClient) {
         parentId: parentMessageId,
         thinking: Boolean(thinkingEnabled),
         search: Boolean(searchEnabled),
-        model: model || undefined,
       });
       // runCodeTask парсит result.text как JSON tool-call. Если у Qwen был thinking,
       // его НЕ примешиваем — иначе парсер может споткнуться о префикс «🧠 ...».

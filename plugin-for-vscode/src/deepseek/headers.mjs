@@ -9,7 +9,7 @@
 
 import { APP_VERSION, BASE_URL } from "../config.mjs";
 
-export function baseHeaders(cookieHeader, token) {
+export function baseHeaders(cookieHeader, token, { hifLeim = "" } = {}) {
   const headers = {
     "User-Agent":
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
@@ -28,9 +28,11 @@ export function baseHeaders(cookieHeader, token) {
 
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  // Опциональный фичетокен. Если задан в .env — добавляем. Без него поиск не работает.
-  if (process.env.DEEPSEEK_HIF_LEIM) {
-    headers["x-hif-leim"] = process.env.DEEPSEEK_HIF_LEIM;
+  // Фичетокен DeepSeek для web search. Сначала берём актуальный из профиля,
+  // затем env как ручной fallback для диагностики.
+  const searchToken = String(hifLeim || process.env.DEEPSEEK_HIF_LEIM || "").trim();
+  if (searchToken) {
+    headers["x-hif-leim"] = searchToken;
   }
 
   return headers;

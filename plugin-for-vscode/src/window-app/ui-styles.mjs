@@ -361,6 +361,49 @@ export const STYLES = `
     .settingsBody {
       overflow-y: auto;
       padding: 12px 20px 20px;
+    }
+    .settingsShell {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 16px;
+      min-height: 360px;
+    }
+    .settingsTabs {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      border-right: 1px solid var(--line);
+      padding-right: 12px;
+    }
+    .settingsTab {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 7px;
+      padding: 9px 10px;
+      text-align: left;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .settingsTab:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+      border-color: var(--line);
+    }
+    .settingsTab.active {
+      color: var(--text);
+      background: rgba(77, 124, 255, 0.14);
+      border-color: rgba(77, 124, 255, 0.38);
+    }
+    .settingsTabContent {
+      min-width: 0;
+    }
+    .settingsTabPanel {
+      display: none;
+    }
+    .settingsTabPanel.active {
       display: grid;
       gap: 18px;
     }
@@ -893,6 +936,11 @@ export const STYLES = `
     }
     .coderToggle.hidden { display: none; }
     .coderToggle:hover { color: var(--text); border-color: var(--line-strong); }
+    .coderToggle.active {
+      background: rgba(168, 85, 247, 0.14);
+      color: #d8b4fe;
+      border-color: rgba(168, 85, 247, 0.45);
+    }
     .hardwareToggle.active {
       background: rgba(245, 158, 11, 0.16);
       color: #fbbf24;
@@ -902,6 +950,10 @@ export const STYLES = `
       background: rgba(20, 184, 166, 0.18);
       color: #5eead4;
       border-color: rgba(20, 184, 166, 0.45);
+    }
+    body[data-theme="light"] .coderToggle.active,
+    body[data-theme="contrast"] .coderToggle.active {
+      color: #6d28d9;
     }
     body[data-theme="light"] .hardwareToggle.active,
     body[data-theme="contrast"] .hardwareToggle.active {
@@ -992,7 +1044,6 @@ export const STYLES = `
       padding: 20px;
       font-size: 13px;
     }
-
     .modeBadge.fast    { background: rgba(82, 126, 255, 0.14); color: #aabfff; border-color: rgba(82, 126, 255, 0.4); }
     .modeBadge.expert  { background: rgba(168, 85, 247, 0.14); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.4); }
     .modeBadge.vision  { background: rgba(34, 197, 94, 0.14);  color: #86efac; border-color: rgba(34, 197, 94, 0.4); }
@@ -1276,6 +1327,24 @@ export const STYLES = `
       }
       .settingsHead {
         padding: 12px 14px;
+      }
+      .settingsBody {
+        padding: 10px 12px 18px;
+      }
+      .settingsShell {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+      .settingsTabs {
+        flex-direction: row;
+        overflow-x: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+        padding: 0 0 10px;
+      }
+      .settingsTab {
+        flex: 0 0 auto;
+        white-space: nowrap;
       }
       .newForm {
         padding: 10px 12px 24px;

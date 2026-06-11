@@ -74,6 +74,7 @@ export async function run() {
   const client = new DeepSeekChatClient({
     cookieHeader: auth.cookieHeader,
     token: auth.token,
+    hifLeim: auth.hifLeim,
     debug: args.debug,
     authManager,
   });

@@ -26,7 +26,17 @@ import {
   resolveMaxToolSteps,
   runCodeTask,
 } from "../src/code-agent/run.mjs";
+import { createCodeSystemPrompt } from "../src/code-agent/prompt.mjs";
 import { COMMAND_CATALOG } from "../src/state/settings.mjs";
+
+describe("code agent prompt", () => {
+  it("does not tell the model that internet is unavailable when provider search is enabled", () => {
+    const prompt = createCodeSystemPrompt("/tmp/project", "посмотри новости", "", { searchEnabled: true });
+    assert.match(prompt, /Provider web search is ENABLED/);
+    assert.match(prompt, /Do not say you have no internet access/);
+    assert.doesNotMatch(prompt, /Forbidden: network access/);
+  });
+});
 
 describe("parseToolCall", () => {
   it("parses bare JSON object", () => {

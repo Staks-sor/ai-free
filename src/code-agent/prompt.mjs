@@ -3,16 +3,25 @@
 
 import { loadSettings } from "../state/settings.mjs";
 
-export const CODE_AGENT_PROMPT_VERSION = 5;
+export const CODE_AGENT_PROMPT_VERSION = 6;
 
-export function createCodeSystemPrompt(workspaceRoot, task, extraSystemPrompt = "") {
+export function createCodeSystemPrompt(workspaceRoot, task, extraSystemPrompt = "", { searchEnabled = false } = {}) {
   const settings = loadSettings();
   const allowed = settings.allowedCommands.join(", ");
   const extra = String(extraSystemPrompt || "").trim();
+  const searchGuidance = searchEnabled
+    ? `Provider web search is ENABLED for this task.
+- For current/latest/news/time-sensitive questions, use the provider's web search normally.
+- Do not say you have no internet access when web search is enabled.
+- Do not ask the user to paste news into a local file unless provider search fails with an explicit upstream error.`
+    : `Provider web search is disabled for this task.
+- You can still work with local files and local commands.
+- For current/latest/news/time-sensitive questions, say that web search is disabled for this request.`;
 
   return `You are a coding agent connected to a local workspace.
 Code agent prompt/tool version: ${CODE_AGENT_PROMPT_VERSION}
 Workspace root: ${workspaceRoot}
+${searchGuidance}
 ${extra ? `\nAdditional system instructions:\n${extra}\n` : ""}
 
 IMPORTANT — about permissions and paths:
@@ -64,7 +73,8 @@ Rules:
 - Never call run_command with python, python3, or node without a script path.
 - Allowed run_command names (configured by the user in Settings): ${allowed}.
   Commands not in this list will be rejected. Common requests like "git" or "mkdir" may or may not be available — try and check the error.
-- Forbidden: network access (curl/wget), shell strings, package installation, reading secrets, escaping the workspace.
+- Forbidden through run_command: curl/wget or other network-fetch commands, shell strings, package installation, reading secrets, escaping the workspace.
+  This restriction is only for local command tools. It does NOT disable provider web search when web search is enabled above.
 - If the user asks to run, execute, test, verify, or check output, you must use run_command and report the actual stdout/stderr.
 - Do not claim command output unless it came from a run_command tool result.
 - When the task is complete, call finish.

@@ -5,20 +5,22 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { AI_FREE_VERSION } from "../config.mjs";
+import { createTranslator, resolveUserLanguage } from "../i18n/index.mjs";
 import { listProviders } from "../providers/registry.mjs";
 
 export async function runWelcome() {
   const providers = listProviders();
+  const { t } = createTranslator(resolveUserLanguage());
 
   console.log("");
   console.log("╔═══════════════════════════════════════════════════════════╗");
   console.log("║                                                           ║");
-  console.log("║         🐳  Добро пожаловать в AI Free " + `v${AI_FREE_VERSION}`.padEnd(15) + " ║");
+  console.log("║         🐳  " + t("welcome.title") + " " + `v${AI_FREE_VERSION}`.padEnd(15) + " ║");
   console.log("║                                                           ║");
   console.log("╚═══════════════════════════════════════════════════════════╝");
   console.log("");
-  console.log("Выбери AI-провайдеров, которых хочешь подключить.");
-  console.log("Можно один, можно несколько — позже добавишь ещё через Settings.");
+  console.log(t("welcome.chooseProviders"));
+  console.log(t("welcome.multi"));
   console.log("");
 
   providers.forEach((p, i) => {
@@ -26,8 +28,8 @@ export async function runWelcome() {
   });
 
   console.log("");
-  console.log('Введи номера через запятую (например "1" или "1,2"),');
-  console.log("или нажми Enter для DeepSeek по умолчанию:");
+  console.log(t("welcome.prompt1"));
+  console.log(t("welcome.prompt2"));
   console.log("");
 
   const rl = readline.createInterface({ input, output });
@@ -49,13 +51,13 @@ export async function runWelcome() {
       .filter((n) => n >= 0 && n < providers.length);
     selected = [...new Set(indices)].map((i) => providers[i]);
     if (!selected.length) {
-      console.log("\n⚠️ Не понял выбор. Использую DeepSeek по умолчанию.\n");
+      console.log("\n" + t("welcome.invalid") + "\n");
       selected = [providers[0]];
     }
   }
 
   console.log("");
-  console.log(`Подключаю: ${selected.map((p) => p.name).join(", ")}`);
+  console.log(t("welcome.connecting", { providers: selected.map((p) => p.name).join(", ") }));
   console.log("");
 
   // Запускаем логины последовательно — два окна одновременно запутывают юзера.
@@ -64,12 +66,12 @@ export async function runWelcome() {
     try {
       await provider.login();
     } catch (error) {
-      console.error(`\n❌ Не удалось подключить ${provider.name}: ${error.message}`);
-      console.error("   Можно повторить позже через Settings в окне чатов.");
+      console.error("\n" + t("welcome.loginFailed", { provider: provider.name, message: error.message }));
+      console.error("   " + t("welcome.retryLater"));
     }
   }
 
   console.log("");
-  console.log("✅ Готово. Запускаю окно чатов...");
+  console.log(t("welcome.done"));
   console.log("");
 }

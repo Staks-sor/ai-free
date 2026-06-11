@@ -221,6 +221,7 @@ async function getAcpCodeClient(config, session) {
     session.deepseekClient = new DeepSeekChatClient({
       token: auth.token,
       cookieHeader: auth.cookieHeader,
+      hifLeim: auth.hifLeim,
       debug: Boolean(process.env.API_DEBUG),
     });
     session.providerSessionId = await session.deepseekClient.createSession();

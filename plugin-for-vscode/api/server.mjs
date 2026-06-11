@@ -62,7 +62,7 @@ export function createOpenAICompatServer() {
 export function setOpenAICorsHeaders(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, x-api-key, Anthropic-Version, Anthropic-Beta");
 }
 
 export function startOpenAICompatServer({
@@ -74,6 +74,8 @@ export function startOpenAICompatServer({
     console.log(`OpenAI-compat API: http://${host}:${port}`);
     console.log(`Models:    GET  http://${host}:${port}/v1/models`);
     console.log(`Chat:      POST http://${host}:${port}/v1/chat/completions`);
+    console.log(`Responses: POST http://${host}:${port}/v1/responses`);
+    console.log(`Messages:  POST http://${host}:${port}/v1/messages`);
   });
 
   return server;

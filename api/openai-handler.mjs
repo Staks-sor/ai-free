@@ -61,6 +61,7 @@ async function getDeepSeekClient() {
   deepseekClient = new DeepSeekChatClient({
     token: auth.token,
     cookieHeader: auth.cookieHeader,
+    hifLeim: auth.hifLeim,
     debug: Boolean(process.env.API_DEBUG),
   });
   return deepseekClient;
@@ -87,11 +88,15 @@ export async function handleRequest(req, res) {
     return handleResponses(req, res);
   }
 
+  if (req.method === "POST" && url.pathname === "/v1/messages") {
+    return handleAnthropicMessages(req, res);
+  }
+
   if (req.method === "GET" && url.pathname === "/") {
     return sendJson(res, {
       name: "AI Free openai-compat",
       version: "0.1.0-prototype",
-      endpoints: ["GET /v1/models", "POST /v1/chat/completions", "POST /v1/responses"],
+      endpoints: ["GET /v1/models", "POST /v1/chat/completions", "POST /v1/responses", "POST /v1/messages"],
       docs: "see README.md in api/",
     });
   }
@@ -127,20 +132,27 @@ async function handleChatCompletions(req, res) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   if (!messages.length) return sendError(res, 400, "Missing 'messages' array");
 
-  const prompt = buildPromptFromChatBody(body, modelName, mapping);
+  const basePrompt = buildPromptFromChatBody(
+    { ...body, tools: toolsForModelPrompt(body.tools) },
+    modelName,
+    mapping,
+  );
+  const search = requestSearchEnabled(body);
+  const prompt = search ? withWebSearchInstruction(basePrompt) : basePrompt;
+  const thinking = requestThinkingEnabled(body, mapping);
 
   try {
     if (mapping.provider === "qwen") {
       const runQwen = async (client) => {
         const chatId = await client.createChat({ model: mapping.model, title: "API request" });
         if (body.stream === true) {
-          return handleQwenStream(client, chatId, prompt, modelName, mapping.model, res);
+          return handleQwenStream(client, chatId, prompt, modelName, mapping.model, res, { thinking, search });
         }
         const result = await client.complete({
           chatId,
           prompt,
-          thinking: false,
-          search: false,
+          thinking,
+          search,
           model: mapping.model,
         });
         return sendJson(res, toOpenAIResponse(modelName, result.text));
@@ -169,13 +181,15 @@ async function handleChatCompletions(req, res) {
       const sessionId = await client.createSession();
 
       if (body.stream === true) {
-        return handleDeepSeekStream(client, sessionId, prompt, modelName, mapping.model, res);
+        return handleDeepSeekStream(client, sessionId, prompt, modelName, mapping.model, res, { thinking, search });
       }
 
       const result = await client.complete({
         sessionId,
         prompt,
         modelType: mapping.model,
+        thinkingEnabled: thinking,
+        searchEnabled: search,
       });
       return sendJson(res, toOpenAIResponse(modelName, result.text));
     }
@@ -184,6 +198,14 @@ async function handleChatCompletions(req, res) {
     console.error("[API] Upstream error:", e.message);
     return sendError(res, 500, humanizeUpstreamError(e.message));
   }
+}
+
+function withWebSearchInstruction(prompt) {
+  return [
+    "[SYSTEM]: Web search is enabled for this request. Use the provider web search for current, latest, news, price, schedule, law, or other time-sensitive questions. Do not say you have no internet access when web search results are available.",
+    "",
+    prompt,
+  ].join("\n");
 }
 
 function buildPromptFromChatBody(body, modelName, mapping) {
@@ -313,10 +335,15 @@ async function handleResponses(req, res) {
 
   const messages = responsesInputToMessages(body.input);
   if (!messages.length) return sendError(res, 400, "Missing 'input' field");
-  const prompt = buildPromptFromChatBody({ messages, tools: body.tools }, modelName, mapping);
+  const options = {
+    search: requestSearchEnabled(body),
+    thinking: requestThinkingEnabled(body, mapping),
+  };
+  const basePrompt = buildPromptFromChatBody({ messages, tools: toolsForModelPrompt(body.tools) }, modelName, mapping);
+  const prompt = options.search ? withWebSearchInstruction(basePrompt) : basePrompt;
 
   try {
-    const text = await completeText(mapping, prompt);
+    const text = await completeText(mapping, prompt, options);
     const response = toResponsesResponse(modelName, text);
     if (body.stream === true) {
       return sendResponsesStream(res, response);
@@ -329,15 +356,63 @@ async function handleResponses(req, res) {
   }
 }
 
-async function completeText(mapping, prompt) {
+async function handleAnthropicMessages(req, res) {
+  let body;
+  try {
+    body = await readJson(req);
+  } catch (e) {
+    return sendAnthropicError(res, 400, `Invalid JSON: ${e.message}`);
+  }
+
+  const modelName = body?.model;
+  if (!modelName) return sendAnthropicError(res, 400, "Missing 'model' field");
+
+  console.log(`[API] POST /v1/messages (model: ${modelName}, stream: ${Boolean(body.stream)}, tools: ${body.tools ? body.tools.length : 0})`);
+
+  const mapping = findModel(modelName);
+  if (!mapping) return sendAnthropicError(res, 404, `Unknown model: ${modelName}`);
+  if (req.openAICompatProvider && mapping.provider !== req.openAICompatProvider) {
+    return sendAnthropicError(
+      res,
+      403,
+      `API key for ${req.openAICompatProvider} cannot be used with ${mapping.provider} model '${modelName}'`,
+    );
+  }
+
+  const messages = anthropicMessagesToChatMessages(body);
+  if (!messages.length) return sendAnthropicError(res, 400, "Missing 'messages' array");
+
+  const tools = toolsForModelPrompt(anthropicToolsToOpenAITools(body.tools));
+  const options = {
+    search: requestSearchEnabled(body),
+    thinking: requestThinkingEnabled(body, mapping),
+  };
+  const basePrompt = buildPromptFromChatBody({ messages, tools }, modelName, mapping);
+  const prompt = options.search ? withWebSearchInstruction(basePrompt) : basePrompt;
+
+  try {
+    const text = await completeText(mapping, prompt, options);
+    const response = toAnthropicMessageResponse(modelName, text);
+    if (body.stream === true) {
+      return sendAnthropicMessageStream(res, response);
+    }
+    return sendJson(res, response);
+  } catch (e) {
+    console.error("[API] Anthropic upstream error:", e.message);
+    if (body.stream === true) return sendAnthropicStreamError(res, e.message);
+    return sendAnthropicError(res, 500, humanizeUpstreamError(e.message), "api_error");
+  }
+}
+
+async function completeText(mapping, prompt, { thinking = false, search = false } = {}) {
   if (mapping.provider === "qwen") {
     const runQwen = async (client) => {
       const chatId = await client.createChat({ model: mapping.model, title: "Responses API request" });
       const result = await client.complete({
         chatId,
         prompt,
-        thinking: false,
-        search: false,
+        thinking,
+        search,
         model: mapping.model,
       });
       return result.text || "";
@@ -368,6 +443,8 @@ async function completeText(mapping, prompt) {
       sessionId,
       prompt,
       modelType: mapping.model,
+      thinkingEnabled: thinking,
+      searchEnabled: search,
     });
     return result.text || "";
   }
@@ -620,7 +697,7 @@ function toOpenAIStreamChunk(model, textDelta, isFirst = false) {
 }
 
 // Обработка streaming-запроса к Qwen.
-async function handleQwenStream(client, chatId, prompt, modelName, model, res) {
+async function handleQwenStream(client, chatId, prompt, modelName, model, res, { thinking = false, search = false } = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -635,8 +712,8 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res) {
     await client.complete({
       chatId,
       prompt,
-      thinking: false,
-      search: false,
+      thinking,
+      search,
       model,
       onText: (textDelta) => {
         sawDelta = true;
@@ -656,7 +733,7 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res) {
 }
 
 // Обработка streaming-запроса к DeepSeek.
-async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res) {
+async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res, { thinking = false, search = false } = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -668,6 +745,8 @@ async function handleDeepSeekStream(client, sessionId, prompt, modelName, model,
       sessionId,
       prompt,
       modelType: model,
+      thinkingEnabled: thinking,
+      searchEnabled: search,
       onText: (textDelta) => parser.onText(textDelta),
     });
     parser.onEnd();
@@ -722,6 +801,121 @@ function toOpenAIResponse(model, text) {
   };
 }
 
+export function toAnthropicMessageResponse(model, text) {
+  const parsed = parseModelToolCalls(text);
+  const content = [];
+  if (parsed.content) {
+    content.push({ type: "text", text: parsed.content });
+  }
+  for (const call of parsed.calls) {
+    content.push({
+      type: "tool_use",
+      id: `toolu_${Math.random().toString(36).slice(2, 12)}`,
+      name: call.name,
+      input: parseToolArgumentsObject(call.arguments),
+    });
+  }
+
+  return {
+    id: `msg_${Math.floor(Date.now() / 1000)}${Math.random().toString(36).slice(2, 10)}`,
+    type: "message",
+    role: "assistant",
+    model,
+    content,
+    stop_reason: parsed.calls.length ? "tool_use" : "end_turn",
+    stop_sequence: null,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  };
+}
+
+function parseToolArgumentsObject(value) {
+  if (value && typeof value === "object") return value;
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function sendAnthropicMessageStream(res, response) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const started = { ...response, content: [], stop_reason: null, stop_sequence: null };
+  sendNamedSseEvent(res, "message_start", {
+    type: "message_start",
+    message: started,
+  });
+
+  response.content.forEach((block, index) => {
+    const emptyBlock = block.type === "text"
+      ? { type: "text", text: "" }
+      : { ...block, input: {} };
+    sendNamedSseEvent(res, "content_block_start", {
+      type: "content_block_start",
+      index,
+      content_block: emptyBlock,
+    });
+
+    if (block.type === "text") {
+      sendNamedSseEvent(res, "content_block_delta", {
+        type: "content_block_delta",
+        index,
+        delta: { type: "text_delta", text: block.text },
+      });
+    } else if (block.type === "tool_use") {
+      sendNamedSseEvent(res, "content_block_delta", {
+        type: "content_block_delta",
+        index,
+        delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input || {}) },
+      });
+    }
+
+    sendNamedSseEvent(res, "content_block_stop", {
+      type: "content_block_stop",
+      index,
+    });
+  });
+
+  sendNamedSseEvent(res, "message_delta", {
+    type: "message_delta",
+    delta: {
+      stop_reason: response.stop_reason,
+      stop_sequence: response.stop_sequence,
+    },
+    usage: { output_tokens: 0 },
+  });
+  sendNamedSseEvent(res, "message_stop", { type: "message_stop" });
+  res.end();
+}
+
+function sendAnthropicStreamError(res, rawMessage) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  sendNamedSseEvent(res, "error", {
+    type: "error",
+    error: {
+      type: "api_error",
+      message: humanizeUpstreamError(rawMessage),
+    },
+  });
+  res.end();
+}
+
+function sendAnthropicError(res, status, message, type = "invalid_request_error") {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify({
+    type: "error",
+    error: { type, message },
+  }));
+}
+
 function sendJson(res, payload, status = 200) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -740,7 +934,98 @@ async function readJson(req) {
   return JSON.parse(raw);
 }
 
-class StreamParser {
+function requestThinkingEnabled(body, mapping = null) {
+  return Boolean(
+    body?.thinking === true ||
+    body?.reasoning === true ||
+    body?.reasoning?.effort ||
+    mapping?.reasoning === true
+  );
+}
+
+export function requestSearchEnabled(body) {
+  return Boolean(
+    body?.search === true ||
+    body?.web_search === true ||
+    body?.web_search_options ||
+    body?.metadata?.search === true ||
+    body?.metadata?.web_search === true ||
+    hasNativeWebSearchTool(body?.tools)
+  );
+}
+
+function hasNativeWebSearchTool(tools) {
+  return Array.isArray(tools) && tools.some(isNativeWebSearchTool);
+}
+
+function isNativeWebSearchTool(tool) {
+  const type = String(tool?.type || tool?.function?.type || "").toLowerCase();
+  const name = String(tool?.name || tool?.function?.name || "").toLowerCase();
+  return type.includes("web_search") ||
+    type.includes("web-search") ||
+    name === "web_search" ||
+    name === "web_search_preview" ||
+    name.includes("web_search");
+}
+
+export function toolsForModelPrompt(tools) {
+  return Array.isArray(tools)
+    ? tools.filter((tool) => !isNativeWebSearchTool(tool))
+    : tools;
+}
+
+function anthropicMessagesToChatMessages(body) {
+  const result = [];
+  const system = anthropicContentToText(body?.system);
+  if (system.trim()) result.push({ role: "system", content: system });
+  if (!Array.isArray(body?.messages)) return result;
+
+  for (const message of body.messages) {
+    const role = message?.role === "assistant" ? "assistant" : message?.role === "system" ? "system" : "user";
+    const content = anthropicContentToText(message?.content);
+    if (content.trim()) result.push({ role, content });
+  }
+  return result;
+}
+
+function anthropicContentToText(content) {
+  if (content === undefined || content === null) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === "string") return part;
+      if (part?.type === "text" && typeof part.text === "string") return part.text;
+      if (part?.type === "tool_result") {
+        return `[TOOL RESULT FOR ${part.tool_use_id || "tool"}]:\n${anthropicContentToText(part.content)}`;
+      }
+      if (part?.type === "tool_use") {
+        return `\`\`\`tool_calls\n${JSON.stringify([{ name: part.name, arguments: part.input || {} }], null, 2)}\n\`\`\``;
+      }
+      return JSON.stringify(part);
+    }).filter(Boolean).join("\n");
+  }
+  if (typeof content?.text === "string") return content.text;
+  return JSON.stringify(content);
+}
+
+function anthropicToolsToOpenAITools(tools) {
+  if (!Array.isArray(tools)) return [];
+  return tools.map((tool) => {
+    if (isNativeWebSearchTool(tool)) return tool;
+    const name = tool?.name || tool?.function?.name;
+    if (!name) return null;
+    return {
+      type: "function",
+      function: {
+        name,
+        description: tool?.description || tool?.function?.description || "",
+        parameters: tool?.input_schema || tool?.parameters || tool?.function?.parameters || { type: "object", properties: {} },
+      },
+    };
+  }).filter(Boolean);
+}
+
+export class StreamParser {
   constructor(modelName, res) {
     this.modelName = modelName;
     this.res = res;
@@ -748,6 +1033,7 @@ class StreamParser {
     this.isTools = false;
     this.toolsBuffer = "";
     this.first = true;
+    this.ended = false;
     this.id = `chatcmpl-${Math.floor(Date.now() / 1000)}${Math.random().toString(36).slice(2, 10)}`;
   }
 
@@ -789,6 +1075,9 @@ class StreamParser {
   }
 
   onEnd() {
+    if (this.ended) return;
+    this.ended = true;
+    let finishReason = "stop";
     if (!this.isTools && this.buffer) {
       // Just in case it never closes or emits normal text
       this.sendChunk({ content: this.buffer });
@@ -856,6 +1145,7 @@ class StreamParser {
               }]
             });
         });
+        finishReason = "tool_calls";
       } catch (e) {
         try {
           let fixedJson = jsonStr.trim();
@@ -929,6 +1219,7 @@ class StreamParser {
               }]
             });
           });
+          finishReason = "tool_calls";
         } catch (e2) {
           console.error("[API] Error parsing tool calls from streaming response:", e2.message);
           fs.writeFileSync("/tmp/failed_json.txt", jsonStr); console.error("[API] Problematic JSON string was:\n", JSON.stringify(jsonStr));
@@ -937,6 +1228,7 @@ class StreamParser {
         }
       }
     }
+    this.sendTerminalChunk(finishReason);
   }
 
   sendChunk(delta, isFirst = false) {
@@ -946,6 +1238,18 @@ class StreamParser {
       created: Math.floor(Date.now() / 1000),
       model: this.modelName,
       choices: [{ index: 0, delta }],
+    };
+    sendSseEvent(this.res, chunk);
+    if (this.res.flush) this.res.flush();
+  }
+
+  sendTerminalChunk(finishReason) {
+    const chunk = {
+      id: this.id,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: this.modelName,
+      choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
     };
     sendSseEvent(this.res, chunk);
     if (this.res.flush) this.res.flush();

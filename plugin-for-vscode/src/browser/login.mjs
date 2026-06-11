@@ -2,7 +2,7 @@
 // Здесь же — autofill из credentials, тихий refresh, очистка сессии.
 
 import fs from "node:fs";
-import { BASE_URL, DEFAULT_BROWSER_PROFILE } from "../config.mjs";
+import { BASE_URL, DEFAULT_AUTH_FILE, DEFAULT_BROWSER_PROFILE } from "../config.mjs";
 import {
   cookieHeaderFromArray,
   normalizeToken,
@@ -54,6 +54,8 @@ export async function loginAndSaveAuth(authFile) {
     cookies: captured.cookies,
     userToken: captured.userToken,
     profileDir,
+    hifLeim: captured.hifLeim,
+    hifDliq: captured.hifDliq,
   });
   await context.close();
 
@@ -62,6 +64,8 @@ export async function loginAndSaveAuth(authFile) {
   return {
     token: captured.token,
     cookieHeader: cookieHeaderFromArray(captured.cookies),
+    hifLeim: captured.hifLeim,
+    hifDliq: captured.hifDliq,
     source: authFile,
   };
 }
@@ -121,6 +125,7 @@ export async function captureAuthFromContext(context, page) {
     throw new Error("Не удалось прочитать состояние из окна (возможно, его уже закрыли).");
   }
   const token = normalizeToken(rawToken || "");
+  const featureTokens = await captureDeepSeekFeatureTokens(page);
   const hasSessionCookie = cookies.some((cookie) => cookie.name === "ds_session_id");
   if (!token) {
     throw new Error("В localStorage нет userToken. Кажется, ты нажал Enter до того, как залогинился.");
@@ -128,7 +133,56 @@ export async function captureAuthFromContext(context, page) {
   if (!hasSessionCookie) {
     throw new Error("В куках нет ds_session_id. Логин, видимо, не завершён.");
   }
-  return { cookies, userToken: rawToken, token };
+  return { cookies, userToken: rawToken, token, ...featureTokens };
+}
+
+export async function captureDeepSeekFeatureTokens(page) {
+  const raw = await page
+    .evaluate(() => {
+      const read = (key) => {
+        try { return localStorage.getItem(key); } catch { return ""; }
+      };
+      return {
+        hifLeim: read("hif_leim_cached"),
+        hifDliq: read("hif_dliq_cached"),
+      };
+    })
+    .catch(() => ({ hifLeim: "", hifDliq: "" }));
+  return {
+    hifLeim: normalizeToken(raw.hifLeim || ""),
+    hifDliq: normalizeToken(raw.hifDliq || ""),
+  };
+}
+
+export async function refreshDeepSeekFeatureTokensFromProfile(authFile = DEFAULT_AUTH_FILE) {
+  let saved = {};
+  try {
+    saved = JSON.parse(fs.readFileSync(authFile, "utf8"));
+  } catch {}
+  const profileDir = saved.profileDir || DEFAULT_BROWSER_PROFILE;
+  const { chromium } = await import("playwright");
+  const context = await launchPersistentDeepSeekContext(chromium, profileDir, true);
+  try {
+    const page = context.pages()[0] || (await context.newPage());
+    await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page
+      .waitForFunction(() => {
+        try { return Boolean(localStorage.getItem("hif_leim_cached")); } catch { return false; }
+      }, { timeout: 10_000 })
+      .catch(() => {});
+    const featureTokens = await captureDeepSeekFeatureTokens(page);
+    if (!featureTokens.hifLeim) {
+      throw new Error("DeepSeek profile did not expose hif_leim_cached");
+    }
+    if (authFile && fs.existsSync(authFile)) {
+      const next = { ...saved, ...featureTokens, savedAt: new Date().toISOString() };
+      fs.writeFileSync(authFile, JSON.stringify(next, null, 2), { mode: 0o600 });
+      try { fs.chmodSync(authFile, 0o600); } catch {}
+    }
+    return featureTokens;
+  } finally {
+    await context.close().catch(() => {});
+  }
 }
 
 // Автозаполнение формы логина DeepSeek (email + password + Sign in). Defensive:
@@ -257,10 +311,12 @@ async function collectAuthFromContext(context, page, authFile, profileDir) {
     throw new Error("Could not read ds_session_id cookie. Make sure DeepSeek is logged in.");
   }
 
-  writeSavedAuth(authFile, { cookies, userToken, profileDir });
+  const featureTokens = await captureDeepSeekFeatureTokens(page);
+  writeSavedAuth(authFile, { cookies, userToken, profileDir, ...featureTokens });
   return {
     token,
     cookieHeader: cookieHeaderFromArray(cookies),
+    ...featureTokens,
     source: authFile,
   };
 }

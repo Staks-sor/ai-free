@@ -361,6 +361,49 @@ export const STYLES = `
     .settingsBody {
       overflow-y: auto;
       padding: 12px 20px 20px;
+    }
+    .settingsShell {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 16px;
+      min-height: 360px;
+    }
+    .settingsTabs {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      border-right: 1px solid var(--line);
+      padding-right: 12px;
+    }
+    .settingsTab {
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 7px;
+      padding: 9px 10px;
+      text-align: left;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .settingsTab:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+      border-color: var(--line);
+    }
+    .settingsTab.active {
+      color: var(--text);
+      background: rgba(77, 124, 255, 0.14);
+      border-color: rgba(77, 124, 255, 0.38);
+    }
+    .settingsTabContent {
+      min-width: 0;
+    }
+    .settingsTabPanel {
+      display: none;
+    }
+    .settingsTabPanel.active {
       display: grid;
       gap: 18px;
     }
@@ -1284,6 +1327,24 @@ export const STYLES = `
       }
       .settingsHead {
         padding: 12px 14px;
+      }
+      .settingsBody {
+        padding: 10px 12px 18px;
+      }
+      .settingsShell {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+      .settingsTabs {
+        flex-direction: row;
+        overflow-x: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+        padding: 0 0 10px;
+      }
+      .settingsTab {
+        flex: 0 0 auto;
+        white-space: nowrap;
       }
       .newForm {
         padding: 10px 12px 24px;

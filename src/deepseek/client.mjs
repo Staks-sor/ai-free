@@ -2,7 +2,7 @@
 // На каждый запрос — подписи (cookies + Bearer), PoW для completion, SSE-парсинг.
 // _withReauth: до двух retry на запрос — после silent refresh и после visible re-login.
 
-import { BASE_URL, COMPLETION_PATH } from "../config.mjs";
+import { BASE_URL, COMPLETION_PATH, DEFAULT_AUTH_FILE } from "../config.mjs";
 import { baseHeaders } from "./headers.mjs";
 import { solvePow } from "./pow.mjs";
 import { streamSse } from "./sse.mjs";
@@ -58,11 +58,12 @@ export function formatDeepSeekFileFailure(file, fileId) {
 }
 
 export class DeepSeekChatClient {
-  constructor({ cookieHeader, token, debug, authManager = null }) {
+  constructor({ cookieHeader, token, debug, authManager = null, hifLeim = "" }) {
     this.cookieHeader = cookieHeader;
     this.token = token;
     this.debug = debug;
     this.authManager = authManager;
+    this.hifLeim = hifLeim;
   }
 
   setAuthManager(authManager) {
@@ -73,6 +74,28 @@ export class DeepSeekChatClient {
     if (!auth) return;
     if (auth.cookieHeader) this.cookieHeader = auth.cookieHeader;
     if (auth.token) this.token = auth.token;
+    if (auth.hifLeim) this.hifLeim = auth.hifLeim;
+  }
+
+  async _ensureSearchFeatureToken(searchEnabled) {
+    if (!searchEnabled) return;
+    if (this.hifLeim || process.env.DEEPSEEK_HIF_LEIM) return;
+    if (this.debug) console.error("[search] DeepSeek hif token missing; refreshing from browser profile...");
+    try {
+      const { refreshDeepSeekFeatureTokensFromProfile } = await import("../browser/login.mjs");
+      const tokens = await refreshDeepSeekFeatureTokensFromProfile(DEFAULT_AUTH_FILE);
+      if (tokens?.hifLeim) {
+        this.hifLeim = tokens.hifLeim;
+        if (this.debug) console.error("[search] DeepSeek hif token loaded from browser profile.");
+        return;
+      }
+    } catch (error) {
+      throw new Error(
+        `DeepSeek web search is enabled, but the required search token x-hif-leim could not be loaded from the browser profile. ` +
+          `Run npm run login once, then try again. Details: ${error.message}`,
+      );
+    }
+    throw new Error("DeepSeek web search is enabled, but x-hif-leim is missing.");
   }
 
   // Обёртка с эскалацией: до 2 retry на один API-вызов.
@@ -104,7 +127,7 @@ export class DeepSeekChatClient {
   async _jsonOnce(path, { method = "GET", body, headers = {} } = {}) {
     const res = await fetch(`${BASE_URL}${path}`, {
       method,
-      headers: { ...baseHeaders(this.cookieHeader, this.token), ...headers },
+      headers: { ...baseHeaders(this.cookieHeader, this.token, { hifLeim: this.hifLeim }), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
@@ -207,7 +230,7 @@ export class DeepSeekChatClient {
       form.append("chat_session_id", String(chatSessionId));
     }
 
-    const headers = baseHeaders(this.cookieHeader, this.token);
+    const headers = baseHeaders(this.cookieHeader, this.token, { hifLeim: this.hifLeim });
     // FormData сама проставит Content-Type с boundary — наш дефолтный убираем.
     delete headers["Content-Type"];
     headers["X-DS-PoW-Response"] = pow;
@@ -432,6 +455,7 @@ async _completeOnce({
      onText = null,
      refFileIds = [],
    }) {
+     await this._ensureSearchFeatureToken(searchEnabled);
      const pow = await this.createPowHeader(COMPLETION_PATH);
      const body = {
        chat_session_id: sessionId,
@@ -453,7 +477,7 @@ async _completeOnce({
     const res = await fetch(`${BASE_URL}${COMPLETION_PATH}`, {
       method: "POST",
       headers: {
-        ...baseHeaders(this.cookieHeader, this.token),
+        ...baseHeaders(this.cookieHeader, this.token, { hifLeim: this.hifLeim }),
         "X-DS-PoW-Response": pow,
       },
       body: JSON.stringify(body),

@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import { AUTH_DIR, SETTINGS_FILE } from "../config.mjs";
+import { DEFAULT_LANGUAGE, normalizeLanguage } from "../i18n/index.mjs";
 import { getProviderIds } from "../providers/model-catalog.mjs";
 
 export const COMMAND_CATALOG = {
@@ -172,6 +173,10 @@ export function loadSettings() {
       (cmd) => COMMAND_CATALOG[cmd].enabledByDefault,
     ),
     openAICompat: { apiKeys: emptyProviderApiKeys() },
+    ui: {
+      language: normalizeLanguage(process.env.AI_FREE_LANG || DEFAULT_LANGUAGE),
+      webSearchDefault: true,
+    },
   };
   if (!fs.existsSync(SETTINGS_FILE)) return fallback;
   try {
@@ -186,6 +191,10 @@ export function loadSettings() {
       openAICompat: {
         apiKeys: normalizeProviderApiKeys(apiKeys, legacyKey),
       },
+      ui: {
+        language: normalizeLanguage(raw?.ui?.language || fallback.ui.language),
+        webSearchDefault: raw?.ui?.webSearchDefault !== false,
+      },
     };
   } catch {
     return fallback;
@@ -194,8 +203,11 @@ export function loadSettings() {
 
 export function saveSettings(settings) {
   fs.mkdirSync(AUTH_DIR, { recursive: true });
-  const valid = (settings?.allowedCommands || []).filter((cmd) => COMMAND_CATALOG[cmd]);
   const current = loadSettings();
+  const rawAllowed = Array.isArray(settings?.allowedCommands)
+    ? settings.allowedCommands
+    : current.allowedCommands;
+  const valid = rawAllowed.filter((cmd) => COMMAND_CATALOG[cmd]);
   const requestedKeys = settings?.openAICompat?.apiKeys || {};
   const currentKeys = current.openAICompat?.apiKeys || {};
   const nextKeys = emptyProviderApiKeys();
@@ -208,6 +220,12 @@ export function saveSettings(settings) {
     allowedCommands: Array.from(new Set(valid)),
     openAICompat: {
       apiKeys: nextKeys,
+    },
+    ui: {
+      language: normalizeLanguage(settings?.ui?.language || current.ui?.language || DEFAULT_LANGUAGE),
+      webSearchDefault: settings?.ui?.webSearchDefault === undefined
+        ? current.ui?.webSearchDefault !== false
+        : settings.ui.webSearchDefault !== false,
     },
     savedAt: new Date().toISOString(),
   };

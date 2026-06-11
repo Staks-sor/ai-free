@@ -17,8 +17,8 @@ export function createQwenAgentAdapter(qwenClient) {
       sessionId,
       prompt,
       parentMessageId = null,
-      // modelType, thinkingEnabled, searchEnabled, refFileIds — у Qwen не используются как у DeepSeek.
-      // thinkingEnabled пробросим как thinking, search — отключим (для /code это лишний шум).
+      // modelType/refFileIds у Qwen не используются как у DeepSeek.
+      // thinkingEnabled и searchEnabled пробрасываем в Qwen-формат.
       thinkingEnabled = false,
       searchEnabled = false,
     }) {

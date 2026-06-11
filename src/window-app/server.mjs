@@ -24,6 +24,7 @@ import {
 import { conversationList, makeConversationTitle, shouldAutoTitle } from "../state/conversations.mjs";
 import { startTask, isRunning, getRunningIds } from "./task-runner.mjs";
 import { getStateFile, loadWindowState, saveWindowState } from "../state/window-state.mjs";
+import { LANGUAGES, getLanguageMeta } from "../i18n/index.mjs";
 import { listBrowseDirectories } from "./browse-fs.mjs";
 import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
@@ -345,7 +346,14 @@ export async function runWindowApp({
       const url = new URL(req.url, `http://${req.headers.host}`);
 
       if (req.method === "GET" && url.pathname === "/") {
-        return sendHtml(res, renderWindowHtml());
+        const settings = loadSettings();
+        return sendHtml(res, renderWindowHtml({
+          language: settings.ui?.language,
+          ui: {
+            language: settings.ui?.language || "ru",
+            webSearchDefault: settings.ui?.webSearchDefault !== false,
+          },
+        }));
       }
 
       // OpenAI-compatible API is also available on the window server:
@@ -573,9 +581,16 @@ export async function runWindowApp({
         }));
         return sendJson(res, {
           allowedCommands: current.allowedCommands,
+          ui: {
+            language: current.ui?.language || "ru",
+            webSearchDefault: current.ui?.webSearchDefault !== false,
+            languages: Object.values(LANGUAGES).map((language) => getLanguageMeta(language.code)),
+          },
           catalog,
           openAICompat: {
             embeddedBaseUrl: `http://127.0.0.1:${port}/v1`,
+            anthropicBaseUrl: `http://127.0.0.1:${port}`,
+            anthropicMessagesUrl: `http://127.0.0.1:${port}/v1/messages`,
             apiKeys: current.openAICompat?.apiKeys || { deepseek: "", qwen: "" },
             models: modelsList().data.map((m) => m.id),
             providers,
@@ -592,8 +607,11 @@ export async function runWindowApp({
 
       if (req.method === "PUT" && url.pathname === "/api/settings") {
         const body = await readJsonBody(req);
-        const saved = saveSettings({ allowedCommands: body.allowedCommands });
-        return sendJson(res, { allowedCommands: saved.allowedCommands });
+        const saved = saveSettings({
+          allowedCommands: body.allowedCommands,
+          ui: body.ui,
+        });
+        return sendJson(res, { allowedCommands: saved.allowedCommands, ui: saved.ui });
       }
 
       // ===== Conversations =====
@@ -898,10 +916,11 @@ export async function runWindowApp({
               const { createQwenAgentAdapter } = await import("../providers/qwen/agent-adapter.mjs");
               const adapter = createQwenAgentAdapter(qwenClient);
               const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
+              const qwenCodeUseSearch = body.search === true || (body.search !== false && searchEnabled);
               const baseOptions = {
                 sessionId: conversation.sessionId,
                 thinkingEnabled: body.thinking === true,
-                searchEnabled: false,
+                searchEnabled: qwenCodeUseSearch,
               };
               const parentId = getCodeParentMessageId(conversation);
               const progressLogs = [];
@@ -946,13 +965,15 @@ export async function runWindowApp({
             }
 
             const isQwenReasoning = findProviderModel("qwen", conversation.model)?.reasoning === true;
+            const qwenUseSearch = body.search === true || (body.search !== false && searchEnabled);
+            const qwenPrompt = qwenUseSearch ? withWebSearchInstruction(prompt) : prompt;
             const result = await qwenApiCall((c) =>
               c.complete({
                 chatId: conversation.sessionId,
-                prompt,
+                prompt: qwenPrompt,
                 parentId: conversation.parentMessageId,
                 thinking: isQwenReasoning ? true : (body.thinking === true),
-                search: body.search === true,
+                search: qwenUseSearch,
                 model: conversation.model || undefined,
               }),
             );
@@ -1120,7 +1141,7 @@ export async function runWindowApp({
 
         const result = await client.complete({
           sessionId: conversation.sessionId,
-          prompt,
+          prompt: useSearch ? withWebSearchInstruction(prompt) : prompt,
           parentMessageId: conversation.parentMessageId,
           modelType: effectiveModelType,
           thinkingEnabled: useThinking,
@@ -1176,6 +1197,14 @@ export async function runWindowApp({
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGHUP", () => shutdown("SIGHUP"));
+}
+
+function withWebSearchInstruction(prompt) {
+  return [
+    "[SYSTEM]: Web search is enabled for this message. Use the provider web search for current, latest, news, price, schedule, law, or other time-sensitive questions. Do not say you have no internet access when web search results are available.",
+    "",
+    prompt,
+  ].join("\n");
 }
 
 function summarizeForLog(value, maxLength = 160) {
