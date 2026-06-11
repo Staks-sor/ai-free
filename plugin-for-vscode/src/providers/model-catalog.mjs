@@ -58,11 +58,17 @@ export const PROVIDER_CATALOG = {
     models: [
       { id: "qwen3.7-plus", label: "Qwen3.7 Plus", sub: "default, актуальный web-default" },
       { id: "qwen3.7-max", label: "Qwen3.7 MAX", sub: "мощнее, может требовать доступ" },
+      { id: "qwen-latest-series-invite-beta-v24", label: "Qwen3.7 Max Preview", sub: "актуальный preview max" },
+      { id: "qwen-latest-series-invite-beta-v16", label: "Qwen3.7 Plus Preview", sub: "актуальный preview plus" },
       { id: "qwen3.6-plus", label: "Qwen3.6 Plus", sub: "стабильный быстрый чат" },
-      { id: "qwen3-max", label: "Qwen3 Max", sub: "мощнее, медленнее" },
-      { id: "qwen2.5-plus", label: "Qwen 2.5 Plus", sub: "legacy, стабильный" },
-      { id: "qwq-32b", label: "QwQ-32B", sub: "reasoning", reasoning: true },
-      { id: "qwen-vl-max", label: "Qwen-VL Max", sub: "vision", vision: true },
+      { id: "qwen3.6-max-preview", label: "Qwen3.6 Max Preview", sub: "предыдущий preview max" },
+      { id: "qwen3.6-27b", label: "Qwen3.6 27B", sub: "быстрая средняя модель" },
+      { id: "qwen3.6-35b-a3b", label: "Qwen3.6 35B A3B", sub: "MoE-модель" },
+      { id: "qwen3.5-plus", label: "Qwen3.5 Plus", sub: "стабильный fallback" },
+      { id: "qwen3.5-27b", label: "Qwen3.5 27B", sub: "стабильный fallback" },
+      { id: "qwen3.5-35b-a3b", label: "Qwen3.5 35B A3B", sub: "стабильный fallback MoE" },
+      { id: "qwen3-max-2026-01-23", label: "Qwen3 Max", sub: "актуальный Qwen3 Max" },
+      { id: "qwen3-coder-plus", label: "Qwen3 Coder", sub: "coding model" },
     ],
   },
 };
@@ -119,22 +125,27 @@ export function modelsList() {
   };
 }
 
-export function uiModelCatalog() {
+export function uiModelCatalog(overrides = {}) {
   return {
     providers: Object.fromEntries(
       Object.entries(PROVIDER_CATALOG).map(([providerId, provider]) => [
         providerId,
-        {
-          label: provider.label,
-          icon: provider.icon,
-          sub: provider.sub,
-          defaultMode: provider.defaultMode,
-          defaultModel: provider.defaultModel,
-          modes: provider.modes.map((mode) => ({ ...mode })),
-          models: provider.models
-            .filter((model) => model.legacy !== true)
-            .map((model) => ({ ...model })),
-        },
+        (() => {
+          const override = overrides[providerId] || {};
+          const modes = override.modes || provider.modes;
+          const models = override.models || provider.models;
+          return {
+            label: provider.label,
+            icon: provider.icon,
+            sub: provider.sub,
+            defaultMode: provider.defaultMode,
+            defaultModel: override.defaultModel || provider.defaultModel,
+            modes: modes.map((mode) => ({ ...mode })),
+            models: models
+              .filter((model) => model.legacy !== true)
+              .map((model) => ({ ...model })),
+          };
+        })(),
       ]),
     ),
   };

@@ -3,6 +3,7 @@
 
 import os from "node:os";
 import path from "node:path";
+import { getProviderCatalog } from "../model-catalog.mjs";
 
 export const QWEN_BASE_URL = "https://chat.qwen.ai";
 
@@ -25,17 +26,6 @@ export const QWEN_TOKEN_COOKIE_NAME = "token";
 // Минимум: token. Желательно: cnaui (user UUID), aui.
 export const QWEN_REQUIRED_COOKIES = ["token"];
 
-// Доступные модели Qwen для UI-picker'а.
-// id — то, что шлём в body.models[]; label/sub — для отображения в выпадающем меню.
-// Сверял по реальному chat.qwen.ai на 2026-06-11.
-export const QWEN_MODELS = [
-  { id: "qwen3.7-plus",  label: "Qwen3.7 Plus",  sub: "default · актуальный web-default" },
-  { id: "qwen3.7-max",   label: "Qwen3.7 MAX",   sub: "мощнее, может требовать доступ" },
-  { id: "qwen3.6-plus",  label: "Qwen3.6 Plus",  sub: "быстро, баланс качества" },
-  { id: "qwen3-max",     label: "Qwen3 Max",     sub: "мощнее, медленнее" },
-  { id: "qwen2.5-plus",  label: "Qwen 2.5 Plus", sub: "legacy, стабильный" },
-  { id: "qwq-32b",       label: "QwQ-32B",       sub: "reasoning, для сложных задач" },
-  { id: "qwen-vl-max",   label: "Qwen-VL Max",   sub: "vision, картинки + текст" },
-];
+export const QWEN_MODELS = getProviderCatalog("qwen").models;
 
-export const QWEN_DEFAULT_MODEL = "qwen3.7-plus";
+export const QWEN_DEFAULT_MODEL = getProviderCatalog("qwen").defaultModel;

@@ -194,6 +194,40 @@ export async function runWindowApp({
     throw new Error("unreachable: qwenApiCall retry budget");
   }
 
+  async function getQwenCatalogOverrideSafe() {
+    try {
+      const { getQwenLiveCatalogOverride } = await import("../providers/qwen/model-sync.mjs");
+      return await getQwenLiveCatalogOverride();
+    } catch (error) {
+      logConsole(`[qwen] live model catalog failed: ${error.message}`);
+      return null;
+    }
+  }
+
+  async function getUiModelCatalog() {
+    const qwen = await getQwenCatalogOverrideSafe();
+    return uiModelCatalog(qwen ? { qwen } : {});
+  }
+
+  async function isProviderModelAvailable(provider, modelId) {
+    if (provider === "qwen") {
+      const qwen = await getQwenCatalogOverrideSafe();
+      if (qwen?.models?.some((model) => model.id === modelId)) return true;
+    }
+    return Boolean(findProviderModel(provider, modelId));
+  }
+
+  async function resolveProviderModel(provider, requestedModel, mode) {
+    if (provider === "qwen") {
+      const qwen = await getQwenCatalogOverrideSafe();
+      if (qwen?.models?.some((model) => model.id === requestedModel)) return requestedModel;
+      return qwen?.defaultModel || getProviderDefaultModel(provider, mode);
+    }
+    return findProviderModel(provider, requestedModel)
+      ? requestedModel
+      : getProviderDefaultModel(provider, mode);
+  }
+
   async function resetProviderChainForModelChange(conversation) {
     conversation.parentMessageId = null;
     conversation.codeParentMessageId = null;
@@ -554,7 +588,7 @@ export async function runWindowApp({
       }
 
       if (req.method === "GET" && url.pathname === "/api/model-catalog") {
-        return sendJson(res, uiModelCatalog());
+        return sendJson(res, await getUiModelCatalog());
       }
 
       if (req.method === "GET" && url.pathname === "/api/agent-roles") {
@@ -772,9 +806,7 @@ export async function runWindowApp({
         const provider = available.includes(requestedProvider) ? requestedProvider : available[0];
         const providerCatalog = getProviderCatalog(provider);
         const mode = providerCatalog.defaultMode;
-        const model = findProviderModel(provider, String(body.model || "").trim())
-          ? String(body.model).trim()
-          : getProviderDefaultModel(provider, mode);
+        const model = await resolveProviderModel(provider, String(body.model || "").trim(), mode);
         const workspace = path.resolve(workspaceRoot);
         const existing = state.conversations.find((item) =>
           item.agentMode === true &&
@@ -879,9 +911,7 @@ export async function runWindowApp({
         const modeCfg = PROVIDER_MODES[provider];
         const mode = modeCfg.allowed.includes(String(body.mode)) ? String(body.mode) : modeCfg.default;
         const requestedModel = String(body.model || "").trim();
-        const model = findProviderModel(provider, requestedModel)
-          ? requestedModel
-          : getProviderDefaultModel(provider, mode);
+        const model = await resolveProviderModel(provider, requestedModel, mode);
         const conversation = {
           id: randomUUID(),
           sessionId,
@@ -926,7 +956,7 @@ export async function runWindowApp({
         const body = await readJsonBody(req);
         if (typeof body.model === "string" && body.model.length > 0) {
           const provider = conversation.provider || "deepseek";
-          if (!findProviderModel(provider, body.model)) {
+          if (!(await isProviderModelAvailable(provider, body.model))) {
             return sendJson(res, { error: `Model '${body.model}' is not available for ${provider}` }, 400);
           }
           const previousModel = conversation.model || getProviderDefaultModel(provider, conversation.mode);

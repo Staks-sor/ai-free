@@ -8,6 +8,7 @@ import { QWEN_AUTH_FILE } from "../providers/qwen/config.mjs";
 import { readQwenAuth } from "../providers/qwen/auth-files.mjs";
 import { QwenChatClient } from "../providers/qwen/client.mjs";
 import { createQwenAgentAdapter } from "../providers/qwen/agent-adapter.mjs";
+import { getProviderDefaultModel } from "../providers/model-catalog.mjs";
 import { findModel } from "../../api/models.mjs";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:4317/v1";
@@ -130,7 +131,7 @@ function readAcpConfig(env) {
   const role = String(env.DSCLI_ACP_ROLE || "programmer").toLowerCase();
   const rolePrompt = ROLE_PROMPTS[role] || ROLE_PROMPTS.programmer;
   const extraPrompt = String(env.DSCLI_ACP_SYSTEM_PROMPT || "").trim();
-  const model = String(env.OPENAI_MODEL || env.DSCLI_ACP_MODEL || "qwen3.7-max");
+  const model = String(env.OPENAI_MODEL || env.DSCLI_ACP_MODEL || getProviderDefaultModel("qwen"));
   const mapping = findModel(model);
   if (!mapping) {
     throw new Error(`Unknown ACP model: ${model}`);
