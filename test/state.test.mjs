@@ -129,7 +129,7 @@ describe("conversationList", () => {
 
 import { COMMAND_CATALOG, loadSettings } from "../src/state/settings.mjs";
 import { getProviderIds } from "../src/providers/model-catalog.mjs";
-import { mergeWindowStates } from "../src/state/window-state.mjs";
+import { mergeWindowStates, normalizeWindowState } from "../src/state/window-state.mjs";
 
 describe("COMMAND_CATALOG integrity", () => {
   it("has at least the legacy 7 base commands enabled by default", () => {
@@ -197,5 +197,57 @@ describe("mergeWindowStates", () => {
     assert.equal(merged.conversations.length, 2);
     assert.deepEqual(merged.conversations.map((item) => item.id), ["a", "b"]);
     assert.equal(merged.activeConversationId, "a");
+  });
+
+  it("does not resurrect conversations deleted from the primary global state", () => {
+    const primary = {
+      version: 2,
+      workspaceRoot: "/tmp/main",
+      activeConversationId: null,
+      deletedConversationIds: ["old"],
+      conversations: [],
+    };
+    const legacy = {
+      version: 2,
+      workspaceRoot: "/tmp/legacy",
+      activeConversationId: "old",
+      conversations: [
+        { id: "old", title: "old chat", updatedAt: "2026-01-03T00:00:00Z", messages: [] },
+      ],
+    };
+    const merged = mergeWindowStates(primary, [legacy], "/tmp/main");
+    assert.deepEqual(merged.conversations, []);
+    assert.deepEqual(merged.deletedConversationIds, ["old"]);
+    assert.equal(merged.activeConversationId, null);
+  });
+});
+
+describe("normalizeWindowState", () => {
+  it("removes deleted conversations from active state and pipeline edges", () => {
+    const normalized = normalizeWindowState({
+      version: 2,
+      workspaceRoot: "/tmp/main",
+      activeConversationId: "deleted",
+      activeByWorkspace: {
+        "/tmp/main": "deleted",
+        "/tmp/other": "kept",
+      },
+      deletedConversationIds: ["deleted"],
+      conversations: [
+        { id: "deleted", title: "deleted", updatedAt: "2026-01-02T00:00:00Z", messages: [] },
+        { id: "kept", title: "kept", updatedAt: "2026-01-01T00:00:00Z", messages: [] },
+      ],
+      pipeline: {
+        edges: [
+          { from: "kept", to: "deleted" },
+          { from: "deleted", to: "kept" },
+        ],
+      },
+    }, "/tmp/main");
+
+    assert.deepEqual(normalized.conversations.map((conversation) => conversation.id), ["kept"]);
+    assert.equal(normalized.activeConversationId, "kept");
+    assert.deepEqual(normalized.activeByWorkspace, { "/tmp/other": "kept" });
+    assert.deepEqual(normalized.pipeline.edges, []);
   });
 });

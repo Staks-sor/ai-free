@@ -78,8 +78,10 @@ function readFirstStateFile(files) {
 
 export function mergeWindowStates(primary, states, workspaceRoot) {
   const byId = new Map();
+  const deletedConversationIds = normalizeDeletedConversationIds([primary, ...states]);
   for (const state of [primary, ...states]) {
     for (const conversation of state.conversations || []) {
+      if (deletedConversationIds.includes(String(conversation.id))) continue;
       const existing = byId.get(conversation.id);
       if (!existing || String(conversation.updatedAt || "") > String(existing.updatedAt || "")) {
         byId.set(conversation.id, conversation);
@@ -95,6 +97,8 @@ export function mergeWindowStates(primary, states, workspaceRoot) {
     ...primary,
     workspaceRoot: primary.workspaceRoot || path.resolve(workspaceRoot),
     activeConversationId,
+    activeByWorkspace: primary.activeByWorkspace || {},
+    deletedConversationIds,
     conversations,
   }, workspaceRoot);
 }
@@ -114,6 +118,8 @@ export function createEmptyState(workspaceRoot) {
     version: STATE_VERSION,
     workspaceRoot: path.resolve(workspaceRoot),
     activeConversationId: null,
+    activeByWorkspace: {},
+    deletedConversationIds: [],
     conversations: [],
   };
 }
@@ -127,20 +133,50 @@ export function readStateFile(file) {
 }
 
 export function normalizeWindowState(state, workspaceRoot) {
+  const deletedConversationIds = normalizeDeletedConversationIds([state]);
+  const deleted = new Set(deletedConversationIds);
   const conversations = Array.isArray(state?.conversations)
-    ? state.conversations.filter((conversation) => conversation && conversation.id)
+    ? state.conversations.filter((conversation) => conversation && conversation.id && !deleted.has(String(conversation.id)))
     : [];
   const activeConversationId = conversations.some((item) => item.id === state?.activeConversationId)
     ? state.activeConversationId
     : conversations[0]?.id || null;
+  const activeByWorkspace = normalizeActiveByWorkspace(state?.activeByWorkspace, conversations);
 
   return {
     version: STATE_VERSION,
     workspaceRoot: state?.workspaceRoot || path.resolve(workspaceRoot),
     activeConversationId,
+    activeByWorkspace,
+    deletedConversationIds,
     conversations,
     pipeline: normalizePipeline(state?.pipeline, conversations),
   };
+}
+
+function normalizeDeletedConversationIds(states) {
+  const ids = [];
+  const seen = new Set();
+  for (const state of states || []) {
+    if (!Array.isArray(state?.deletedConversationIds)) continue;
+    for (const id of state.deletedConversationIds) {
+      const normalized = String(id || "").trim();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+  }
+  return ids.slice(-5000);
+}
+
+function normalizeActiveByWorkspace(activeByWorkspace, conversations) {
+  if (!activeByWorkspace || typeof activeByWorkspace !== "object") return {};
+  const ids = new Set(conversations.map((conversation) => conversation.id));
+  return Object.fromEntries(
+    Object.entries(activeByWorkspace)
+      .map(([workspace, conversationId]) => [String(workspace), String(conversationId || "")])
+      .filter(([workspace, conversationId]) => workspace && ids.has(conversationId)),
+  );
 }
 
 function normalizePipeline(pipeline, conversations) {

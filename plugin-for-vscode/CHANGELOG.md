@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.39
+
+- Fixed deleted chats coming back after restart when old workspace state files were still present.
+- Added deletion tombstones to the shared desktop/VS Code state migration path.
+- Cleans active chat and pipeline references when a conversation is deleted.
+
 ## 0.1.38
 
 - Changed first Voice click to automatically install Parakeet V3 support when missing.

@@ -847,8 +847,19 @@ export async function runWindowApp({
         if (state.activeConversationId === id) {
           state.activeConversationId = state.conversations[0]?.id || null;
         }
+        const deletedConversationIds = new Set(
+          Array.isArray(state.deletedConversationIds) ? state.deletedConversationIds.map(String) : [],
+        );
+        deletedConversationIds.add(id);
+        state.deletedConversationIds = Array.from(deletedConversationIds).slice(-5000);
+        if (state.activeByWorkspace && typeof state.activeByWorkspace === "object") {
+          for (const [workspace, conversationId] of Object.entries(state.activeByWorkspace)) {
+            if (conversationId === id) delete state.activeByWorkspace[workspace];
+          }
+        }
         saveWindowState(workspaceRoot, state);
         return sendJson(res, {
+          deleted: true,
           activeConversationId: state.activeConversationId,
           conversations: conversationList(state),
         });
