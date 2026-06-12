@@ -25,6 +25,8 @@ import { conversationList, makeConversationTitle, shouldAutoTitle } from "../sta
 import { startTask, isRunning, getRunningIds } from "./task-runner.mjs";
 import { getStateFile, loadWindowState, saveWindowState } from "../state/window-state.mjs";
 import { LANGUAGES, getLanguageMeta } from "../i18n/index.mjs";
+import { getLocalizedAgentRoles } from "../i18n/agent-roles.mjs";
+import { getCommandDescription } from "../i18n/command-descriptions.mjs";
 import { listBrowseDirectories } from "./browse-fs.mjs";
 import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
@@ -397,7 +399,8 @@ export async function runWindowApp({
       }
 
       if (req.method === "GET" && url.pathname === "/api/agent-roles") {
-        return sendJson(res, { roles: AGENT_ROLES });
+        const current = loadSettings();
+        return sendJson(res, { roles: getLocalizedAgentRoles(current.ui?.language) });
       }
 
       // Подключить провайдера из UI (открывает окно логина в фоне).
@@ -571,7 +574,7 @@ export async function runWindowApp({
         const current = loadSettings();
         const catalog = Object.entries(COMMAND_CATALOG).map(([name, meta]) => ({
           name,
-          description: meta.description,
+          description: getCommandDescription(name, current.ui?.language, meta.description),
           risk: meta.risk,
         }));
         const providers = listProviders().map((p) => ({

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.36
+
+- Completed bundled UI translations so every supported language has the full Settings, API, Permissions, chat, file, pipeline, and welcome string set.
+- Changed non-Russian fallback text to English only, preventing missing translations from showing Russian in English/Spanish/Portuguese/etc.
+- Localized pipeline role labels and descriptions returned by `/api/agent-roles`.
+- Localized remaining hardcoded webview labels such as Home, History, Coder/Pipeline toggles, and upload errors.
+
+## 0.1.35
+
+- Removed the Settings hint paragraph above the side tabs.
+- Made Permissions descriptions translate client-side from the selected UI language, avoiding stale Russian text from older server responses.
+
+## 0.1.34
+
+- Localized Settings/API labels for all bundled UI languages.
+- Localized command descriptions in the Permissions tab instead of always showing Russian text.
+- Changed non-Russian fallback text to English before Russian so incomplete translations no longer mix heavily with Russian.
+
 ## 0.1.33
 
 - Fixed agent prompts that incorrectly told Qwen/DeepSeek to refuse current-news requests as "no internet".

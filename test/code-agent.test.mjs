@@ -27,6 +27,9 @@ import {
   runCodeTask,
 } from "../src/code-agent/run.mjs";
 import { createCodeSystemPrompt } from "../src/code-agent/prompt.mjs";
+import { getCommandDescription } from "../src/i18n/command-descriptions.mjs";
+import { getLocalizedAgentRoles } from "../src/i18n/agent-roles.mjs";
+import { LANGUAGES, createTranslator, getMessages } from "../src/i18n/index.mjs";
 import { COMMAND_CATALOG } from "../src/state/settings.mjs";
 
 describe("code agent prompt", () => {
@@ -35,6 +38,55 @@ describe("code agent prompt", () => {
     assert.match(prompt, /Provider web search is ENABLED/);
     assert.match(prompt, /Do not say you have no internet access/);
     assert.doesNotMatch(prompt, /Forbidden: network access/);
+  });
+});
+
+describe("localized command descriptions", () => {
+  it("has permission descriptions for every bundled UI language", () => {
+    const languages = ["ru", "en", "es", "pt", "fr", "de", "zh", "hi", "ar"];
+    for (const language of languages) {
+      assert.ok(getCommandDescription("node", language), language);
+      assert.ok(getCommandDescription("npm", language), language);
+      assert.ok(getCommandDescription("rm", language), language);
+    }
+    assert.equal(getCommandDescription("node", "es"), "Ejecutar archivos JavaScript con Node");
+    assert.equal(getCommandDescription("node", "pt"), "Executar arquivos JavaScript com Node");
+    assert.equal(getCommandDescription("node", "fr"), "Exécuter des fichiers JavaScript avec Node");
+    assert.equal(getCommandDescription("node", "de"), "JavaScript-Dateien mit Node ausführen");
+    assert.equal(getCommandDescription("node", "zh"), "使用 Node 运行 JavaScript 文件");
+    assert.equal(getCommandDescription("node", "hi"), "Node से JavaScript फ़ाइलें चलाएँ");
+    assert.equal(getCommandDescription("node", "ar"), "تشغيل ملفات JavaScript عبر Node");
+  });
+});
+
+describe("ui localization coverage", () => {
+  it("keeps every supported language on the full UI key set", () => {
+    const expectedKeys = Object.keys(LANGUAGES.ru.messages).sort();
+    for (const [code, language] of Object.entries(LANGUAGES)) {
+      const ownKeys = Object.keys(language.messages).sort();
+      assert.deepEqual(ownKeys, expectedKeys, `${code} must define every UI string`);
+      for (const key of expectedKeys) {
+        assert.notEqual(String(language.messages[key] || "").trim(), "", `${code}.${key} must not be empty`);
+      }
+    }
+  });
+
+  it("does not fall back to Russian for non-Russian languages", () => {
+    assert.equal(getMessages("es")["app.workspace"], "Área de trabajo");
+    assert.equal(getMessages("pt")["settings.webSearchDefault"], "Ativar busca inteligente por padrão");
+    assert.equal(getMessages("de")["role.assistant.label"], "Assistent");
+  });
+
+  it("localizes pipeline role labels and descriptions", () => {
+    const spanishRoles = getLocalizedAgentRoles("es");
+    assert.equal(spanishRoles.find((role) => role.id === "assistant").label, "Asistente");
+    assert.match(
+      spanishRoles.find((role) => role.id === "prompt_builder").description,
+      /prompt útil/,
+    );
+
+    const { t } = createTranslator("zh");
+    assert.equal(t("topbar.pipeline"), "流程");
   });
 });
 

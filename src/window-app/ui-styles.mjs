@@ -346,18 +346,6 @@ export const STYLES = `
       margin: 0;
       font-size: 16px;
     }
-    .settingsHint {
-      margin: 12px 20px 4px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.5;
-    }
-    .settingsHint code {
-      background: var(--code-bg, #1e1e1e);
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 12px;
-    }
     .settingsBody {
       overflow-y: auto;
       padding: 12px 20px 20px;

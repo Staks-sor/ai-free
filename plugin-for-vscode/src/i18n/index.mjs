@@ -66,8 +66,11 @@ export function getLanguageMeta(languageCode = DEFAULT_LANGUAGE) {
 
 export function getMessages(languageCode = DEFAULT_LANGUAGE) {
   const code = normalizeLanguage(languageCode);
+  const base = code === DEFAULT_LANGUAGE
+    ? LANGUAGES[DEFAULT_LANGUAGE].messages
+    : LANGUAGES.en.messages;
   return {
-    ...LANGUAGES[DEFAULT_LANGUAGE].messages,
+    ...base,
     ...(LANGUAGES[code]?.messages || {}),
   };
 }

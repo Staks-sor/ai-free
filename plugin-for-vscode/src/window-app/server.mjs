@@ -25,6 +25,8 @@ import { conversationList, makeConversationTitle, shouldAutoTitle } from "../sta
 import { startTask, isRunning, getRunningIds } from "./task-runner.mjs";
 import { getStateFile, loadWindowState, saveWindowState } from "../state/window-state.mjs";
 import { LANGUAGES, getLanguageMeta } from "../i18n/index.mjs";
+import { getLocalizedAgentRoles } from "../i18n/agent-roles.mjs";
+import { getCommandDescription } from "../i18n/command-descriptions.mjs";
 import { listBrowseDirectories } from "./browse-fs.mjs";
 import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
@@ -48,55 +50,6 @@ export async function runWindowApp({
   consoleLog = false,
 }) {
   const state = loadWindowState(workspaceRoot);
-  const agentMode = process.env.AI_FREE_VSCODE === "1";
-  const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
-
-  function normalizeWorkspaceKey(value) {
-    const resolved = path.resolve(String(value || resolvedWorkspaceRoot));
-    return resolved === path.parse(resolved).root ? resolved : resolved.replace(/[\\/]+$/g, "");
-  }
-
-  const currentWorkspaceKey = normalizeWorkspaceKey(resolvedWorkspaceRoot);
-
-  function isCurrentWorkspaceConversation(conversation) {
-    return normalizeWorkspaceKey(conversation?.workspace || resolvedWorkspaceRoot) === currentWorkspaceKey;
-  }
-
-  function ensureActiveByWorkspace() {
-    if (!state.activeByWorkspace || typeof state.activeByWorkspace !== "object") {
-      state.activeByWorkspace = {};
-    }
-    return state.activeByWorkspace;
-  }
-
-  function setActiveConversation(id) {
-    state.activeConversationId = id || null;
-    if (id) {
-      ensureActiveByWorkspace()[currentWorkspaceKey] = id;
-    } else {
-      delete ensureActiveByWorkspace()[currentWorkspaceKey];
-    }
-  }
-
-  function getVisibleConversations() {
-    return state.conversations;
-  }
-
-  function getActiveConversationIdForResponse() {
-    const visible = getVisibleConversations();
-    const activeByWorkspace = ensureActiveByWorkspace()[currentWorkspaceKey];
-    if (visible.some((item) => item.id === activeByWorkspace)) return activeByWorkspace;
-    if (visible.some((item) => item.id === state.activeConversationId)) return state.activeConversationId;
-    return visible[0]?.id || null;
-  }
-
-  function visibleStateForResponse() {
-    return {
-      ...state,
-      activeConversationId: getActiveConversationIdForResponse(),
-      conversations: getVisibleConversations(),
-    };
-  }
 
   function logConsole(message) {
     if (consoleLog) console.log(message);
@@ -210,14 +163,6 @@ export async function runWindowApp({
     return uiModelCatalog(qwen ? { qwen } : {});
   }
 
-  async function isProviderModelAvailable(provider, modelId) {
-    if (provider === "qwen") {
-      const qwen = await getQwenCatalogOverrideSafe();
-      if (qwen?.models?.some((model) => model.id === modelId)) return true;
-    }
-    return Boolean(findProviderModel(provider, modelId));
-  }
-
   async function resolveProviderModel(provider, requestedModel, mode) {
     if (provider === "qwen") {
       const qwen = await getQwenCatalogOverrideSafe();
@@ -227,44 +172,6 @@ export async function runWindowApp({
     return findProviderModel(provider, requestedModel)
       ? requestedModel
       : getProviderDefaultModel(provider, mode);
-  }
-
-  async function resetProviderChainForModelChange(conversation) {
-    conversation.parentMessageId = null;
-    conversation.codeParentMessageId = null;
-    conversation.codeAgentPromptVersion = null;
-    if ((conversation.provider || "deepseek") === "qwen") {
-      conversation.sessionId = null;
-      return;
-    }
-    conversation.sessionId = await client.createSession();
-  }
-
-  function resolveDeepSeekRuntime(conversation, body) {
-    let messageMode = String(conversation.mode || "fast");
-    if (conversation.model === "deepseek-v4-pro" || conversation.model === "deepseek-reasoner") {
-      messageMode = "expert";
-    } else if (conversation.model === "deepseek-v4-flash" || conversation.model === "deepseek-chat") {
-      messageMode = "fast";
-    } else if (conversation.model === "deepseek-v4-vision") {
-      messageMode = "vision";
-    }
-    let useThinking = effectiveThinkingForMode(messageMode, body.thinking, thinkingEnabled);
-    if (messageMode === "expert") {
-      useThinking = true;
-    }
-    let useSearch = body.search === true || (body.search !== false && searchEnabled);
-    const refFileIds = Array.isArray(body.refFileIds)
-      ? body.refFileIds.filter((id) => typeof id === "string" && id.length > 0)
-      : [];
-    let effectiveModelType = mapModeToModelType(messageMode, modelType);
-    if (refFileIds.length > 0 && messageMode === "vision" && effectiveModelType == null) {
-      effectiveModelType = process.env.DEEPSEEK_MODEL_VISION ?? "vision";
-    }
-    if (refFileIds.length > 0) {
-      useSearch = false;
-    }
-    return { messageMode, useThinking, useSearch, refFileIds, effectiveModelType };
   }
 
   async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}) {
@@ -347,20 +254,19 @@ export async function runWindowApp({
 
     const provider = conversation.provider || "deepseek";
     if (provider === "qwen") {
-      const qwenModel = conversation.model || getProviderDefaultModel("qwen");
       // Pipeline steps must not inherit the normal chat context. A fresh upstream
       // chat keeps old user turns (for example "видишь плату?") out of the step.
       const chatId = await qwenApiCall((c) =>
-        c.createChat({ model: qwenModel }),
+        c.createChat({ model: conversation.model || undefined }),
       );
-      const isReasoning = findProviderModel("qwen", qwenModel)?.reasoning === true;
+      const isReasoning = findProviderModel("qwen", conversation.model)?.reasoning === true;
       const result = await qwenApiCall((c) =>
         c.complete({
           chatId,
           prompt,
           thinking: isReasoning ? true : options.thinking === true,
           search: options.search === true,
-          model: qwenModel,
+          model: conversation.model || undefined,
         }),
       );
       const text = result.thinkingText
@@ -382,20 +288,17 @@ export async function runWindowApp({
     if (provider !== "deepseek") {
       throw new Error(`Pipeline provider is not supported: ${provider}`);
     }
+
     // Pipeline steps run in a fresh upstream session by design. The UI chat still
     // stores the step transcript, but the provider does not see stale turns.
     const pipelineSessionId = await client.createSession();
-    const runtime = resolveDeepSeekRuntime(conversation, {
-      thinking: options.thinking,
-      search: options.search,
-      refFileIds: [],
-    });
+    const messageMode = modeForConversation(conversation);
     const result = await client.complete({
       sessionId: pipelineSessionId,
       prompt,
-      modelType: runtime.effectiveModelType,
-      thinkingEnabled: runtime.useThinking,
-      searchEnabled: runtime.useSearch,
+      modelType: mapModeToModelType(messageMode, modelType),
+      thinkingEnabled: messageMode === "expert" ? true : options.thinking === true,
+      searchEnabled: options.search === true,
     });
     const text = extractPipelineResult(result.text.trimEnd());
     conversation.messages.push({
@@ -438,111 +341,6 @@ export async function runWindowApp({
     const match = raw.match(/(?:^|\n)(?:RESULT|РЕЗУЛЬТАТ)\s*:\s*/i);
     if (!match) return raw;
     return raw.slice((match.index || 0) + match[0].length).trim();
-  }
-
-  async function runAgentMessage({ conversation, task, body, provider }) {
-    if (isRunning(conversation.id)) {
-      return sendJsonFromAgent({
-        conversation,
-        running: true,
-        notice: "Агент уже выполняет задачу. Дождись завершения текущей задачи.",
-      });
-    }
-
-    if (provider === "qwen") {
-      let qwenClient = await getOrCreateQwenClient();
-      if (!conversation.sessionId) {
-        conversation.sessionId = await qwenApiCall((c) =>
-          c.createChat({ model: conversation.model || getProviderDefaultModel("qwen") }),
-        );
-        saveWindowState(workspaceRoot, state);
-        qwenClient = await getOrCreateQwenClient();
-      }
-      const { createQwenAgentAdapter } = await import("../providers/qwen/agent-adapter.mjs");
-      const adapter = createQwenAgentAdapter(qwenClient);
-      const qwenModel = conversation.model || getProviderDefaultModel("qwen");
-      const isReasoning = findProviderModel("qwen", qwenModel)?.reasoning === true;
-      const qwenCodeUseSearch = body.search === true || (body.search !== false && searchEnabled);
-      const baseOptions = {
-        sessionId: conversation.sessionId,
-        thinkingEnabled: isReasoning ? true : body.thinking === true,
-        searchEnabled: qwenCodeUseSearch,
-        model: qwenModel,
-      };
-      startAgentTask({ conversation, clientForAgent: adapter, baseOptions, task, providerLabel: "Qwen" });
-      return sendJsonFromAgent({ conversation, running: true });
-    }
-
-    if (provider !== "deepseek") {
-      conversation.messages.push({
-        role: "assistant",
-        content: `Провайдер "${provider}" не поддерживается этим агентом.`,
-        createdAt: new Date().toISOString(),
-      });
-      conversation.updatedAt = new Date().toISOString();
-      saveWindowState(workspaceRoot, state);
-      return sendJsonFromAgent({ conversation });
-    }
-
-    if (!conversation.sessionId) {
-      conversation.sessionId = await client.createSession();
-    }
-    const runtime = resolveDeepSeekRuntime(conversation, body);
-    const baseOptions = {
-      sessionId: conversation.sessionId,
-      modelType: runtime.effectiveModelType,
-      thinkingEnabled: runtime.useThinking,
-      searchEnabled: runtime.useSearch,
-      refFileIds: runtime.refFileIds,
-    };
-    startAgentTask({ conversation, clientForAgent: client, baseOptions, task, providerLabel: "DeepSeek" });
-    return sendJsonFromAgent({ conversation, running: true });
-  }
-
-  function startAgentTask({ conversation, clientForAgent, baseOptions, task, providerLabel }) {
-    const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
-    const parentId = getCodeParentMessageId(conversation);
-    const progressLogs = [];
-    const progressMessage = createCodeProgressMessage(task, workspacePath);
-    conversation.messages.push(progressMessage);
-    conversation.updatedAt = new Date().toISOString();
-    saveWindowState(workspaceRoot, state);
-
-    startTask(conversation.id, "agent", async () => {
-      try {
-        logConsole(`[agent] ${providerLabel.toLowerCase()} started in ${workspacePath}: ${summarizeForLog(task)}`);
-        const codeResult = await runCodeTask(clientForAgent, baseOptions, workspacePath, task, parentId, {
-          systemPrompt: conversation.hardwareMode === true ? createHardwareAgentPrompt() : "",
-          onTool: (_call, result, log) => {
-            captureInstallRequest(conversation, result);
-            captureQuestionRequest(conversation, result);
-            progressLogs.push(log);
-            progressMessage.content = formatCodeProgressMessage(task, progressLogs);
-            progressMessage.updatedAt = new Date().toISOString();
-            conversation.updatedAt = progressMessage.updatedAt;
-            saveWindowState(workspaceRoot, state);
-          },
-        });
-        conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
-        conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
-        const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
-        progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
-        progressMessage.updatedAt = new Date().toISOString();
-        if (toolText) logConsoleBlock("agent tools", toolText);
-        logConsoleBlock("assistant", codeResult.message);
-        logConsole(`[agent] ${providerLabel.toLowerCase()} completed: ${codeResult.toolLogs.length} tool log(s)`);
-      } catch (err) {
-        progressMessage.content = `Agent error: ${err.message}`;
-        progressMessage.updatedAt = new Date().toISOString();
-        logConsole(`[agent] ${providerLabel.toLowerCase()} failed: ${err.message}`);
-      }
-      conversation.updatedAt = new Date().toISOString();
-      saveWindowState(workspaceRoot, state);
-    }, `${providerLabel} agent`);
-  }
-
-  function sendJsonFromAgent({ conversation, running = false, notice = "" }) {
-    return { conversation, running, notice };
   }
 
   const server = http.createServer(async (req, res) => {
@@ -601,7 +399,8 @@ export async function runWindowApp({
       }
 
       if (req.method === "GET" && url.pathname === "/api/agent-roles") {
-        return sendJson(res, { roles: AGENT_ROLES });
+        const current = loadSettings();
+        return sendJson(res, { roles: getLocalizedAgentRoles(current.ui?.language) });
       }
 
       // Подключить провайдера из UI (открывает окно логина в фоне).
@@ -668,13 +467,11 @@ export async function runWindowApp({
       }
 
       if (req.method === "GET" && url.pathname === "/api/state") {
-        const visibleState = visibleStateForResponse();
         return sendJson(res, {
-          workspaceRoot: resolvedWorkspaceRoot,
-          agentMode,
+          workspaceRoot,
           stateFile: getStateFile(),
-          activeConversationId: visibleState.activeConversationId,
-          conversations: conversationList(visibleState),
+          activeConversationId: state.activeConversationId,
+          conversations: conversationList(state),
           pipeline: state.pipeline || { edges: [] },
           runningTaskIds: getRunningIds(),
         });
@@ -687,7 +484,7 @@ export async function runWindowApp({
         return sendJson(res, { pipeline: state.pipeline });
       }
 
-      // ===== Файловый браузер для модалки «Новый агент» =====
+      // ===== Файловый браузер для модалки «Новый чат» =====
 
       if (req.method === "POST" && url.pathname === "/api/browse/mkdir") {
         const body = await readJsonBody(req);
@@ -769,7 +566,7 @@ export async function runWindowApp({
         return sendJson(res, { projects, defaultWorkspace: workspaceRoot, home: os.homedir() });
       }
 
-      // ===== Settings (whitelist команд агента) =====
+      // ===== Settings (whitelist команд для /code) =====
 
       if (req.method === "GET" && url.pathname === "/api/settings") {
         const { modelsList } = await import("../../api/models.mjs");
@@ -777,7 +574,7 @@ export async function runWindowApp({
         const current = loadSettings();
         const catalog = Object.entries(COMMAND_CATALOG).map(([name, meta]) => ({
           name,
-          description: meta.description,
+          description: getCommandDescription(name, current.ui?.language, meta.description),
           risk: meta.risk,
         }));
         const providers = listProviders().map((p) => ({
@@ -809,55 +606,6 @@ export async function runWindowApp({
         const provider = String(body.provider || "");
         const apiKey = ensureOpenAICompatApiKey(provider);
         return sendJson(res, { provider, apiKey });
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/agent-session") {
-        const body = await readJsonBody(req);
-        const { listProviders } = await import("../providers/registry.mjs");
-        const available = listProviders().filter((p) => p.hasAuth()).map((p) => p.id);
-        if (!available.length) {
-          return sendJson(res, { error: "Нет подключённых провайдеров. Сначала подключи DeepSeek или Qwen." }, 400);
-        }
-        const requestedProvider = String(body.provider || "").trim();
-        const provider = available.includes(requestedProvider) ? requestedProvider : available[0];
-        const providerCatalog = getProviderCatalog(provider);
-        const mode = providerCatalog.defaultMode;
-        const model = await resolveProviderModel(provider, String(body.model || "").trim(), mode);
-        const workspace = path.resolve(workspaceRoot);
-        const existing = state.conversations.find((item) =>
-          item.agentMode === true &&
-          item.provider === provider &&
-          item.workspace === workspace &&
-          item.model === model
-        );
-        if (existing) {
-          setActiveConversation(existing.id);
-          saveWindowState(workspaceRoot, state);
-          return sendJson(res, { conversation: existing });
-        }
-        const sessionId = provider === "deepseek" ? await client.createSession() : null;
-        const now = new Date().toISOString();
-        const conversation = {
-          id: randomUUID(),
-          sessionId,
-          provider,
-          title: `${providerCatalog.label} Agent`,
-          autoTitle: false,
-          workspace,
-          mode,
-          model,
-          agentMode: true,
-          parentMessageId: null,
-          codeParentMessageId: null,
-          messages: [],
-          createdAt: now,
-          updatedAt: now,
-        };
-        state.conversations.unshift(conversation);
-        setActiveConversation(conversation.id);
-        saveWindowState(workspaceRoot, state);
-        logConsole(`[agent] created ${provider}/${model} for ${workspace}`);
-        return sendJson(res, { conversation });
       }
 
       if (req.method === "PUT" && url.pathname === "/api/settings") {
@@ -935,25 +683,24 @@ export async function runWindowApp({
           id: randomUUID(),
           sessionId,
           provider,
-          title: rawTitle || "Agent",
+          title: rawTitle || "New chat",
           autoTitle: !rawTitle,
           workspace,
           mode,
           model,
           roleId: normalizeRoleId(body.roleId),
           pipelineMode: body.pipelineMode === true,
-          agentMode: body.agentMode === true || agentMode,
           parentMessageId: null,
-          // Отдельный chain агента, чтобы system-prompt не загрязнял обычный чат.
+          // Отдельный chain для /code, чтобы Coding Agent system-prompt не загрязнял обычный чат.
           codeParentMessageId: null,
           messages: [],
           createdAt: now,
           updatedAt: now,
         };
         state.conversations.unshift(conversation);
-        setActiveConversation(conversation.id);
+        state.activeConversationId = conversation.id;
         saveWindowState(workspaceRoot, state);
-        logConsole(`[agent] created ${provider}/${mode}: ${conversation.title} (${conversation.id})`);
+        logConsole(`[chat] created ${provider}/${mode}: ${conversation.title} (${conversation.id})`);
         return sendJson(res, { conversation });
       }
 
@@ -961,38 +708,34 @@ export async function runWindowApp({
       if (req.method === "GET" && conversationMatch) {
         const conversation = state.conversations.find((item) => item.id === conversationMatch[1]);
         if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
-        setActiveConversation(conversation.id);
+        state.activeConversationId = conversation.id;
         saveWindowState(workspaceRoot, state);
         return sendJson(res, { conversation, running: isRunning(conversation.id) });
       }
 
-      // Обновление настроек агента: модель.
-      // Тело: { model?: string }
+      // Обновление настроек чата: модель (для Qwen) и coderMode toggle.
+      // Тело: { model?: string, coderMode?: boolean }
       if (req.method === "PATCH" && conversationMatch) {
         const id = conversationMatch[1];
         const conversation = state.conversations.find((item) => item.id === id);
         if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
         const body = await readJsonBody(req);
         if (typeof body.model === "string" && body.model.length > 0) {
-          const provider = conversation.provider || "deepseek";
-          if (!(await isProviderModelAvailable(provider, body.model))) {
-            return sendJson(res, { error: `Model '${body.model}' is not available for ${provider}` }, 400);
-          }
-          const previousModel = conversation.model || getProviderDefaultModel(provider, conversation.mode);
           conversation.model = body.model;
-          conversation.mode = modeForProviderModel(provider, body.model) || conversation.mode;
-          if (body.model !== previousModel) {
-            await resetProviderChainForModelChange(conversation);
-          }
-        }
-        if (typeof body.hardwareMode === "boolean") {
-          conversation.hardwareMode = body.hardwareMode;
         }
         if (typeof body.roleId === "string") {
           conversation.roleId = normalizeRoleId(body.roleId);
         }
         if (typeof body.pipelineMode === "boolean") {
           conversation.pipelineMode = body.pipelineMode;
+        }
+        if (typeof body.coderMode === "boolean") {
+          conversation.coderMode = body.coderMode;
+          if (!body.coderMode) conversation.hardwareMode = false;
+        }
+        if (typeof body.hardwareMode === "boolean") {
+          conversation.hardwareMode = body.hardwareMode;
+          if (body.hardwareMode) conversation.coderMode = true;
         }
         conversation.updatedAt = new Date().toISOString();
         saveWindowState(workspaceRoot, state);
@@ -1064,16 +807,12 @@ export async function runWindowApp({
           return sendJson(res, { error: "Conversation not found" }, 404);
         }
         if (state.activeConversationId === id) {
-          setActiveConversation(getVisibleConversations().find((item) => item.id !== id)?.id || null);
-        }
-        if (ensureActiveByWorkspace()[currentWorkspaceKey] === id) {
-          setActiveConversation(getVisibleConversations().find((item) => item.id !== id)?.id || null);
+          state.activeConversationId = state.conversations[0]?.id || null;
         }
         saveWindowState(workspaceRoot, state);
-        const visibleState = visibleStateForResponse();
         return sendJson(res, {
-          activeConversationId: visibleState.activeConversationId,
-          conversations: conversationList(visibleState),
+          activeConversationId: state.activeConversationId,
+          conversations: conversationList(state),
         });
       }
 
@@ -1111,7 +850,7 @@ export async function runWindowApp({
             pipelineStatus: "running",
           });
           conversation.updatedAt = new Date().toISOString();
-          setActiveConversation(conversation.id);
+          state.activeConversationId = conversation.id;
           saveWindowState(workspaceRoot, state);
           startTask(conversation.id, "pipeline", async () => {
             await runPipelineFromConversation(conversation.id, prompt, body);
@@ -1119,34 +858,10 @@ export async function runWindowApp({
           return sendJson(res, { conversation, running: true });
         }
 
+        // Маршрутизация по провайдеру.
         const convProvider = conversation.provider || "deepseek";
-        const shouldRunAgent = agentMode || conversation.agentMode === true || conversation.hardwareMode === true;
-        logConsole(`[${shouldRunAgent ? "agent" : "chat"}] ${convProvider} message in ${conversation.title}: ${summarizeForLog(prompt)}`);
+        logConsole(`[chat] ${convProvider} message in ${conversation.title}: ${summarizeForLog(prompt)}`);
         logConsoleBlock("user", prompt);
-
-        if (shouldRunAgent) {
-          const task = prompt;
-          if (!task) {
-          return sendJson(res, { error: "Message is empty" }, 400);
-          }
-          conversation.messages.push({
-            role: "user",
-            content: prompt,
-            createdAt: new Date().toISOString(),
-          });
-          conversation.updatedAt = new Date().toISOString();
-          setActiveConversation(conversation.id);
-          saveWindowState(workspaceRoot, state);
-          const result = await runAgentMessage({
-            conversation,
-            task,
-            body,
-            provider: convProvider,
-            messageMode: "agent",
-          });
-          return sendJson(res, result, result.statusCode || 200);
-        }
-
         if (convProvider === "qwen") {
           // Пушим user-сообщение СРАЗУ, до запроса к Qwen, чтобы оно отображалось
           // в UI пока ждём ответ (4-5 сек). Иначе пользовательское сообщение
@@ -1165,19 +880,96 @@ export async function runWindowApp({
             // Lazy createChat: на первом сообщении. Модель — из чата.
             if (!conversation.sessionId) {
               conversation.sessionId = await qwenApiCall((c) =>
-                c.createChat({ model: conversation.model || getProviderDefaultModel("qwen") }),
+                c.createChat({ model: conversation.model || undefined }),
               );
               saveWindowState(workspaceRoot, state);
               qwenClient = await getOrCreateQwenClient();
             }
 
-            const qwenModel = conversation.model || getProviderDefaultModel("qwen");
-            const isQwenReasoning = findProviderModel("qwen", qwenModel)?.reasoning === true;
+            // /code-режим или Coder-mode (per-chat toggle) → запускаем code-agent.
+            // ASYNC: задача идёт в фоне через task-runner. Возвращаем conversation
+            // сразу с running:true, UI делает polling до завершения.
+            const slashCode = prompt === "/code" || prompt.startsWith("/code ");
+            const coderMode = conversation.coderMode === true;
+            const hardwareMode = conversation.hardwareMode === true;
+            if (slashCode || coderMode || hardwareMode) {
+              const task = slashCode ? prompt.slice(5).trim() : prompt;
+              if (!task) {
+                conversation.messages.push({
+                  role: "assistant",
+                  content: "Напиши задачу после /code. Например: /code создай файл notes.txt с текстом hello",
+                  createdAt: new Date().toISOString(),
+                });
+                conversation.updatedAt = new Date().toISOString();
+                saveWindowState(workspaceRoot, state);
+                return sendJson(res, { conversation });
+              }
+
+              if (isRunning(conversation.id)) {
+                conversation.messages.push({
+                  role: "assistant",
+                  content: "⏳ В этом чате уже выполняется задача. Подожди завершения.",
+                  createdAt: new Date().toISOString(),
+                });
+                conversation.updatedAt = new Date().toISOString();
+                saveWindowState(workspaceRoot, state);
+                return sendJson(res, { conversation, running: true });
+              }
+
+              const { createQwenAgentAdapter } = await import("../providers/qwen/agent-adapter.mjs");
+              const adapter = createQwenAgentAdapter(qwenClient);
+              const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
+              const qwenCodeUseSearch = body.search === true || (body.search !== false && searchEnabled);
+              const baseOptions = {
+                sessionId: conversation.sessionId,
+                thinkingEnabled: body.thinking === true,
+                searchEnabled: qwenCodeUseSearch,
+              };
+              const parentId = getCodeParentMessageId(conversation);
+              const progressLogs = [];
+              const progressMessage = createCodeProgressMessage(conversation, task);
+              conversation.messages.push(progressMessage);
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+
+              startTask(conversation.id, "code", async () => {
+                try {
+                  logConsole(`[code] qwen started: ${summarizeForLog(task)}`);
+                  const codeResult = await runCodeTask(adapter, baseOptions, workspacePath, task, parentId, {
+                    systemPrompt: hardwareMode ? createHardwareAgentPrompt() : "",
+                    onTool: (_call, result, log) => {
+                      captureInstallRequest(conversation, result);
+                      captureQuestionRequest(conversation, result);
+                      progressLogs.push(log);
+                      progressMessage.content = formatCodeProgressMessage(task, progressLogs);
+                      progressMessage.updatedAt = new Date().toISOString();
+                      conversation.updatedAt = progressMessage.updatedAt;
+                      saveWindowState(workspaceRoot, state);
+                    },
+                  });
+                  conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
+                  conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
+                  const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
+                  progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+                  progressMessage.updatedAt = new Date().toISOString();
+                  if (toolText) logConsoleBlock("code tools", toolText);
+                  logConsoleBlock("assistant", codeResult.message);
+                  logConsole(`[code] qwen completed: ${codeResult.toolLogs.length} tool log(s)`);
+                } catch (err) {
+                  progressMessage.content = `⚠️ /code error: ${err.message}`;
+                  progressMessage.updatedAt = new Date().toISOString();
+                  logConsole(`[code] qwen failed: ${err.message}`);
+                }
+                conversation.updatedAt = new Date().toISOString();
+                saveWindowState(workspaceRoot, state);
+              }, "Qwen /code");
+
+              return sendJson(res, { conversation, running: true });
+            }
+
+            const isQwenReasoning = findProviderModel("qwen", conversation.model)?.reasoning === true;
             const qwenUseSearch = body.search === true || (body.search !== false && searchEnabled);
-            const qwenPrompt = withCurrentModelContext(
-              conversation,
-              qwenUseSearch ? withWebSearchInstruction(prompt) : prompt,
-            );
+            const qwenPrompt = qwenUseSearch ? withWebSearchInstruction(prompt) : prompt;
             const result = await qwenApiCall((c) =>
               c.complete({
                 chatId: conversation.sessionId,
@@ -1185,7 +977,7 @@ export async function runWindowApp({
                 parentId: conversation.parentMessageId,
                 thinking: isQwenReasoning ? true : (body.thinking === true),
                 search: qwenUseSearch,
-                model: qwenModel,
+                model: conversation.model || undefined,
               }),
             );
             conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
@@ -1224,7 +1016,38 @@ export async function runWindowApp({
           return sendJson(res, { conversation });
         }
 
-        const runtime = resolveDeepSeekRuntime(conversation, body);
+        // Режим берём ИЗ ЧАТА (зафиксирован при создании). Переключить нельзя —
+        // DeepSeek завязывает parent_message_id chain на одну модель.
+        // Тумблеры (thinking/search) — можно переключать per-message.
+        // Поддержка смены модели DeepSeek прямо из селектора чата (как у Qwen)
+        let messageMode = String(conversation.mode || "fast");
+        if (conversation.model === "deepseek-v4-pro" || conversation.model === "deepseek-reasoner") {
+          messageMode = "expert";
+        } else if (conversation.model === "deepseek-v4-flash" || conversation.model === "deepseek-chat") {
+          messageMode = "fast";
+        } else if (conversation.model === "deepseek-v4-vision") {
+          messageMode = "vision";
+        }
+        // thinking: в Expert (Pro) безусловно true (модель R1 не работает без thinking), в остальных по умолчанию.
+        let useThinking = effectiveThinkingForMode(messageMode, body.thinking, thinkingEnabled);
+        if (messageMode === "expert") {
+          useThinking = true;
+        }
+        let useSearch = body.search === true || (body.search !== false && searchEnabled);
+        // file_id'ы загруженных картинок для vision-режима. Фронт сначала зальёт
+        // файлы через /api/upload, потом шлёт их id здесь.
+        const refFileIds = Array.isArray(body.refFileIds)
+          ? body.refFileIds.filter((id) => typeof id === "string" && id.length > 0)
+          : [];
+        let effectiveModelType = mapModeToModelType(messageMode, modelType);
+        // С картинками и режимом «Распознание» — явный model_type vision, если не задан в .env.
+        if (refFileIds.length > 0 && messageMode === "vision" && effectiveModelType == null) {
+          effectiveModelType = process.env.DEEPSEEK_MODEL_VISION ?? "vision";
+        }
+        // С картинками поиск обычно ломает vision-completion (ref_file_ids).
+        if (refFileIds.length > 0) {
+          useSearch = false;
+        }
 
         const now = new Date().toISOString();
         const isFirstUserMessage = !conversation.messages.some((message) => message.role === "user");
@@ -1233,20 +1056,100 @@ export async function runWindowApp({
         }
         conversation.messages.push({ role: "user", content: prompt, createdAt: now });
         conversation.updatedAt = now;
-        setActiveConversation(conversation.id);
+        state.activeConversationId = conversation.id;
         saveWindowState(workspaceRoot, state);
+
+        const dsSlashCode = prompt === "/code" || prompt.startsWith("/code ");
+        const dsCoderMode = conversation.coderMode === true;
+        const dsHardwareMode = conversation.hardwareMode === true;
+        if (dsSlashCode || dsCoderMode || dsHardwareMode) {
+          const task = dsSlashCode ? prompt.slice(5).trim() : prompt;
+          if (!task) {
+            conversation.messages.push({
+              role: "assistant",
+              content: "Напиши задачу после /code. Например: /code создай файл notes.txt с текстом hello",
+              createdAt: new Date().toISOString(),
+            });
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+            return sendJson(res, { conversation });
+          }
+
+          if (isRunning(conversation.id)) {
+            conversation.messages.push({
+              role: "assistant",
+              content: "⏳ В этом чате уже выполняется задача. Подожди завершения.",
+              createdAt: new Date().toISOString(),
+            });
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+            return sendJson(res, { conversation, running: true });
+          }
+
+          // КРИТИЧНО: /code держит СВОЙ parent_message_id chain, отдельный от обычного чата.
+          // Иначе system-prompt «You are a coding agent, no internet» цепляется к обычным
+          // сообщениям, и модель отказывается отвечать на вопросы про реальный мир.
+          //
+          // ASYNC: запускаем через task-runner, чтобы UI не блокировался и можно было
+          // параллельно запустить /code в других чатах. Возвращаем conversation сразу,
+          // фронт делает polling /api/state до завершения.
+          const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
+          const baseOptions = {
+            sessionId: conversation.sessionId,
+            modelType: effectiveModelType,
+            thinkingEnabled: useThinking,
+            searchEnabled: useSearch,
+          };
+          const parentId = getCodeParentMessageId(conversation);
+          const progressLogs = [];
+          const progressMessage = createCodeProgressMessage(conversation, task);
+          conversation.messages.push(progressMessage);
+          conversation.updatedAt = new Date().toISOString();
+          saveWindowState(workspaceRoot, state);
+
+          startTask(conversation.id, "code", async () => {
+            try {
+              logConsole(`[code] deepseek started: ${summarizeForLog(task)}`);
+              const codeResult = await runCodeTask(client, baseOptions, workspacePath, task, parentId, {
+                systemPrompt: dsHardwareMode ? createHardwareAgentPrompt() : "",
+                onTool: (_call, result, log) => {
+                  captureInstallRequest(conversation, result);
+                  captureQuestionRequest(conversation, result);
+                  progressLogs.push(log);
+                  progressMessage.content = formatCodeProgressMessage(task, progressLogs);
+                  progressMessage.updatedAt = new Date().toISOString();
+                  conversation.updatedAt = progressMessage.updatedAt;
+                  saveWindowState(workspaceRoot, state);
+                },
+              });
+              conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
+              conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
+              const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
+              progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+              progressMessage.updatedAt = new Date().toISOString();
+              if (toolText) logConsoleBlock("code tools", toolText);
+              logConsoleBlock("assistant", codeResult.message);
+              logConsole(`[code] deepseek completed: ${codeResult.toolLogs.length} tool log(s)`);
+            } catch (err) {
+              progressMessage.content = `⚠️ /code error: ${err.message}`;
+              progressMessage.updatedAt = new Date().toISOString();
+              logConsole(`[code] deepseek failed: ${err.message}`);
+            }
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+          }, "DeepSeek /code");
+
+          return sendJson(res, { conversation, running: true });
+        }
 
         const result = await client.complete({
           sessionId: conversation.sessionId,
-          prompt: withCurrentModelContext(
-            conversation,
-            runtime.useSearch ? withWebSearchInstruction(prompt) : prompt,
-          ),
+          prompt: useSearch ? withWebSearchInstruction(prompt) : prompt,
           parentMessageId: conversation.parentMessageId,
-          modelType: runtime.effectiveModelType,
-          thinkingEnabled: runtime.useThinking,
-          searchEnabled: runtime.useSearch,
-          refFileIds: runtime.refFileIds,
+          modelType: effectiveModelType,
+          thinkingEnabled: useThinking,
+          searchEnabled: useSearch,
+          refFileIds,
         });
 
         conversation.parentMessageId = result.lastAssistantMessageId ?? conversation.parentMessageId;
@@ -1299,6 +1202,14 @@ export async function runWindowApp({
   process.once("SIGHUP", () => shutdown("SIGHUP"));
 }
 
+function withWebSearchInstruction(prompt) {
+  return [
+    "[SYSTEM]: Web search is enabled for this message. Use the provider web search for current, latest, news, price, schedule, law, or other time-sensitive questions. Do not say you have no internet access when web search results are available.",
+    "",
+    prompt,
+  ].join("\n");
+}
+
 function summarizeForLog(value, maxLength = 160) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (text.length <= maxLength) return text;
@@ -1325,6 +1236,13 @@ function normalizePipelinePatch(body, conversations) {
     }),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function modeForConversation(conversation) {
+  if (conversation.model === "deepseek-v4-pro" || conversation.model === "deepseek-reasoner") return "expert";
+  if (conversation.model === "deepseek-v4-flash" || conversation.model === "deepseek-chat") return "fast";
+  if (conversation.model === "deepseek-v4-vision") return "vision";
+  return String(conversation.mode || "fast");
 }
 
 function captureInstallRequest(conversation, toolResult) {
@@ -1469,38 +1387,6 @@ function createHardwareAgentPrompt() {
 - If PlatformIO, arduino-cli, or esptool.py are not installed, still use list_serial_ports for port discovery and then tell the user which external flashing tool must be installed.
 - Do not run erase_flash. Do not invent a serial port or board. If the exact port/board/firmware path is missing, ask the user for it.
 - Only upload/flash when the user explicitly asks to прошить/upload/flash. For analysis tasks, stop after reporting the plan and required commands.`;
-}
-
-function modeForProviderModel(providerId, modelId) {
-  const provider = getProviderCatalog(providerId);
-  return provider?.modes.find((mode) => mode.model === modelId)?.id || null;
-}
-
-function modelLabel(providerId, modelId) {
-  return findProviderModel(providerId, modelId)?.label || modelId;
-}
-
-function withCurrentModelContext(conversation, prompt) {
-  const provider = conversation.provider || "deepseek";
-  const model = conversation.model || getProviderDefaultModel(provider, conversation.mode);
-  const label = modelLabel(provider, model);
-  return [
-    `[CURRENT AI FREE ROUTING]
-Provider: ${provider}
-Selected model id: ${model}
-Selected model label: ${label}
-If the user asks what model you are, answer with this selected model id/label. Do not copy model identity from earlier messages; the user may have switched models in the same visible chat.
-[END CURRENT AI FREE ROUTING]`,
-    prompt,
-  ].join("\n\n");
-}
-
-function withWebSearchInstruction(prompt) {
-  return [
-    "[SYSTEM]: Web search is enabled for this message. Use the provider web search for current, latest, news, price, schedule, law, or other time-sensitive questions. Do not say you have no internet access when web search results are available.",
-    "",
-    prompt,
-  ].join("\n");
 }
 
 function createCodeProgressMessage(task) {

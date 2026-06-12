@@ -8,10 +8,11 @@
 import { STYLES } from "./ui-styles.mjs";
 import { AI_FREE_VERSION } from "../config.mjs";
 import { createTranslator, resolveUserLanguage } from "../i18n/index.mjs";
+import { COMMAND_DESCRIPTIONS } from "../i18n/command-descriptions.mjs";
 
 export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } = {}) {
   const { language, messages, t } = createTranslator(resolveUserLanguage(requestedLanguage));
-  const i18nPayload = JSON.stringify({ language, messages, ui });
+  const i18nPayload = JSON.stringify({ language, messages, ui, commandDescriptions: COMMAND_DESCRIPTIONS });
   return `<!doctype html>
 <html lang="${language.code}" dir="${language.dir}">
 <head>
@@ -68,7 +69,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
               <div class="browsePath" id="browsePath"></div>
               <div class="browseControls">
                 <button type="button" id="browseUp" class="iconBtn">${t("newChat.up")}</button>
-                <button type="button" id="browseHome" class="iconBtn">🏠 Home</button>
+                <button type="button" id="browseHome" class="iconBtn">${t("newChat.home")}</button>
                 <button type="button" id="browseNewFolder" class="iconBtn">${t("newChat.newFolder")}</button>
                 <label class="checkboxRow inline">
                   <input type="checkbox" id="browseShowHidden">
@@ -113,7 +114,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           <select id="rolePicker" class="rolePicker hidden" title="${t("topbar.role")}"></select>
           <button id="coderToggle" class="coderToggle hidden" type="button" title="${t("topbar.coderTitle")}">🛠 Coder</button>
           <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="${t("topbar.hardwareTitle")}">ESP</button>
-          <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">Pipeline</button>
+          <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">${t("topbar.pipeline")}</button>
           <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="${t("topbar.flowTitle")}">${t("topbar.flow")}</button>
         </div>
         <div id="workspace" class="workspace"></div>
@@ -127,9 +128,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <h2 id="settingsTitle">${t("settings.title")}</h2>
             <button id="settingsClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
           </div>
-          <p class="settingsHint">
-            ${t("settings.hint")}
-          </p>
           <div id="settingsBody" class="settingsBody">${t("app.loading")}</div>
         </div>
       </div>
@@ -723,7 +721,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     let availableProviders = ["deepseek"]; // подтянем с сервера через /api/providers
     let AGENT_ROLES = [
-      { id: "assistant", label: "Assistant", description: t("role.assistantDescription") },
+      { id: "assistant", label: t("role.assistant"), description: t("role.assistantDescription") },
     ];
     let newChatSelectedProvider = localStorage.getItem(PROVIDER_PICK_KEY) || "deepseek";
     let newChatSelectedMode = localStorage.getItem(NEWCHAT_MODE_KEY) || "fast";
@@ -918,7 +916,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
                 chatSessionId: activeConversation.sessionId,
               },
             });
-            if (!result.fileId) throw new Error("Upload вернул без fileId");
+            if (!result.fileId) throw new Error(t("file.uploadMissingId"));
             refFileIds.push(result.fileId);
           }
         }
@@ -1210,7 +1208,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     function renderConversation(conversation) {
       activeTitle.textContent = conversation.title;
       workspace.textContent = conversation.workspace || appState.workspaceRoot;
-      if (appState.stateFile) workspace.title = "History: " + appState.stateFile;
+      if (appState.stateFile) workspace.title = t("chat.history", { file: appState.stateFile });
       // Бейдж режима: показывает, какая модель привязана к этому чату.
       // Берём label из PROVIDER_INFO с учётом провайдера чата.
       const mode = conversation.mode || "fast";
@@ -1254,26 +1252,26 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       coderToggleEl.classList.remove("hidden");
       if (conversation.coderMode === true) {
         coderToggleEl.classList.add("active");
-        coderToggleEl.textContent = "🛠 Coder ON";
+        coderToggleEl.textContent = t("topbar.coderOn");
       } else {
         coderToggleEl.classList.remove("active");
-        coderToggleEl.textContent = "🛠 Coder";
+        coderToggleEl.textContent = t("topbar.coder");
       }
       hardwareToggleEl.classList.remove("hidden");
       if (conversation.hardwareMode === true) {
         hardwareToggleEl.classList.add("active");
-        hardwareToggleEl.textContent = "ESP ON";
+        hardwareToggleEl.textContent = t("topbar.hardwareOn");
       } else {
         hardwareToggleEl.classList.remove("active");
-        hardwareToggleEl.textContent = "ESP";
+        hardwareToggleEl.textContent = t("topbar.hardware");
       }
       pipelineToggleEl.classList.remove("hidden");
       if (conversation.pipelineMode === true) {
         pipelineToggleEl.classList.add("active");
-        pipelineToggleEl.textContent = "Pipeline ON";
+        pipelineToggleEl.textContent = t("topbar.pipelineOn");
       } else {
         pipelineToggleEl.classList.remove("active");
-        pipelineToggleEl.textContent = "Pipeline";
+        pipelineToggleEl.textContent = t("topbar.pipeline");
       }
 
       // Синхронизация и блокировка "Глубокого мышления" для моделей-рассуждалок (DeepSeek R1 / QwQ)
@@ -1312,7 +1310,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         // Подпись assistant'а — провайдер-специфичная.
         const assistantLabel = message.roleId
           ? roleLabel(message.roleId)
-          : (({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || "Assistant");
+          : (({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || t("chat.assistant"));
         role.textContent = message.role === "user" ? t("chat.you") : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
@@ -1685,7 +1683,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           nameEl.textContent = item.name;
           const descEl = document.createElement("div");
           descEl.className = "desc";
-          descEl.textContent = item.description;
+          descEl.textContent = commandDescription(item.name, item.description);
           textWrap.appendChild(nameEl);
           textWrap.appendChild(descEl);
 
@@ -1714,6 +1712,16 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       for (const panel of panels) {
         panel.classList.toggle("active", panel.dataset.panel === tabId);
       }
+    }
+
+    function commandDescription(command, fallback) {
+      const code = String(I18N.language?.code || "en").toLowerCase();
+      const descriptions = I18N.commandDescriptions || {};
+      return descriptions[code]?.[command]
+        || descriptions[code.split("-")[0]]?.[command]
+        || descriptions.en?.[command]
+        || fallback
+        || "";
     }
 
     function renderUiSettings(target, ui, allowedCommands) {
