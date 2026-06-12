@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.40
+
+- Fixed Voice auto-install stopping when Homebrew terminates without a normal exit code.
+- Falls back to Cargo when Homebrew cannot install `parakeet-cli`.
+- Shows clearer install failures for terminated STT installer processes.
+
 ## 0.1.39
 
 - Fixed deleted chats coming back after restart when old workspace state files were still present.

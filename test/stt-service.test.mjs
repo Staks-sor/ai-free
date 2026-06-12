@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { getVoiceStatus, transcribeAudio } from "../src/stt/service.mjs";
+import { getVoiceStatus, installSttRuntime, transcribeAudio } from "../src/stt/service.mjs";
 
 describe("stt service", () => {
   it("reports missing optional helper without requiring a bundled model", () => {
@@ -47,4 +47,44 @@ describe("stt service", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("falls back to Cargo when Homebrew terminates during install", { skip: process.platform !== "darwin" }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stt-install-"));
+    const brew = path.join(dir, "brew");
+    const cargo = path.join(dir, "cargo");
+    const parakeet = path.join(dir, "parakeet");
+    fs.writeFileSync(brew, "#!/bin/sh\nkill -TERM $$\n", { mode: 0o755 });
+    fs.writeFileSync(
+      cargo,
+      `#!/bin/sh
+cat > ${shellQuote(parakeet)} <<'EOF'
+#!/bin/sh
+if [ "$1" = "download" ]; then
+  mkdir -p "$3"
+  touch "$3/model.onnx"
+  exit 0
+fi
+printf '{"text":"ok","language":"auto","durationMs":1}'
+EOF
+chmod +x ${shellQuote(parakeet)}
+`,
+      { mode: 0o755 },
+    );
+    const previousPath = process.env.PATH;
+    process.env.PATH = [dir, "/bin", "/usr/bin"].join(path.delimiter);
+    try {
+      const logs = [];
+      const status = await installSttRuntime({ onLog: (message) => logs.push(message) });
+      assert.equal(status.parakeetAvailable, true);
+      assert.ok(logs.some((message) => /Homebrew install failed/.test(message)));
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}

@@ -64,10 +64,18 @@ async function installSttRuntimeOnce({ onLog } = {}) {
   if (!parakeetPath) {
     const brewPath = findCommand("brew");
     const cargoPath = findCommand("cargo");
+    let brewError = null;
     if (brewPath && process.platform === "darwin") {
       log("Installing parakeet-cli with Homebrew...");
-      await runCommand(brewPath, ["install", "lucataco/tap/parakeet-cli"], { timeoutMs: 20 * 60_000 });
-    } else if (cargoPath) {
+      try {
+        await runCommand(brewPath, ["install", "lucataco/tap/parakeet-cli"], { timeoutMs: 20 * 60_000 });
+      } catch (error) {
+        brewError = error;
+        log(`Homebrew install failed: ${error.message}`);
+      }
+    }
+    parakeetPath = findCommand("parakeet");
+    if (!parakeetPath && cargoPath) {
       log("Installing parakeet-cli with Cargo...");
       await runCommand(cargoPath, [
         "install",
@@ -76,7 +84,12 @@ async function installSttRuntimeOnce({ onLog } = {}) {
         "--bin",
         "parakeet",
       ], { timeoutMs: 30 * 60_000 });
-    } else {
+    } else if (!parakeetPath && brewError) {
+      throw new Error(
+        "Could not install Parakeet automatically. Homebrew failed and Cargo was not found. " +
+        `${brewError.message} Install Rust/Cargo or set AI_FREE_STT_BIN.`,
+      );
+    } else if (!parakeetPath) {
       throw new Error(
         "Could not install Parakeet automatically: Homebrew or Cargo is required. " +
         "Install parakeet-cli manually or set AI_FREE_STT_BIN.",
@@ -208,12 +221,20 @@ function runCommand(command, args, { timeoutMs }) {
       clearTimeout(timer);
       reject(error);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timer);
       if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error((stderr || stdout || `${command} exited with code ${code}`).trim()));
+      else reject(new Error(formatCommandFailure(command, code, signal, stdout, stderr)));
     });
   });
+}
+
+function formatCommandFailure(command, code, signal, stdout, stderr) {
+  const output = String(stderr || stdout || "").trim();
+  if (output) return output;
+  const name = path.basename(command);
+  if (signal) return `${name} was terminated by signal ${signal}.`;
+  return `${name} exited with code ${code}.`;
 }
 
 function commandExists(command) {
