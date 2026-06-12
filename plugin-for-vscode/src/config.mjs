@@ -38,6 +38,11 @@ export const DEFAULT_AUTH_FILE = path.join(AUTH_DIR, "auth.json");
 export const DEFAULT_BROWSER_PROFILE = path.join(AUTH_DIR, "browser-profile");
 export const CREDENTIALS_FILE = path.join(AUTH_DIR, "credentials.json");
 export const SETTINGS_FILE = path.join(AUTH_DIR, "settings.json");
+export const STT_DIR = path.join(AUTH_DIR, "stt");
+export const STT_RUNTIME_DIR = path.join(STT_DIR, "runtime");
+export const STT_MODEL_DIR = path.join(STT_DIR, "models");
+export const STT_CACHE_DIR = path.join(STT_DIR, "cache");
+export const STT_HELPER_FILE = path.join(STT_RUNTIME_DIR, "ai-free-stt");
 
 // Legacy fallback. Пустая строка означает «нет дефолтного cookie-файла»;
 // раньше тут был жёсткий путь, что неправильно — теперь только из .env при необходимости.

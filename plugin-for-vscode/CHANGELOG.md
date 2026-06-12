@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.37
+
+- Added a lightweight voice input integration for desktop and VS Code webviews.
+- Added microphone recording in the composer; transcripts are inserted into the message box for review before sending.
+- Added local `/api/voice/status` and `/api/voice/transcribe` endpoints.
+- Added optional Parakeet V3 helper discovery through `~/.deepseek-cli/stt/runtime/ai-free-stt` or `AI_FREE_STT_BIN`, without bundling any model/runtime into the extension.
+- Added Voice input status in Settings and localization for all bundled UI languages.
+
 ## 0.1.36
 
 - Completed bundled UI translations so every supported language has the full Settings, API, Permissions, chat, file, pipeline, and welcome string set.

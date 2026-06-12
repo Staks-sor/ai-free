@@ -154,6 +154,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <button type="button" id="toggleThinking" class="togglePill" title="${t("composer.thinkingTitle")}">${t("composer.thinking")}</button>
             <button type="button" id="toggleSearch" class="togglePill" title="${t("composer.searchTitle")}">${t("composer.search")}</button>
             <button type="button" id="attachBtn" class="togglePill attachBtn" title="${t("composer.attachTitle")}">${t("composer.attach")}</button>
+            <button type="button" id="voiceBtn" class="togglePill voiceBtn" title="${t("composer.voiceTitle")}">${t("composer.voice")}</button>
             <div class="composerSpacer"></div>
             <button id="sendBtn" class="sendBtn" type="submit" disabled>↑</button>
           </div>
@@ -521,9 +522,107 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     let attachments = []; // [{ name, size, content }]
     const fileInput = document.getElementById("fileInput");
     const attachBtn = document.getElementById("attachBtn");
+    const voiceBtn = document.getElementById("voiceBtn");
     const attachmentList = document.getElementById("attachmentList");
 
     attachBtn.addEventListener("click", () => fileInput.click());
+
+    let voiceRecorder = null;
+    let voiceStream = null;
+    let voiceChunks = [];
+    let voiceRecording = false;
+
+    voiceBtn.addEventListener("click", () => {
+      if (voiceRecording) {
+        stopVoiceRecording();
+      } else {
+        startVoiceRecording().catch((error) => setStatus(error.message, true));
+      }
+    });
+
+    async function startVoiceRecording() {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        throw new Error(t("composer.voiceUnsupported"));
+      }
+      const status = await api("/api/voice/status");
+      if (!status.helperAvailable) {
+        throw new Error(t("composer.voiceMissing", { path: status.helper || "" }));
+      }
+      voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceChunks = [];
+      voiceRecorder = new MediaRecorder(voiceStream);
+      voiceRecorder.addEventListener("dataavailable", (event) => {
+        if (event.data && event.data.size > 0) voiceChunks.push(event.data);
+      });
+      voiceRecorder.addEventListener("stop", () => {
+        finishVoiceRecording().catch((error) => setStatus(error.message, true));
+      });
+      voiceRecorder.start();
+      voiceRecording = true;
+      voiceBtn.classList.add("active");
+      voiceBtn.textContent = t("composer.voiceStop");
+      setStatus(t("composer.voiceRecording"));
+    }
+
+    function stopVoiceRecording() {
+      if (!voiceRecorder || voiceRecorder.state === "inactive") return;
+      voiceRecorder.stop();
+    }
+
+    async function finishVoiceRecording() {
+      voiceRecording = false;
+      voiceBtn.classList.remove("active");
+      voiceBtn.textContent = t("composer.voice");
+      if (voiceStream) {
+        for (const track of voiceStream.getTracks()) track.stop();
+      }
+      voiceStream = null;
+      const blob = new Blob(voiceChunks, { type: voiceRecorder?.mimeType || "audio/webm" });
+      voiceRecorder = null;
+      voiceChunks = [];
+      if (!blob.size) {
+        setStatus(t("composer.voiceNoSpeech"), true);
+        return;
+      }
+      setStatus(t("composer.voiceTranscribing"));
+      const dataBase64 = await blobToBase64(blob);
+      const result = await api("/api/voice/transcribe", {
+        method: "POST",
+        body: {
+          dataBase64,
+          mimeType: blob.type || "audio/webm",
+          language: "auto",
+        },
+      });
+      const text = String(result.text || "").trim();
+      if (!text) {
+        setStatus(t("composer.voiceNoSpeech"), true);
+        return;
+      }
+      insertComposerText(text);
+      setStatus("");
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const value = String(reader.result || "");
+          const comma = value.indexOf(",");
+          resolve(comma >= 0 ? value.slice(comma + 1) : value);
+        };
+        reader.onerror = () => reject(reader.error || new Error("FileReader error"));
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    function insertComposerText(text) {
+      const current = messageInput.value;
+      const separator = current.trim() ? "\\n" : "";
+      messageInput.value = current + separator + text;
+      messageInput.focus();
+      autoGrowInput();
+    }
 
     // Прочитать файл как base64 без падений на больших размерах (через FileReader).
     function fileToBase64(file) {
@@ -1775,6 +1874,62 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       groupEl.appendChild(searchRow);
 
       target.appendChild(groupEl);
+      renderVoiceSettings(target);
+    }
+
+    function renderVoiceSettings(target) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup";
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.voiceTitle");
+      groupEl.appendChild(heading);
+
+      const modelRow = document.createElement("div");
+      modelRow.className = "settingsItem";
+      const modelText = document.createElement("div");
+      const modelName = document.createElement("div");
+      modelName.className = "name";
+      modelName.textContent = t("settings.voiceProvider");
+      const modelDesc = document.createElement("div");
+      modelDesc.className = "desc";
+      modelDesc.textContent = "Parakeet V3";
+      modelText.append(modelName, modelDesc);
+      modelRow.appendChild(modelText);
+      groupEl.appendChild(modelRow);
+
+      const runtimeRow = document.createElement("div");
+      runtimeRow.className = "settingsItem";
+      const runtimeText = document.createElement("div");
+      const runtimeName = document.createElement("div");
+      runtimeName.className = "name";
+      runtimeName.textContent = t("settings.voiceRuntime");
+      const runtimeDesc = document.createElement("div");
+      runtimeDesc.className = "desc";
+      runtimeDesc.textContent = t("app.loadingShort");
+      runtimeText.append(runtimeName, runtimeDesc);
+      const badge = document.createElement("span");
+      badge.className = "riskBadge medium";
+      badge.textContent = "...";
+      runtimeRow.append(runtimeText, badge);
+      groupEl.appendChild(runtimeRow);
+
+      const hint = document.createElement("div");
+      hint.className = "apiModels";
+      hint.textContent = t("settings.voiceInstallHint");
+      groupEl.appendChild(hint);
+      target.appendChild(groupEl);
+
+      api("/api/voice/status")
+        .then((status) => {
+          runtimeDesc.textContent = status.helper || "";
+          badge.textContent = status.helperAvailable ? t("settings.voiceReady") : t("settings.voiceMissing");
+          badge.className = "riskBadge " + (status.helperAvailable ? "low" : "medium");
+        })
+        .catch((error) => {
+          runtimeDesc.textContent = error.message;
+          badge.textContent = t("settings.voiceMissing");
+          badge.className = "riskBadge medium";
+        });
     }
 
     async function saveUiSettings(uiPatch, allowedCommands) {

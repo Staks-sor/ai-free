@@ -30,6 +30,7 @@ import { getCommandDescription } from "../i18n/command-descriptions.mjs";
 import { listBrowseDirectories } from "./browse-fs.mjs";
 import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
+import { getVoiceStatus, transcribeAudio } from "../stt/service.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
 import { setOpenAICorsHeaders } from "../../api/server.mjs";
 import {
@@ -463,6 +464,32 @@ export async function runWindowApp({
         } catch (error) {
           console.error(`[upload] FAILED for ${body.name}: ${error.message}`);
           return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/voice/status") {
+        return sendJson(res, getVoiceStatus());
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/voice/transcribe") {
+        const body = await readJsonBody(req, 42_000_000);
+        try {
+          const result = await transcribeAudio({
+            dataBase64: body.dataBase64,
+            mimeType: body.mimeType,
+            language: body.language || "auto",
+          });
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(
+            res,
+            {
+              error: error.message,
+              code: error.code || "stt_failed",
+              status: error.status || getVoiceStatus(),
+            },
+            error.code === "stt_helper_missing" ? 409 : 500,
+          );
         }
       }
 

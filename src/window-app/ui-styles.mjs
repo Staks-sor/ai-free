@@ -1147,7 +1147,13 @@ export const STYLES = `
       color: var(--muted);
       line-height: 1.4;
     }
-    .attachBtn { font-size: 12px; }
+    .attachBtn,
+    .voiceBtn { font-size: 12px; }
+    .voiceBtn.active {
+      background: rgba(239, 68, 68, 0.16);
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.50);
+    }
 
     .attachmentList {
       display: flex;
