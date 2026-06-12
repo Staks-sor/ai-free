@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.41
+
+- Prevented STT install tests from writing fake runtimes into the user's real `~/.deepseek-cli` directory.
+- Made the generated Parakeet shim recover when a saved binary path disappears by falling back to `command -v parakeet`.
+- Treats the managed Voice runtime as missing when the shim exists but the real `parakeet` binary is unavailable, so clicking Voice can reinstall it.
+- Added a Windows `.cmd` Voice launcher and executable lookup for `.exe/.cmd/.bat`.
+- Disables Cargo HTTP/2 multiplexing and enables retries during Parakeet install to reduce transient network failures.
+
 ## 0.1.40
 
 - Fixed Voice auto-install stopping when Homebrew terminates without a normal exit code.

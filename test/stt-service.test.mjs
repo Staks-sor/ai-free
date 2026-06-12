@@ -53,6 +53,7 @@ describe("stt service", () => {
     const brew = path.join(dir, "brew");
     const cargo = path.join(dir, "cargo");
     const parakeet = path.join(dir, "parakeet");
+    const sttDir = path.join(dir, "stt");
     fs.writeFileSync(brew, "#!/bin/sh\nkill -TERM $$\n", { mode: 0o755 });
     fs.writeFileSync(
       cargo,
@@ -71,15 +72,25 @@ chmod +x ${shellQuote(parakeet)}
       { mode: 0o755 },
     );
     const previousPath = process.env.PATH;
+    const previousSttDir = process.env.AI_FREE_STT_DIR;
+    const previousStrictPath = process.env.AI_FREE_STT_STRICT_PATH;
     process.env.PATH = [dir, "/bin", "/usr/bin"].join(path.delimiter);
+    process.env.AI_FREE_STT_DIR = sttDir;
+    process.env.AI_FREE_STT_STRICT_PATH = "1";
     try {
       const logs = [];
       const status = await installSttRuntime({ onLog: (message) => logs.push(message) });
       assert.equal(status.parakeetAvailable, true);
+      assert.equal(status.sttDir, sttDir);
+      assert.ok(fs.existsSync(path.join(sttDir, "runtime", "ai-free-stt")));
       assert.ok(logs.some((message) => /Homebrew install failed/.test(message)));
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
+      if (previousSttDir === undefined) delete process.env.AI_FREE_STT_DIR;
+      else process.env.AI_FREE_STT_DIR = previousSttDir;
+      if (previousStrictPath === undefined) delete process.env.AI_FREE_STT_STRICT_PATH;
+      else process.env.AI_FREE_STT_STRICT_PATH = previousStrictPath;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
