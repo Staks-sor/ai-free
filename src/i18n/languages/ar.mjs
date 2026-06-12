@@ -106,6 +106,7 @@ export const language = {
     "composer.voice": "🎙 صوت",
     "composer.voiceTitle": "تسجيل الصوت وإدراج التفريغ في الرسالة",
     "composer.voiceStop": "■ إيقاف",
+    "composer.voiceInstalling": "جارٍ تثبيت Parakeet V3. قد يستغرق ذلك بضع دقائق...",
     "composer.voiceRecording": "جارٍ تسجيل الصوت...",
     "composer.voiceTranscribing": "جارٍ تفريغ الصوت...",
     "composer.voiceMissing": "مساعد الصوت غير مثبت. ضع ai-free-stt في {path} أو عيّن AI_FREE_STT_BIN.",

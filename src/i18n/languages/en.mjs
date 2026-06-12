@@ -106,6 +106,7 @@ export const language = {
     "composer.voice": "🎙 Voice",
     "composer.voiceTitle": "Record voice and insert the transcript into the message",
     "composer.voiceStop": "■ Stop",
+    "composer.voiceInstalling": "Installing Parakeet V3. This can take a few minutes...",
     "composer.voiceRecording": "Recording voice...",
     "composer.voiceTranscribing": "Transcribing voice...",
     "composer.voiceMissing": "Voice helper is not installed. Put ai-free-stt at {path} or set AI_FREE_STT_BIN.",

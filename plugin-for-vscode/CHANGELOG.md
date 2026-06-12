@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.38
+
+- Changed first Voice click to automatically install Parakeet V3 support when missing.
+- Uses `parakeet-cli` as the lightweight native runtime: Homebrew on macOS when available, Cargo as fallback.
+- Downloads the Parakeet V3 INT8 model into `~/.deepseek-cli/stt/models` instead of bundling it with the extension.
+- Records microphone audio as WAV before transcription, matching Parakeet file transcription requirements.
+- Reworked the Voice settings status card so long runtime paths no longer overlap the status badge.
+
 ## 0.1.37
 
 - Added a lightweight voice input integration for desktop and VS Code webviews.

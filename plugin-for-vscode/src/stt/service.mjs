@@ -14,6 +14,7 @@ import {
 
 export const DEFAULT_STT_MODEL = "parakeet-v3";
 const MAX_AUDIO_BYTES = 30 * 1024 * 1024;
+let installPromise = null;
 
 export function resolveSttHelper() {
   return String(process.env.AI_FREE_STT_BIN || STT_HELPER_FILE).trim();
@@ -22,21 +23,73 @@ export function resolveSttHelper() {
 export function getVoiceStatus() {
   const helper = resolveSttHelper();
   const helperAvailable = commandExists(helper);
+  const parakeetPath = findCommand("parakeet");
+  const configuredByEnv = Boolean(process.env.AI_FREE_STT_BIN);
+  const bundledModelAvailable = fs.existsSync(STT_MODEL_DIR) && hasAnyFile(STT_MODEL_DIR);
   return {
     enabled: true,
     provider: "parakeet-v3",
     helper,
     helperAvailable,
-    configuredByEnv: Boolean(process.env.AI_FREE_STT_BIN),
+    parakeetAvailable: Boolean(parakeetPath),
+    parakeetPath,
+    configuredByEnv,
     sttDir: STT_DIR,
     runtimeDir: STT_RUNTIME_DIR,
     modelDir: STT_MODEL_DIR,
     cacheDir: STT_CACHE_DIR,
-    modelAvailable: fs.existsSync(STT_MODEL_DIR) && hasAnyFile(STT_MODEL_DIR),
+    modelAvailable: configuredByEnv ? helperAvailable : bundledModelAvailable,
     installHint:
-      `Install an ai-free-stt helper with Parakeet V3 support at ${STT_HELPER_FILE} ` +
-      "or set AI_FREE_STT_BIN to an executable helper path.",
+      "Click Voice to install Parakeet V3 automatically, or set AI_FREE_STT_BIN to an executable helper path.",
   };
+}
+
+export async function installSttRuntime({ onLog } = {}) {
+  if (installPromise) return installPromise;
+  installPromise = installSttRuntimeOnce({ onLog }).finally(() => {
+    installPromise = null;
+  });
+  return installPromise;
+}
+
+async function installSttRuntimeOnce({ onLog } = {}) {
+  const log = (message) => {
+    if (typeof onLog === "function") onLog(message);
+  };
+  fs.mkdirSync(STT_RUNTIME_DIR, { recursive: true });
+  fs.mkdirSync(STT_MODEL_DIR, { recursive: true });
+  fs.mkdirSync(STT_CACHE_DIR, { recursive: true });
+
+  let parakeetPath = findCommand("parakeet");
+  if (!parakeetPath) {
+    const brewPath = findCommand("brew");
+    const cargoPath = findCommand("cargo");
+    if (brewPath && process.platform === "darwin") {
+      log("Installing parakeet-cli with Homebrew...");
+      await runCommand(brewPath, ["install", "lucataco/tap/parakeet-cli"], { timeoutMs: 20 * 60_000 });
+    } else if (cargoPath) {
+      log("Installing parakeet-cli with Cargo...");
+      await runCommand(cargoPath, [
+        "install",
+        "--git",
+        "https://github.com/lucataco/parakeet-cli.git",
+        "--bin",
+        "parakeet",
+      ], { timeoutMs: 30 * 60_000 });
+    } else {
+      throw new Error(
+        "Could not install Parakeet automatically: Homebrew or Cargo is required. " +
+        "Install parakeet-cli manually or set AI_FREE_STT_BIN.",
+      );
+    }
+    parakeetPath = findCommand("parakeet");
+  }
+  if (!parakeetPath) throw new Error("parakeet was installed, but the binary was not found in PATH.");
+
+  log("Downloading Parakeet V3 INT8 model...");
+  await runCommand(parakeetPath, ["download", "--model-dir", STT_MODEL_DIR], { timeoutMs: 60 * 60_000 });
+  writeParakeetShim(parakeetPath);
+  return getVoiceStatus();
 }
 
 export async function transcribeAudio({ dataBase64, mimeType = "audio/webm", language = "auto" } = {}) {
@@ -115,11 +168,67 @@ function runHelper(helper, input, { model, language }) {
   });
 }
 
+function writeParakeetShim(parakeetPath) {
+  const content = `#!/bin/sh
+set -eu
+INPUT=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    transcribe|--json) shift ;;
+    --input) INPUT="$2"; shift 2 ;;
+    --model|--language) shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ -z "$INPUT" ]; then
+  echo "Missing --input" >&2
+  exit 2
+fi
+exec ${shellQuote(parakeetPath)} transcribe "$INPUT" --model-dir "${STT_MODEL_DIR}" --format json
+`;
+  fs.mkdirSync(path.dirname(STT_HELPER_FILE), { recursive: true });
+  fs.writeFileSync(STT_HELPER_FILE, content, { mode: 0o755 });
+  try { fs.chmodSync(STT_HELPER_FILE, 0o755); } catch {}
+}
+
+function runCommand(command, args, { timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`${path.basename(command)} timed out.`));
+    }, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error((stderr || stdout || `${command} exited with code ${code}`).trim()));
+    });
+  });
+}
+
 function commandExists(command) {
+  return Boolean(findCommand(command));
+}
+
+function findCommand(command) {
   if (!command) return false;
-  if (command.includes("/") || command.includes(path.sep)) return isExecutable(command);
+  if (command.includes("/") || command.includes(path.sep)) return isExecutable(command) ? command : "";
   const paths = String(process.env.PATH || "").split(path.delimiter).filter(Boolean);
-  return paths.some((dir) => isExecutable(path.join(dir, command)));
+  for (const dir of paths) {
+    const candidate = path.join(dir, command);
+    if (isExecutable(candidate)) return candidate;
+  }
+  return "";
 }
 
 function isExecutable(file) {
@@ -145,4 +254,8 @@ function extensionForMime(mimeType) {
   if (mime.includes("mp4") || mime.includes("m4a") || mime.includes("aac")) return "m4a";
   if (mime.includes("ogg")) return "ogg";
   return "webm";
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
 }

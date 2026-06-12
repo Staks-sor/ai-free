@@ -527,9 +527,12 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     attachBtn.addEventListener("click", () => fileInput.click());
 
-    let voiceRecorder = null;
+    let voiceAudioContext = null;
+    let voiceSource = null;
+    let voiceProcessor = null;
     let voiceStream = null;
     let voiceChunks = [];
+    let voiceSampleRate = 44100;
     let voiceRecording = false;
 
     voiceBtn.addEventListener("click", () => {
@@ -541,23 +544,30 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     });
 
     async function startVoiceRecording() {
-      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!navigator.mediaDevices?.getUserMedia || !AudioContextClass) {
         throw new Error(t("composer.voiceUnsupported"));
       }
-      const status = await api("/api/voice/status");
-      if (!status.helperAvailable) {
-        throw new Error(t("composer.voiceMissing", { path: status.helper || "" }));
+      let status = await api("/api/voice/status");
+      if (!status.helperAvailable || !status.modelAvailable) {
+        setStatus(t("composer.voiceInstalling"));
+        status = await api("/api/voice/install", { method: "POST" });
+        if (!status.helperAvailable || !status.modelAvailable) {
+          throw new Error(t("composer.voiceMissing", { path: status.helper || "" }));
+        }
       }
       voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       voiceChunks = [];
-      voiceRecorder = new MediaRecorder(voiceStream);
-      voiceRecorder.addEventListener("dataavailable", (event) => {
-        if (event.data && event.data.size > 0) voiceChunks.push(event.data);
-      });
-      voiceRecorder.addEventListener("stop", () => {
-        finishVoiceRecording().catch((error) => setStatus(error.message, true));
-      });
-      voiceRecorder.start();
+      voiceAudioContext = new AudioContextClass();
+      voiceSampleRate = voiceAudioContext.sampleRate || 44100;
+      voiceSource = voiceAudioContext.createMediaStreamSource(voiceStream);
+      voiceProcessor = voiceAudioContext.createScriptProcessor(4096, 1, 1);
+      voiceProcessor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        voiceChunks.push(new Float32Array(input));
+      };
+      voiceSource.connect(voiceProcessor);
+      voiceProcessor.connect(voiceAudioContext.destination);
       voiceRecording = true;
       voiceBtn.classList.add("active");
       voiceBtn.textContent = t("composer.voiceStop");
@@ -565,20 +575,28 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     }
 
     function stopVoiceRecording() {
-      if (!voiceRecorder || voiceRecorder.state === "inactive") return;
-      voiceRecorder.stop();
+      if (!voiceRecording) return;
+      finishVoiceRecording().catch((error) => setStatus(error.message, true));
     }
 
     async function finishVoiceRecording() {
       voiceRecording = false;
       voiceBtn.classList.remove("active");
       voiceBtn.textContent = t("composer.voice");
+      if (voiceProcessor) {
+        voiceProcessor.disconnect();
+        voiceProcessor.onaudioprocess = null;
+      }
+      if (voiceSource) voiceSource.disconnect();
       if (voiceStream) {
         for (const track of voiceStream.getTracks()) track.stop();
       }
+      if (voiceAudioContext) await voiceAudioContext.close().catch(() => {});
+      voiceProcessor = null;
+      voiceSource = null;
       voiceStream = null;
-      const blob = new Blob(voiceChunks, { type: voiceRecorder?.mimeType || "audio/webm" });
-      voiceRecorder = null;
+      voiceAudioContext = null;
+      const blob = encodeWavBlob(voiceChunks, voiceSampleRate);
       voiceChunks = [];
       if (!blob.size) {
         setStatus(t("composer.voiceNoSpeech"), true);
@@ -590,7 +608,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         method: "POST",
         body: {
           dataBase64,
-          mimeType: blob.type || "audio/webm",
+          mimeType: blob.type || "audio/wav",
           language: "auto",
         },
       });
@@ -601,6 +619,42 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
       insertComposerText(text);
       setStatus("");
+    }
+
+    function encodeWavBlob(chunks, sampleRate) {
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const pcm = new Float32Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        pcm.set(chunk, offset);
+        offset += chunk.length;
+      }
+      const buffer = new ArrayBuffer(44 + pcm.length * 2);
+      const view = new DataView(buffer);
+      writeAscii(view, 0, "RIFF");
+      view.setUint32(4, 36 + pcm.length * 2, true);
+      writeAscii(view, 8, "WAVE");
+      writeAscii(view, 12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeAscii(view, 36, "data");
+      view.setUint32(40, pcm.length * 2, true);
+      let pos = 44;
+      for (let i = 0; i < pcm.length; i += 1) {
+        const sample = Math.max(-1, Math.min(1, pcm[i]));
+        view.setInt16(pos, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        pos += 2;
+      }
+      return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    function writeAscii(view, offset, text) {
+      for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
     }
 
     function blobToBase64(blob) {
@@ -1884,47 +1938,56 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       heading.textContent = t("settings.voiceTitle");
       groupEl.appendChild(heading);
 
-      const modelRow = document.createElement("div");
-      modelRow.className = "settingsItem";
-      const modelText = document.createElement("div");
-      const modelName = document.createElement("div");
-      modelName.className = "name";
-      modelName.textContent = t("settings.voiceProvider");
-      const modelDesc = document.createElement("div");
-      modelDesc.className = "desc";
-      modelDesc.textContent = "Parakeet V3";
-      modelText.append(modelName, modelDesc);
-      modelRow.appendChild(modelText);
-      groupEl.appendChild(modelRow);
-
-      const runtimeRow = document.createElement("div");
-      runtimeRow.className = "settingsItem";
-      const runtimeText = document.createElement("div");
-      const runtimeName = document.createElement("div");
-      runtimeName.className = "name";
-      runtimeName.textContent = t("settings.voiceRuntime");
-      const runtimeDesc = document.createElement("div");
-      runtimeDesc.className = "desc";
-      runtimeDesc.textContent = t("app.loadingShort");
-      runtimeText.append(runtimeName, runtimeDesc);
+      const card = document.createElement("div");
+      card.className = "voiceStatusCard";
+      const header = document.createElement("div");
+      header.className = "voiceStatusHeader";
+      const title = document.createElement("div");
+      title.className = "name";
+      title.textContent = "Parakeet V3";
       const badge = document.createElement("span");
       badge.className = "riskBadge medium";
       badge.textContent = "...";
-      runtimeRow.append(runtimeText, badge);
-      groupEl.appendChild(runtimeRow);
-
+      header.append(title, badge);
+      const runtimeDesc = document.createElement("div");
+      runtimeDesc.className = "voicePath";
+      runtimeDesc.textContent = t("app.loadingShort");
       const hint = document.createElement("div");
-      hint.className = "apiModels";
+      hint.className = "desc";
       hint.textContent = t("settings.voiceInstallHint");
-      groupEl.appendChild(hint);
+      const installBtn = document.createElement("button");
+      installBtn.type = "button";
+      installBtn.className = "apiKeyBtn";
+      installBtn.textContent = t("settings.createKey");
+      installBtn.addEventListener("click", async () => {
+        installBtn.disabled = true;
+        badge.textContent = "...";
+        runtimeDesc.textContent = t("composer.voiceInstalling");
+        try {
+          const status = await api("/api/voice/install", { method: "POST" });
+          applyVoiceStatus(status);
+        } catch (error) {
+          runtimeDesc.textContent = error.message;
+          badge.textContent = t("settings.voiceMissing");
+          badge.className = "riskBadge medium";
+        } finally {
+          installBtn.disabled = false;
+        }
+      });
+      card.append(header, runtimeDesc, hint, installBtn);
+      groupEl.appendChild(card);
       target.appendChild(groupEl);
 
+      function applyVoiceStatus(status) {
+        runtimeDesc.textContent = status.helper || "";
+        const ready = status.helperAvailable && status.modelAvailable;
+        badge.textContent = ready ? t("settings.voiceReady") : t("settings.voiceMissing");
+        badge.className = "riskBadge " + (ready ? "low" : "medium");
+        installBtn.textContent = ready ? t("settings.keyCreated") : t("settings.createKey");
+      }
+
       api("/api/voice/status")
-        .then((status) => {
-          runtimeDesc.textContent = status.helper || "";
-          badge.textContent = status.helperAvailable ? t("settings.voiceReady") : t("settings.voiceMissing");
-          badge.className = "riskBadge " + (status.helperAvailable ? "low" : "medium");
-        })
+        .then(applyVoiceStatus)
         .catch((error) => {
           runtimeDesc.textContent = error.message;
           badge.textContent = t("settings.voiceMissing");
