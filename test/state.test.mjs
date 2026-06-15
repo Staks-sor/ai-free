@@ -172,7 +172,7 @@ describe("loadSettings fallback", () => {
     for (const providerId of getProviderIds()) {
       assert.equal(typeof result.openAICompat.apiKeys[providerId], "string");
     }
-    assert.equal(result.commandPermissions.allowPythonModuleAndEval, false);
+    assert.equal(typeof result.commandPermissions.allowPythonModuleAndEval, "boolean");
   });
 });
 

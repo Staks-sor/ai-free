@@ -106,6 +106,8 @@ export const language = {
     "composer.voice": "🎙 आवाज़",
     "composer.voiceTitle": "आवाज़ रिकॉर्ड करें और transcript को संदेश में डालें",
     "composer.voiceStop": "■ रोकें",
+    "composer.stop": "■",
+    "composer.stopTitle": "निष्पादन रोकें",
     "composer.voiceInstalling": "Parakeet V3 install हो रहा है। इसमें कुछ मिनट लग सकते हैं...",
     "composer.voiceRecording": "आवाज़ रिकॉर्ड हो रही है...",
     "composer.voiceTranscribing": "आवाज़ transcribe हो रही है...",

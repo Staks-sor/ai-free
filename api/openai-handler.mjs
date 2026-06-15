@@ -27,6 +27,9 @@ import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/deepseek/client.mjs";
 import { parseModelToolCalls } from "./tool-calls.mjs";
+import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
+import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
+import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
 
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.
 let qwenClient = null;
@@ -65,6 +68,23 @@ async function getDeepSeekClient() {
     debug: Boolean(process.env.API_DEBUG),
   });
   return deepseekClient;
+}
+
+let chatgptClient = null;
+async function getChatGPTClient() {
+  if (chatgptClient) return chatgptClient;
+  const auth = readChatGPTAuth(CHATGPT_AUTH_FILE);
+  if (!auth?.accessToken) {
+    throw new Error("ChatGPT не подключён. Импортируйте сессию или запустите npm run login-chatgpt");
+  }
+  chatgptClient = new ChatGPTChatClient({
+    accessToken: auth.accessToken,
+    cookies: auth.cookies,
+    cookieHeader: auth.cookieHeader,
+    userAgent: auth.userAgent,
+    debug: Boolean(process.env.API_DEBUG),
+  });
+  return chatgptClient;
 }
 
 export async function handleRequest(req, res) {
@@ -190,6 +210,17 @@ async function handleChatCompletions(req, res) {
         modelType: mapping.model,
         thinkingEnabled: thinking,
         searchEnabled: search,
+      });
+      return sendJson(res, toOpenAIResponse(modelName, result.text));
+    }
+    if (mapping.provider === "chatgpt") {
+      const client = await getChatGPTClient();
+      if (body.stream === true) {
+        return handleChatGPTStream(client, prompt, modelName, mapping.model, res);
+      }
+      const result = await client.complete({
+        prompt,
+        model: mapping.model,
       });
       return sendJson(res, toOpenAIResponse(modelName, result.text));
     }
@@ -445,6 +476,14 @@ async function completeText(mapping, prompt, { thinking = false, search = false 
       modelType: mapping.model,
       thinkingEnabled: thinking,
       searchEnabled: search,
+    });
+    return result.text || "";
+  }
+  if (mapping.provider === "chatgpt") {
+    const client = await getChatGPTClient();
+    const result = await client.complete({
+      prompt,
+      model: mapping.model,
     });
     return result.text || "";
   }
@@ -728,6 +767,29 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res, {
   } catch (e) {
     clearInterval(heartbeat);
     console.error("[API] Qwen stream error:", e.message);
+    sendStreamError(res, modelName, e.message);
+  }
+}
+
+// Обработка streaming-запроса к ChatGPT.
+async function handleChatGPTStream(client, prompt, modelName, model, res) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const parser = new StreamParser(modelName, res);
+  try {
+    await client.complete({
+      prompt,
+      model,
+      onText: (textDelta) => parser.onText(textDelta),
+    });
+    parser.onEnd();
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (e) {
+    console.error("[API] ChatGPT stream error:", e.message);
     sendStreamError(res, modelName, e.message);
   }
 }

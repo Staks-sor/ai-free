@@ -43,6 +43,18 @@ export async function run() {
     return;
   }
 
+  if (args.loginChatGPT) {
+    const { loginChatGPTAndSave } = await import("../providers/chatgpt/browser-login.mjs");
+    await loginChatGPTAndSave();
+    return;
+  }
+
+  if (args.importChatGPTFile) {
+    const { importChatGPTFromJson } = await import("../providers/chatgpt/browser-login.mjs");
+    await importChatGPTFromJson(path.resolve(args.importChatGPTFile));
+    return;
+  }
+
   if (args.acp) {
     const { runAcpServer } = await import("../acp/server.mjs");
     await runAcpServer();

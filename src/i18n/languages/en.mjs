@@ -106,6 +106,8 @@ export const language = {
     "composer.voice": "🎙 Voice",
     "composer.voiceTitle": "Record voice and insert the transcript into the message",
     "composer.voiceStop": "■ Stop",
+    "composer.stop": "■",
+    "composer.stopTitle": "Stop execution",
     "composer.voiceInstalling": "Installing Parakeet V3. This can take a few minutes...",
     "composer.voiceRecording": "Recording voice...",
     "composer.voiceTranscribing": "Transcribing voice...",

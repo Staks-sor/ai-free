@@ -24,6 +24,11 @@ export async function runCodeTask(
   const maxTransientTextRetries = resolveTransientTextRetries(options.transientTextRetries);
 
   for (let step = 0; step < maxToolSteps; step += 1) {
+    if (options.signal?.aborted) {
+      const message = "⏹ Остановлено пользователем.";
+      options.onAssistant?.(message);
+      return { parentMessageId: parent, message, toolLogs, stopped: true };
+    }
     let transientTextRetries = 0;
 
     for (;;) {
@@ -85,8 +90,18 @@ export async function runCodeTask(
         return { parentMessageId: parent, message, toolLogs };
       }
 
+      const clarifications = typeof options.takeInterrupts === "function"
+        ? options.takeInterrupts()
+        : [];
+      const clarificationText = Array.isArray(clarifications) && clarifications.length
+        ? `\n\nImportant user clarification received while you were working:\n${clarifications
+          .map((item, index) => `${index + 1}. ${item}`)
+          .join("\n")}\nUpdate your plan and next action to follow this clarification.`
+        : "";
+
       prompt = `Tool result for ${call.tool}:
 ${JSON.stringify(toolResult, null, 2)}
+${clarificationText}
 
 Continue the task. If more file access is needed, request one tool call as JSON. If finished, call finish.`;
       break;

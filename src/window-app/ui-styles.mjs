@@ -1134,6 +1134,19 @@ export const STYLES = `
       color: #fca5a5;
       border: 1px solid rgba(251, 146, 60, 0.3);
     }
+    .providerBadge.chatgpt {
+      background: rgba(16, 185, 129, 0.14);
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.38);
+    }
+    .chatImage {
+      display: block;
+      max-width: min(420px, 100%);
+      margin-top: 8px;
+      border-radius: 10px;
+      border: 1px solid var(--border, rgba(255,255,255,0.1));
+      cursor: zoom-in;
+    }
     @keyframes taskSpin { to { transform: rotate(360deg); } }
     .chatItem.running .chatTitle { color: #cbd5ff; font-weight: 700; }
 
@@ -1143,6 +1156,7 @@ export const STYLES = `
       gap: 8px;
     }
     .providerOption {
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: flex-start;
@@ -1160,15 +1174,46 @@ export const STYLES = `
       border-color: rgba(255, 255, 255, 0.2);
       background: rgba(255, 255, 255, 0.05);
     }
+    .providerOption.active {
+      border-width: 2px;
+      padding: 11px;
+      outline: 2px solid rgba(255, 255, 255, 0.08);
+      outline-offset: 2px;
+    }
+    .providerOption.active::after {
+      content: "Выбрано";
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.4;
+      color: #ffffff;
+      background: var(--accent);
+      box-shadow: 0 4px 12px var(--shadow-soft);
+    }
     .providerOption.active.deepseek {
-      background: rgba(77, 124, 255, 0.12);
-      border-color: rgba(77, 124, 255, 0.5);
-      box-shadow: 0 0 12px rgba(77, 124, 255, 0.15);
+      background: rgba(77, 124, 255, 0.18);
+      border-color: rgba(77, 124, 255, 0.85);
+      box-shadow: 0 0 0 1px rgba(77, 124, 255, 0.20), 0 10px 24px rgba(77, 124, 255, 0.16);
     }
     .providerOption.active.qwen {
-      background: rgba(251, 146, 60, 0.12);
-      border-color: rgba(251, 146, 60, 0.5);
-      box-shadow: 0 0 12px rgba(251, 146, 60, 0.15);
+      background: rgba(251, 146, 60, 0.18);
+      border-color: rgba(251, 146, 60, 0.85);
+      box-shadow: 0 0 0 1px rgba(251, 146, 60, 0.20), 0 10px 24px rgba(251, 146, 60, 0.16);
+    }
+    .providerOption.active.qwen::after {
+      background: #ea7a1f;
+    }
+    .providerOption.active.chatgpt {
+      background: rgba(16, 185, 129, 0.18);
+      border-color: rgba(16, 185, 129, 0.88);
+      box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.22), 0 10px 24px rgba(16, 185, 129, 0.16);
+    }
+    .providerOption.active.chatgpt::after {
+      background: #0f9f72;
     }
     .providerOption.disabled {
       opacity: 0.4;
@@ -1189,6 +1234,7 @@ export const STYLES = `
       gap: 8px;
     }
     .modeOption {
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: flex-start;
@@ -1207,9 +1253,27 @@ export const STYLES = `
       background: rgba(255, 255, 255, 0.05);
     }
     .modeOption.active {
-      background: rgba(77, 124, 255, 0.12);
-      border-color: rgba(77, 124, 255, 0.5);
-      box-shadow: 0 0 12px rgba(77, 124, 255, 0.15);
+      border-width: 2px;
+      padding: 11px;
+      background: rgba(77, 124, 255, 0.18);
+      border-color: rgba(77, 124, 255, 0.85);
+      outline: 2px solid rgba(255, 255, 255, 0.08);
+      outline-offset: 2px;
+      box-shadow: 0 0 0 1px rgba(77, 124, 255, 0.20), 0 10px 24px rgba(77, 124, 255, 0.16);
+    }
+    .modeOption.active::after {
+      content: "Выбрано";
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1.4;
+      color: #ffffff;
+      background: var(--accent);
+      box-shadow: 0 4px 12px var(--shadow-soft);
     }
     .modeOptionTitle {
       font-weight: 700;
@@ -1315,6 +1379,28 @@ export const STYLES = `
       opacity: 0.55;
       cursor: not-allowed;
     }
+    .sendBtn.hidden { display: none; }
+    .stopBtn {
+      height: 36px;
+      width: 36px;
+      border: none;
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      color: #fff;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      box-shadow: 0 4px 10px rgba(239, 68, 68, 0.25);
+      transition: all 150ms ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .stopBtn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px rgba(239, 68, 68, 0.35);
+    }
+    .stopBtn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .stopBtn.hidden { display: none; }
     .status {
       color: var(--muted);
       font-size: 12px;

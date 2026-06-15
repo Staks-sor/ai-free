@@ -448,6 +448,37 @@ describe("runCodeTask fatal tool errors", () => {
   });
 });
 
+describe("runCodeTask running clarifications", () => {
+  it("injects pending user clarification after a tool result", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    const prompts = [];
+    let calls = 0;
+    try {
+      const fakeClient = {
+        async complete(options) {
+          calls += 1;
+          prompts.push(options.prompt);
+          if (calls === 1) {
+            return {
+              text: '{"tool":"list_files","path":".","maxDepth":0,"maxEntries":20}',
+              lastAssistantMessageId: "m1",
+            };
+          }
+          return { text: '{"tool":"finish","message":"done"}', lastAssistantMessageId: "m2" };
+        },
+      };
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "inspect", null, {
+        takeInterrupts: () => ["не показывай шаги, дай только итог"],
+      });
+      assert.equal(result.message, "done");
+      assert.match(prompts[1], /Important user clarification/);
+      assert.match(prompts[1], /не показывай шаги/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("runCodeTask transient text retries", () => {
   it("retries transient quota text and continues the same step", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));

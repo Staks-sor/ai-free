@@ -71,6 +71,29 @@ export const PROVIDER_CATALOG = {
       { id: "qwen3-coder-plus", label: "Qwen3 Coder", sub: "coding model" },
     ],
   },
+  chatgpt: {
+    id: "chatgpt",
+    label: "ChatGPT",
+    icon: "GP",
+    sub: "chatgpt.com",
+    defaultMode: "default",
+    defaultModel: "gpt-5.5",
+    modes: [
+      {
+        id: "default",
+        title: "ChatGPT Web",
+        sub: "модели chatgpt.com сессии",
+        model: "gpt-5.5",
+      },
+    ],
+    models: [
+      { id: "gpt-5.5", label: "GPT-5.5", apiModel: "gpt-5.5" },
+      { id: "gpt-4o", label: "GPT-4o", apiModel: "gpt-4o" },
+      { id: "gpt-4o-mini", label: "GPT-4o mini", apiModel: "gpt-4o-mini" },
+      { id: "o1-mini", label: "o1 mini", apiModel: "o1-mini", reasoning: true },
+      { id: "o3-mini", label: "o3 mini", apiModel: "o3-mini", reasoning: true },
+    ],
+  },
 };
 
 export const OPENAI_COMPAT_MODELS = Object.values(PROVIDER_CATALOG).flatMap((provider) =>

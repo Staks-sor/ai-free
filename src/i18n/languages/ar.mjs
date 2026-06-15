@@ -106,6 +106,8 @@ export const language = {
     "composer.voice": "🎙 صوت",
     "composer.voiceTitle": "تسجيل الصوت وإدراج التفريغ في الرسالة",
     "composer.voiceStop": "■ إيقاف",
+    "composer.stop": "■",
+    "composer.stopTitle": "إيقاف التنفيذ",
     "composer.voiceInstalling": "جارٍ تثبيت Parakeet V3. قد يستغرق ذلك بضع دقائق...",
     "composer.voiceRecording": "جارٍ تسجيل الصوت...",
     "composer.voiceTranscribing": "جارٍ تفريغ الصوت...",

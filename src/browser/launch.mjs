@@ -5,22 +5,29 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
-// Поднять persistent Chromium-профиль для DeepSeek. headless=false — видимое окно,
-// true — для тихого refresh из профиля. Чистит stale SingletonLock-файлы от падений.
-export async function launchPersistentDeepSeekContext(chromium, profileDir, headless) {
+// Поднять persistent Chromium-профиль для DeepSeek/Qwen/ChatGPT. headless=false —
+// видимое окно, true — для тихого refresh из профиля. Чистит stale SingletonLock-файлы от падений.
+export async function launchPersistentDeepSeekContext(chromium, profileDir, headless, overrides = {}) {
   fs.mkdirSync(profileDir, { recursive: true });
   const options = {
     headless,
     viewport: null,
     args: ["--disable-blink-features=AutomationControlled"],
+    ...overrides,
   };
+  const preferredChannel = Object.prototype.hasOwnProperty.call(overrides, "channel")
+    ? overrides.channel
+    : "chrome";
 
   const tryLaunch = async () => {
     try {
-      return await chromium.launchPersistentContext(profileDir, {
-        ...options,
-        channel: "chrome",
-      });
+      if (preferredChannel) {
+        return await chromium.launchPersistentContext(profileDir, {
+          ...options,
+          channel: preferredChannel,
+        });
+      }
+      return await chromium.launchPersistentContext(profileDir, options);
     } catch (chromeError) {
       try {
         return await chromium.launchPersistentContext(profileDir, options);
@@ -94,6 +101,20 @@ export function openAppWindow(url) {
 // Поиск Chrome/Chromium/Edge на Win/Linux. Возвращает абсолютный путь или null.
 // Порядок: настоящий Chrome → Chromium → Edge.
 export function findChromeBinary() {
+  if (process.platform === "darwin") {
+    const candidates = [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      path.join(osHomedirSafe(), "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      path.join(osHomedirSafe(), "Applications", "Chromium.app", "Contents", "MacOS", "Chromium"),
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    ];
+    for (const candidate of candidates) {
+      try { if (fs.existsSync(candidate)) return candidate; } catch {}
+    }
+    return null;
+  }
+
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA || "";
     const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
@@ -131,6 +152,14 @@ export function findChromeBinary() {
     } catch {}
   }
   return null;
+}
+
+function osHomedirSafe() {
+  try {
+    return process.env.HOME || "";
+  } catch {
+    return "";
+  }
 }
 
 export function fallbackOpen(url) {

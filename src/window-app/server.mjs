@@ -22,7 +22,7 @@ import {
   saveSettings,
 } from "../state/settings.mjs";
 import { conversationList, makeConversationTitle, shouldAutoTitle } from "../state/conversations.mjs";
-import { startTask, isRunning, getRunningIds } from "./task-runner.mjs";
+import { startTask, isRunning, getRunningIds, stopTask } from "./task-runner.mjs";
 import { getStateFile, loadWindowState, saveWindowState } from "../state/window-state.mjs";
 import { LANGUAGES, getLanguageMeta } from "../i18n/index.mjs";
 import { getLocalizedAgentRoles } from "../i18n/agent-roles.mjs";
@@ -67,6 +67,7 @@ export async function runWindowApp({
   // Lazy init Qwen-клиента + авто-relogin (как DeepSeek AuthManager).
   let qwenClient = null;
   let qwenAuthManager = null;
+  let chatGPTClient = null;
 
   async function getQwenAuthManager() {
     if (!qwenAuthManager) {
@@ -102,6 +103,98 @@ export async function runWindowApp({
     const auth = await ensureQwenAuth();
     qwenClient = await buildQwenClientFromAuth(auth);
     return qwenClient;
+  }
+
+  async function refreshChatGPTAuthFromOpenBrowser() {
+    const { isChatGPTBrowserProxyActive, syncChatGPTAuthFromActiveProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+    if (!isChatGPTBrowserProxyActive()) return;
+    try {
+      await syncChatGPTAuthFromActiveProxy();
+    } catch {}
+  }
+
+  async function ensureChatGPTAuth({ forceVisible = false } = {}) {
+    const { CHATGPT_AUTH_FILE } = await import("../providers/chatgpt/config.mjs");
+    const { readChatGPTAuth } = await import("../providers/chatgpt/auth-files.mjs");
+    const existing = readChatGPTAuth(CHATGPT_AUTH_FILE);
+    if (existing?.accessToken && !forceVisible) {
+      return existing;
+    }
+    if (!forceVisible) {
+      const { isChatGPTBrowserProxyActive, syncChatGPTAuthFromActiveProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+      if (isChatGPTBrowserProxyActive()) {
+        const synced = await syncChatGPTAuthFromActiveProxy();
+        if (synced?.accessToken) return synced;
+      }
+    }
+    const { loginChatGPTAndSave } = await import("../providers/chatgpt/browser-login.mjs");
+    await loginChatGPTAndSave(CHATGPT_AUTH_FILE);
+    const fresh = readChatGPTAuth(CHATGPT_AUTH_FILE);
+    if (!fresh?.accessToken) {
+      throw new Error("ChatGPT authorization did not return an access token. Войди заново и дождись открытия обычного чата ChatGPT.");
+    }
+    return fresh;
+  }
+
+  async function buildChatGPTClientFromAuth(auth) {
+    const { ChatGPTChatClient } = await import("../providers/chatgpt/client.mjs");
+    return new ChatGPTChatClient({
+      accessToken: auth.accessToken,
+      cookies: auth.cookies,
+      cookieHeader: auth.cookieHeader,
+      userAgent: auth.userAgent,
+      debug: Boolean(process.env.DEEPSEEK_DEBUG_CHATGPT),
+    });
+  }
+
+  async function getOrCreateChatGPTClient({ forceRebuild = false } = {}) {
+    if (chatGPTClient && !forceRebuild) return chatGPTClient;
+    const auth = await ensureChatGPTAuth();
+    chatGPTClient = await buildChatGPTClientFromAuth(auth);
+    return chatGPTClient;
+  }
+
+  function isChatGPTAuthError(error) {
+    const message = String(error?.message || error || "");
+    if (/unusual activity/i.test(message)) return false;
+    return /access token is missing|HTTP 401|unauthorized|not logged in|authentication/i.test(message);
+  }
+
+  async function chatGPTApiCall(fn) {
+    let client = await getOrCreateChatGPTClient();
+    try {
+      return await fn(client);
+    } catch (error) {
+      if (!isChatGPTAuthError(error)) throw error;
+      console.log("[chatgpt] auth error, reloading browser session…");
+      const { resetChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+      resetChatGPTBrowserProxy();
+      chatGPTClient = null;
+      client = await getOrCreateChatGPTClient({ forceRebuild: true });
+      try {
+        return await fn(client);
+      } catch (retryError) {
+        if (!isChatGPTAuthError(retryError)) throw retryError;
+        console.log("[chatgpt] reload failed, opening login window…");
+        resetChatGPTBrowserProxy();
+        chatGPTClient = null;
+        const fresh = await ensureChatGPTAuth({ forceVisible: true });
+        client = await buildChatGPTClientFromAuth(fresh);
+        chatGPTClient = client;
+        return fn(client);
+      }
+    }
+  }
+
+  // Прогрев веб-сессии перед длительной фоновой задачей (code-agent). Если сессия
+  // слетела, chatGPTApiCall сам откроет окно входа и обновит её — иначе агент упал бы
+  // с "not logged in" посреди работы, без шанса переавторизоваться.
+  async function ensureChatGPTSessionReady() {
+    await chatGPTApiCall(async () => {
+      const { getChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+      const proxy = await getChatGPTBrowserProxy({ debug: Boolean(process.env.DEEPSEEK_DEBUG_CHATGPT) });
+      await proxy.ensureReady();
+    });
   }
 
   function isQwenTransportError(error) {
@@ -176,7 +269,7 @@ export async function runWindowApp({
       : getProviderDefaultModel(provider, mode);
   }
 
-  async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}) {
+  async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}, signal = null) {
     const edges = state.pipeline?.edges || [];
     const queue = [{ conversationId: startConversationId, input: initialPrompt, sourceTitle: "User", depth: 0 }];
     const visited = new Set();
@@ -184,6 +277,7 @@ export async function runWindowApp({
     let steps = 0;
 
     while (queue.length && steps < maxSteps) {
+      if (signal?.aborted) break;
       const item = queue.shift();
       const conversation = state.conversations.find((candidate) => candidate.id === item.conversationId);
       if (!conversation) continue;
@@ -287,6 +381,22 @@ export async function runWindowApp({
       return cleanText || "[empty]";
     }
 
+    if (provider === "chatgpt") {
+      // Шаг цепочки — в свежем веб-диалоге (conversationId: null), чтобы не тянуть
+      // старый контекст чата. ChatGPT сам создаст новый разговор под этот шаг.
+      const result = await chatGPTApiCall((c) => c.complete({ prompt, conversationId: null }));
+      const cleanText = extractPipelineResult(String(result.text || "").trim());
+      conversation.messages.push({
+        role: "assistant",
+        content: cleanText,
+        createdAt: new Date().toISOString(),
+        roleId: role.id,
+        pipelineRun: true,
+      });
+      conversation.updatedAt = new Date().toISOString();
+      return cleanText;
+    }
+
     if (provider !== "deepseek") {
       throw new Error(`Pipeline provider is not supported: ${provider}`);
     }
@@ -386,6 +496,7 @@ export async function runWindowApp({
 
       // Список провайдеров + статус auth. UI рисует picker по этому ответу.
       if (req.method === "GET" && url.pathname === "/api/providers") {
+        await refreshChatGPTAuthFromOpenBrowser();
         const { listProviders } = await import("../providers/registry.mjs");
         const providers = listProviders().map((p) => ({
           id: p.id,
@@ -420,6 +531,9 @@ export async function runWindowApp({
             const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
             resetQwenBrowserProxy();
             qwenClient = null;
+          }
+          if (providerId === "chatgpt") {
+            chatGPTClient = null;
           }
           return sendJson(res, { ok: true, hasAuth: provider.hasAuth() });
         } catch (error) {
@@ -708,27 +822,31 @@ export async function runWindowApp({
           return sendJson(res, { error: `Путь существует, но это не папка: ${workspace}` }, 400);
         }
 
-        // Сессию DeepSeek создаём только для DeepSeek-чатов. У Qwen своя модель чатов,
-        // там нет понятия "сессии перед сообщением" в том же виде.
-        const _provider = String(body.provider || "deepseek");
-        const sessionId = _provider === "deepseek" ? await client.createSession() : null;
+        const allowedProviders = new Set(["deepseek", "qwen", "chatgpt"]);
+        const requestedProvider = String(body.provider || "deepseek");
+        if (!allowedProviders.has(requestedProvider)) {
+          return sendJson(res, { error: `Провайдер "${requestedProvider}" не поддерживается.` }, 400);
+        }
+        const provider = requestedProvider;
+        const { getProvider } = await import("../providers/registry.mjs");
+        if (provider === "chatgpt") {
+          await refreshChatGPTAuthFromOpenBrowser();
+        }
+        const providerEntry = getProvider(provider);
+        if (!providerEntry?.hasAuth()) {
+          return sendJson(res, { error: `Провайдер "${provider}" не авторизован. Сначала подключи его в окне создания чата.` }, 401);
+        }
+        // Сессию DeepSeek создаём только для DeepSeek-чатов. У Qwen и ChatGPT свои
+        // web-диалоги, которые появляются при первом сообщении.
+        const sessionId = provider === "deepseek" ? await client.createSession() : null;
         const now = new Date().toISOString();
         const rawTitle = String(body.title || "").trim();
-        // Провайдер и режим фиксируются при создании чата.
-        const allowedProviders = new Set(["deepseek", "qwen"]);
-        const provider = allowedProviders.has(String(body.provider)) ? String(body.provider) : "deepseek";
         // Допустимые режимы per-provider. Если режим не из набора — fallback на дефолт провайдера.
-        const PROVIDER_MODES = {
-          deepseek: {
-            allowed: getProviderCatalog("deepseek").modes.map((item) => item.id),
-            default: getProviderCatalog("deepseek").defaultMode,
-          },
-          qwen: {
-            allowed: getProviderCatalog("qwen").modes.map((item) => item.id),
-            default: getProviderCatalog("qwen").defaultMode,
-          },
+        const providerCatalog = getProviderCatalog(provider);
+        const modeCfg = {
+          allowed: providerCatalog.modes.map((item) => item.id),
+          default: providerCatalog.defaultMode,
         };
-        const modeCfg = PROVIDER_MODES[provider];
         const mode = modeCfg.allowed.includes(String(body.mode)) ? String(body.mode) : modeCfg.default;
         const requestedModel = String(body.model || "").trim();
         const model = await resolveProviderModel(provider, requestedModel, mode);
@@ -907,9 +1025,20 @@ export async function runWindowApp({
         });
       }
 
+      // Остановка выполнения чата (фоновая задача: /code-агент или pipeline).
+      const stopMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/stop$/);
+      if (req.method === "POST" && stopMatch) {
+        const conversation = state.conversations.find((item) => item.id === stopMatch[1]);
+        if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
+        const stopped = stopTask(conversation.id);
+        if (stopped) logConsole(`[stop] task stopped for ${conversation.id}`);
+        return sendJson(res, { conversation, stopped, running: isRunning(conversation.id) });
+      }
+
       const messageMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
       if (req.method === "POST" && messageMatch) {
-        const body = await readJsonBody(req);
+        // 30 МБ: ChatGPT-картинки приходят inline (base64) прямо в теле сообщения.
+        const body = await readJsonBody(req, 30_000_000);
         const conversation = state.conversations.find((item) => item.id === messageMatch[1]);
         if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
 
@@ -943,8 +1072,8 @@ export async function runWindowApp({
           conversation.updatedAt = new Date().toISOString();
           state.activeConversationId = conversation.id;
           saveWindowState(workspaceRoot, state);
-          startTask(conversation.id, "pipeline", async () => {
-            await runPipelineFromConversation(conversation.id, prompt, body);
+          startTask(conversation.id, "pipeline", async (signal) => {
+            await runPipelineFromConversation(conversation.id, prompt, body, signal);
           }, "Pipeline");
           return sendJson(res, { conversation, running: true });
         }
@@ -997,11 +1126,7 @@ export async function runWindowApp({
               }
 
               if (isRunning(conversation.id)) {
-                conversation.messages.push({
-                  role: "assistant",
-                  content: "⏳ В этом чате уже выполняется задача. Подожди завершения.",
-                  createdAt: new Date().toISOString(),
-                });
+                captureRunningClarification(conversation, prompt);
                 conversation.updatedAt = new Date().toISOString();
                 saveWindowState(workspaceRoot, state);
                 return sendJson(res, { conversation, running: true });
@@ -1023,11 +1148,13 @@ export async function runWindowApp({
               conversation.updatedAt = new Date().toISOString();
               saveWindowState(workspaceRoot, state);
 
-              startTask(conversation.id, "code", async () => {
+              startTask(conversation.id, "code", async (signal) => {
                 try {
                   logConsole(`[code] qwen started: ${summarizeForLog(task)}`);
                   const codeResult = await runCodeTask(adapter, baseOptions, workspacePath, task, parentId, {
+                    signal,
                     systemPrompt: hardwareMode ? createHardwareAgentPrompt() : "",
+                    takeInterrupts: () => takeRunningClarifications(conversation),
                     onTool: (_call, result, log) => {
                       captureInstallRequest(conversation, result);
                       captureQuestionRequest(conversation, result);
@@ -1094,6 +1221,167 @@ export async function runWindowApp({
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
             logConsole(`[chat] qwen failed: ${error.message}`);
+          }
+          return sendJson(res, { conversation });
+        }
+        if (convProvider === "chatgpt") {
+          const now = new Date().toISOString();
+          const isFirstUserMessage = !conversation.messages.some((message) => message.role === "user");
+          if (isFirstUserMessage && shouldAutoTitle(conversation)) {
+            conversation.title = makeConversationTitle(prompt);
+          }
+          conversation.messages.push({
+            role: "user",
+            content: prompt,
+            createdAt: now,
+          });
+          conversation.updatedAt = now;
+          state.activeConversationId = conversation.id;
+          saveWindowState(workspaceRoot, state);
+
+          const slashCode = prompt === "/code" || prompt.startsWith("/code ");
+          const coderMode = conversation.coderMode === true;
+          const hardwareMode = conversation.hardwareMode === true;
+          if (slashCode || coderMode || hardwareMode) {
+            const task = slashCode ? prompt.slice(5).trim() : prompt;
+            if (!task) {
+              conversation.messages.push({
+                role: "assistant",
+                content: "Напиши задачу после /code. Например: /code создай файл notes.txt с текстом hello",
+                createdAt: new Date().toISOString(),
+              });
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+              return sendJson(res, { conversation });
+            }
+
+            if (isRunning(conversation.id)) {
+              captureRunningClarification(conversation, prompt);
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+              return sendJson(res, { conversation, running: true });
+            }
+
+            try {
+              // Гарантируем живую веб-сессию: при слетевшей сессии откроется окно входа.
+              await ensureChatGPTSessionReady();
+              const chatGPTClient = await getOrCreateChatGPTClient();
+              // Картинки прикрепляются к первому шагу агента (через веб-композер ChatGPT).
+              const chatGPTCodeImages = Array.isArray(body.images)
+                ? body.images.filter((img) => img && img.dataBase64 && img.name)
+                : [];
+              const { createChatGPTAgentAdapter } = await import("../providers/chatgpt/agent-adapter.mjs");
+              const adapter = createChatGPTAgentAdapter(chatGPTClient, {
+                conversationId: conversation.sessionId || null,
+                images: chatGPTCodeImages,
+                onConversationId: (id) => {
+                  conversation.sessionId = id;
+                  saveWindowState(workspaceRoot, state);
+                },
+              });
+              const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
+              const chatGPTCodeUseSearch = body.search === true || (body.search !== false && searchEnabled);
+              const baseOptions = {
+                sessionId: conversation.sessionId,
+                searchEnabled: chatGPTCodeUseSearch,
+              };
+              const parentId = getCodeParentMessageId(conversation);
+              const progressLogs = [];
+              const progressMessage = createCodeProgressMessage(task);
+              conversation.messages.push(progressMessage);
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+
+              startTask(conversation.id, "code", async (signal) => {
+                try {
+                  logConsole(`[code] chatgpt started: ${summarizeForLog(task)}`);
+                  const codeResult = await runCodeTask(adapter, baseOptions, workspacePath, task, parentId, {
+                    signal,
+                    systemPrompt: hardwareMode ? createHardwareAgentPrompt() : "",
+                    takeInterrupts: () => takeRunningClarifications(conversation),
+                    onTool: (_call, result, log) => {
+                      captureInstallRequest(conversation, result);
+                      captureQuestionRequest(conversation, result);
+                      capturePermissionRequest(conversation, result);
+                      progressLogs.push(log);
+                      progressMessage.content = formatCodeProgressMessage(task, progressLogs);
+                      progressMessage.updatedAt = new Date().toISOString();
+                      conversation.updatedAt = progressMessage.updatedAt;
+                      saveWindowState(workspaceRoot, state);
+                    },
+                  });
+                  conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
+                  conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
+                  conversation.sessionId = adapter.getConversationId() || conversation.sessionId;
+                  const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
+                  progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+                  progressMessage.updatedAt = new Date().toISOString();
+                  if (toolText) logConsoleBlock("code tools", toolText);
+                  logConsoleBlock("assistant", codeResult.message);
+                  logConsole(`[code] chatgpt completed: ${codeResult.toolLogs.length} tool log(s)`);
+                } catch (err) {
+                  progressMessage.content = `⚠️ /code error: ${err.message}`;
+                  progressMessage.updatedAt = new Date().toISOString();
+                  logConsole(`[code] chatgpt failed: ${err.message}`);
+                }
+                conversation.updatedAt = new Date().toISOString();
+                saveWindowState(workspaceRoot, state);
+              }, "ChatGPT /code");
+
+              return sendJson(res, { conversation, running: true });
+            } catch (error) {
+              conversation.messages.push({
+                role: "assistant",
+                content: `⚠️ ChatGPT /code error: ${error.message}`,
+                createdAt: new Date().toISOString(),
+              });
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+              logConsole(`[code] chatgpt failed to start: ${error.message}`);
+              return sendJson(res, { conversation });
+            }
+          }
+
+          try {
+            const modelInfo = findProviderModel("chatgpt", conversation.model);
+            const chatGPTUseSearch = body.search === true || (body.search !== false && searchEnabled);
+            // Картинки ChatGPT обрабатывает сам (через веб-композер), не через DeepSeek.
+            const chatGPTImages = Array.isArray(body.images)
+              ? body.images.filter((img) => img && img.dataBase64 && img.name)
+              : [];
+            const result = await chatGPTApiCall((c) =>
+              c.complete({
+                prompt: chatGPTUseSearch ? withWebSearchInstruction(prompt) : prompt,
+                model: modelInfo?.apiModel || conversation.model || undefined,
+                conversationId: conversation.sessionId,
+                parentMessageId: conversation.parentMessageId,
+                images: chatGPTImages,
+              }),
+            );
+            conversation.sessionId = result.conversationId ?? conversation.sessionId;
+            conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
+            // ChatGPT мог сгенерировать картинку — сохраняем её в сообщении (data-URL).
+            const generatedImages = Array.isArray(result.images) ? result.images.filter(Boolean) : [];
+            const assistantMessage = {
+              role: "assistant",
+              content: result.text.trimEnd() || (generatedImages.length ? "" : "[empty]"),
+              createdAt: new Date().toISOString(),
+            };
+            if (generatedImages.length) assistantMessage.images = generatedImages;
+            conversation.messages.push(assistantMessage);
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+            logConsoleBlock("assistant", result.text || "[empty]");
+            logConsole(`[chat] chatgpt assistant response: ${String(result.text || "").length} char(s)`);
+          } catch (error) {
+            conversation.messages.push({
+              role: "assistant",
+              content: `⚠️ ChatGPT error: ${error.message}`,
+              createdAt: new Date().toISOString(),
+            });
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+            logConsole(`[chat] chatgpt failed: ${error.message}`);
           }
           return sendJson(res, { conversation });
         }
@@ -1168,11 +1456,7 @@ export async function runWindowApp({
           }
 
           if (isRunning(conversation.id)) {
-            conversation.messages.push({
-              role: "assistant",
-              content: "⏳ В этом чате уже выполняется задача. Подожди завершения.",
-              createdAt: new Date().toISOString(),
-            });
+            captureRunningClarification(conversation, prompt);
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
             return sendJson(res, { conversation, running: true });
@@ -1199,11 +1483,13 @@ export async function runWindowApp({
           conversation.updatedAt = new Date().toISOString();
           saveWindowState(workspaceRoot, state);
 
-          startTask(conversation.id, "code", async () => {
+          startTask(conversation.id, "code", async (signal) => {
             try {
               logConsole(`[code] deepseek started: ${summarizeForLog(task)}`);
               const codeResult = await runCodeTask(client, baseOptions, workspacePath, task, parentId, {
+                signal,
                 systemPrompt: dsHardwareMode ? createHardwareAgentPrompt() : "",
+                takeInterrupts: () => takeRunningClarifications(conversation),
                 onTool: (_call, result, log) => {
                   captureInstallRequest(conversation, result);
                   captureQuestionRequest(conversation, result);
@@ -1373,6 +1659,30 @@ function capturePermissionRequest(conversation, toolResult) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function captureRunningClarification(conversation, prompt) {
+  const now = new Date().toISOString();
+  conversation.messages.push({ role: "user", content: prompt, createdAt: now, interrupt: true });
+  conversation.messages.push({
+    role: "assistant",
+    content: "⚠️ Уточнение принято. Агент учтёт его на следующем шаге текущей задачи.",
+    createdAt: now,
+    interruptAck: true,
+  });
+  const pending = Array.isArray(conversation.pendingInterrupts) ? conversation.pendingInterrupts : [];
+  pending.push({ content: prompt, createdAt: now });
+  conversation.pendingInterrupts = pending.slice(-10);
+  conversation.updatedAt = now;
+}
+
+function takeRunningClarifications(conversation) {
+  const pending = Array.isArray(conversation.pendingInterrupts) ? conversation.pendingInterrupts : [];
+  if (!pending.length) return [];
+  conversation.pendingInterrupts = [];
+  return pending
+    .map((item) => String(item?.content || "").trim())
+    .filter(Boolean);
 }
 
 function approvedInstallRecipes() {

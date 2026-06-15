@@ -156,6 +156,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <button type="button" id="attachBtn" class="togglePill attachBtn" title="${t("composer.attachTitle")}">${t("composer.attach")}</button>
             <button type="button" id="voiceBtn" class="togglePill voiceBtn" title="${t("composer.voiceTitle")}">${t("composer.voice")}</button>
             <div class="composerSpacer"></div>
+            <button type="button" id="stopBtn" class="stopBtn hidden" title="${t("composer.stopTitle")}">${t("composer.stop")}</button>
             <button id="sendBtn" class="sendBtn" type="submit" disabled>↑</button>
           </div>
         </form>
@@ -215,6 +216,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const statusEl = document.getElementById("status");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    if (stopBtn) stopBtn.addEventListener("click", () => stopActiveConversation());
     const pipelinePanel = document.getElementById("pipelinePanel");
     const pipelineBody = document.getElementById("pipelineBody");
     const pipelinePanelBtn = document.getElementById("pipelinePanelBtn");
@@ -254,6 +257,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     async function openNewChatModal() {
       await refreshModelCatalog();
+      await refreshAvailableProviders();
       renderProviderPicker();
       renderModePickerForProvider();
       newFormError.classList.add("hidden");
@@ -443,6 +447,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const createFolder = newCreateFolder.checked;
       newFormError.classList.add("hidden");
       newFormError.textContent = "";
+      if (!availableProviders.includes(newChatSelectedProvider)) {
+        await connectProvider(newChatSelectedProvider);
+        if (!availableProviders.includes(newChatSelectedProvider)) {
+          newFormError.textContent = t("provider.tokenMissing", { id: newChatSelectedProvider });
+          newFormError.classList.remove("hidden");
+          return;
+        }
+      }
       setStatus(t("newChat.creating"));
       try {
         const data = await api("/api/conversations", {
@@ -979,7 +991,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       // Запускаем авторизацию ТОЛЬКО если кликнули по кнопке НЕавторизованного провайдера.
       // Если провайдер уже подключен, клик по зеленому бейджу просто выбирает его!
       const reconnectBtn = event.target.closest(".reconnectLink");
-      if (reconnectBtn && opt.dataset.authed !== "1") {
+      if (opt.dataset.authed !== "1") {
         event.stopPropagation();
         await connectProvider(id);
         return;
@@ -1051,26 +1063,36 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderConversation(activeConversation);
 
       try {
-        // Сначала заливаем картинки — получаем file_id для каждой.
-        // Загрузка + ожидание обработки (status=PENDING→SUCCESS) может занять
-        // 3-10 секунд на картинку, поэтому показываем индикатор прогресса.
+        // Картинки. ChatGPT обрабатывает их сам через веб-сессию — передаём inline,
+        // НЕ гоняя через DeepSeek. Для DeepSeek/Qwen — старый путь через /api/upload
+        // (получаем file_id для vision-completion).
         const refFileIds = [];
+        let inlineImages = [];
+        const sendProvider = activeConversation.provider || "deepseek";
         if (imageFiles.length) {
-          for (let i = 0; i < imageFiles.length; i += 1) {
-            const img = imageFiles[i];
-            const num = imageFiles.length > 1 ? \` (\${i + 1}/\${imageFiles.length})\` : "";
-            setStatus(t("composer.uploadingImage", { num, name: img.name }));
-            const result = await api("/api/upload", {
-              method: "POST",
-              body: {
-                name: img.name,
-                mimeType: img.mimeType,
-                dataBase64: img.dataBase64,
-                chatSessionId: activeConversation.sessionId,
-              },
-            });
-            if (!result.fileId) throw new Error(t("file.uploadMissingId"));
-            refFileIds.push(result.fileId);
+          if (sendProvider === "chatgpt") {
+            inlineImages = imageFiles.map((img) => ({
+              name: img.name,
+              mimeType: img.mimeType,
+              dataBase64: img.dataBase64,
+            }));
+          } else {
+            for (let i = 0; i < imageFiles.length; i += 1) {
+              const img = imageFiles[i];
+              const num = imageFiles.length > 1 ? \` (\${i + 1}/\${imageFiles.length})\` : "";
+              setStatus(t("composer.uploadingImage", { num, name: img.name }));
+              const result = await api("/api/upload", {
+                method: "POST",
+                body: {
+                  name: img.name,
+                  mimeType: img.mimeType,
+                  dataBase64: img.dataBase64,
+                  chatSessionId: activeConversation.sessionId,
+                },
+              });
+              if (!result.fileId) throw new Error(t("file.uploadMissingId"));
+              refFileIds.push(result.fileId);
+            }
           }
         }
 
@@ -1083,6 +1105,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             thinking: thinkingActive,
             search: searchActive,
             refFileIds,
+            images: inlineImages,
           },
         });
 
@@ -1205,6 +1228,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       appState.conversations = nextState.conversations;
       appState.runningTaskIds = nextState.runningTaskIds;
       renderList();
+      updateStopButton();
 
       // Если активный чат всё ещё в работе — подтягиваем его свежие сообщения
       // (могут добавляться tool-логи во время /code).
@@ -1467,7 +1491,23 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         role.textContent = message.role === "user" ? t("chat.you") : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
-        bubble.textContent = message.content;
+        if (message.content) {
+          const textEl = document.createElement("div");
+          textEl.textContent = message.content;
+          bubble.appendChild(textEl);
+        }
+        // Сгенерированные ChatGPT картинки (data-URL) — рендерим как <img>.
+        if (Array.isArray(message.images) && message.images.length) {
+          for (const src of message.images) {
+            if (typeof src !== "string" || !src) continue;
+            const img = document.createElement("img");
+            img.className = "chatImage";
+            img.src = src;
+            img.loading = "lazy";
+            img.addEventListener("click", () => window.open(src, "_blank"));
+            bubble.appendChild(img);
+          }
+        }
         row.append(role, bubble);
         messages.appendChild(row);
       }
@@ -1734,6 +1774,45 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       updateMessagePlaceholder();
       messageInput.disabled = !enabled || !activeConversation;
       sendBtn.disabled = !enabled || !activeConversation;
+      updateStopButton();
+    }
+
+    // Кнопка «Стоп» видна, когда в активном чате идёт фоновая задача (code/pipeline).
+    function isActiveConversationRunning() {
+      if (!activeConversation) return false;
+      const running = new Set(appState?.runningTaskIds || []);
+      return running.has(activeConversation.id);
+    }
+
+    function updateStopButton() {
+      if (!stopBtn) return;
+      const running = isActiveConversationRunning();
+      stopBtn.classList.toggle("hidden", !running);
+      if (running) {
+        sendBtn.classList.add("hidden");
+      } else {
+        sendBtn.classList.remove("hidden");
+      }
+    }
+
+    async function stopActiveConversation() {
+      if (!activeConversation) return;
+      const id = activeConversation.id;
+      stopBtn.disabled = true;
+      try {
+        const data = await api("/api/conversations/" + id + "/stop", { method: "POST" });
+        if (data.stopped) setStatus(t("composer.stopTitle"));
+        if (data.conversation && activeConversation && activeConversation.id === id) {
+          activeConversation = data.conversation;
+          renderConversation(activeConversation);
+        }
+        await loadState(id).catch(() => {});
+      } catch (e) {
+        setStatus(e.message, true);
+      } finally {
+        stopBtn.disabled = false;
+        updateStopButton();
+      }
     }
 
     function setupTheme() {

@@ -19,6 +19,8 @@
     "login": "node ./bin/deepseek.mjs --login",
     "login-qwen": "node ./bin/deepseek.mjs --login-qwen",
     "import-qwen": "node ./bin/deepseek.mjs --import-qwen",
+    "login-chatgpt": "node ./bin/deepseek.mjs --login-chatgpt",
+    "import-chatgpt": "node ./bin/deepseek.mjs --import-chatgpt",
     "welcome": "node ./bin/deepseek.mjs --welcome",
     "save-creds": "node ./bin/deepseek.mjs --save-creds",
     "check": "node ./bin/deepseek.mjs --check",
@@ -28,6 +30,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "patchright": "^1.60.2",
     "playwright": "^1.60.0"
   }
 }
