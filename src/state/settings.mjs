@@ -167,12 +167,19 @@ function normalizeProviderApiKeys(rawKeys = {}, legacyKey = "") {
   return normalized;
 }
 
+function normalizeCommandPermissions(rawPermissions = {}) {
+  return {
+    allowPythonModuleAndEval: rawPermissions?.allowPythonModuleAndEval === true,
+  };
+}
+
 export function loadSettings() {
   const fallback = {
     allowedCommands: Object.keys(COMMAND_CATALOG).filter(
       (cmd) => COMMAND_CATALOG[cmd].enabledByDefault,
     ),
     openAICompat: { apiKeys: emptyProviderApiKeys() },
+    commandPermissions: normalizeCommandPermissions(),
     ui: {
       language: normalizeLanguage(process.env.AI_FREE_LANG || DEFAULT_LANGUAGE),
       webSearchDefault: true,
@@ -191,6 +198,7 @@ export function loadSettings() {
       openAICompat: {
         apiKeys: normalizeProviderApiKeys(apiKeys, legacyKey),
       },
+      commandPermissions: normalizeCommandPermissions(raw?.commandPermissions),
       ui: {
         language: normalizeLanguage(raw?.ui?.language || fallback.ui.language),
         webSearchDefault: raw?.ui?.webSearchDefault !== false,
@@ -210,6 +218,10 @@ export function saveSettings(settings) {
   const valid = rawAllowed.filter((cmd) => COMMAND_CATALOG[cmd]);
   const requestedKeys = settings?.openAICompat?.apiKeys || {};
   const currentKeys = current.openAICompat?.apiKeys || {};
+  const commandPermissions = normalizeCommandPermissions({
+    ...(current.commandPermissions || {}),
+    ...(settings?.commandPermissions || {}),
+  });
   const nextKeys = emptyProviderApiKeys();
   for (const providerId of Object.keys(nextKeys)) {
     nextKeys[providerId] = typeof requestedKeys[providerId] === "string"
@@ -221,6 +233,7 @@ export function saveSettings(settings) {
     openAICompat: {
       apiKeys: nextKeys,
     },
+    commandPermissions,
     ui: {
       language: normalizeLanguage(settings?.ui?.language || current.ui?.language || DEFAULT_LANGUAGE),
       webSearchDefault: settings?.ui?.webSearchDefault === undefined

@@ -1473,6 +1473,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
       renderInstallRequest(conversation);
       renderQuestionRequest(conversation);
+      renderPermissionRequest(conversation);
       messages.scrollTop = messages.scrollHeight;
     }
 
@@ -1586,6 +1587,71 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       messageInput.value = text;
       messageInput.focus();
       autoGrowInput();
+    }
+
+    function renderPermissionRequest(conversation) {
+      const request = conversation.pendingPermissionRequest;
+      if (!request || request.status !== "pending") return;
+      const existing = document.getElementById("permissionRequestOverlay");
+      if (existing) existing.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "permissionRequestOverlay";
+      overlay.className = "settingsOverlay";
+      overlay.setAttribute("aria-hidden", "false");
+
+      const panel = document.createElement("div");
+      panel.className = "settingsPanel permissionPanel";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+
+      const head = document.createElement("div");
+      head.className = "settingsHead";
+      const title = document.createElement("h2");
+      title.textContent = request.title || t("permission.title");
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "iconBtn";
+      close.setAttribute("aria-label", t("app.close"));
+      close.textContent = "✕";
+      close.addEventListener("click", () => answerPermissionRequest("reject", overlay));
+      head.append(title, close);
+
+      const body = document.createElement("div");
+      body.className = "settingsBody";
+      const text = document.createElement("p");
+      text.className = "settingsHint";
+      text.textContent = request.description || t("permission.description");
+      const hint = document.createElement("div");
+      hint.className = "apiModels";
+      hint.textContent = t("permission.settingsHint");
+      const actions = document.createElement("div");
+      actions.className = "installActions";
+      const approve = document.createElement("button");
+      approve.type = "button";
+      approve.className = "iconBtn primaryBtn";
+      approve.textContent = t("permission.approve");
+      approve.addEventListener("click", () => answerPermissionRequest("approve", overlay));
+      const reject = document.createElement("button");
+      reject.type = "button";
+      reject.className = "iconBtn";
+      reject.textContent = t("permission.reject");
+      reject.addEventListener("click", () => answerPermissionRequest("reject", overlay));
+      actions.append(approve, reject);
+      body.append(text, hint, actions);
+      panel.append(head, body);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+    }
+
+    async function answerPermissionRequest(action, overlay) {
+      if (!activeConversation) return;
+      const data = await api("/api/conversations/" + activeConversation.id + "/permission-request/" + action, { method: "POST" });
+      activeConversation = data.conversation;
+      if (overlay) overlay.remove();
+      renderConversation(activeConversation);
+      renderList();
+      if (action === "approve") setStatus(t("permission.enabled"));
     }
 
     function renderInstallRequest(conversation) {
@@ -1769,7 +1835,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands, openAICompat, ui }) {
+    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui }) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
@@ -1787,6 +1853,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       content.className = "settingsTabContent";
       const tabs = [
         { id: "language", label: t("settings.tabLanguage") },
+        { id: "update", label: t("settings.tabUpdate") },
         { id: "api", label: t("settings.tabApi") },
         { id: "permissions", label: t("settings.tabPermissions") },
       ];
@@ -1812,7 +1879,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsBody.appendChild(shell);
 
       renderUiSettings(panels.language, ui, allowedCommands || []);
+      renderUpdateSettings(panels.update);
       renderOpenAISettings(panels.api, openAICompat);
+      renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
       for (const key of order) {
         const items = groups[key];
         if (!items.length) continue;
@@ -1958,7 +2027,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const installBtn = document.createElement("button");
       installBtn.type = "button";
       installBtn.className = "apiKeyBtn";
-      installBtn.textContent = t("settings.createKey");
+      installBtn.textContent = t("install.approve");
       installBtn.addEventListener("click", async () => {
         installBtn.disabled = true;
         badge.textContent = "...";
@@ -1983,7 +2052,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const ready = status.helperAvailable && status.modelAvailable;
         badge.textContent = ready ? t("settings.voiceReady") : t("settings.voiceMissing");
         badge.className = "riskBadge " + (ready ? "low" : "medium");
-        installBtn.textContent = ready ? t("settings.keyCreated") : t("settings.createKey");
+        installBtn.textContent = ready ? t("settings.voiceReady") : t("install.approve");
       }
 
       api("/api/voice/status")
@@ -1995,6 +2064,164 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         });
     }
 
+    function renderAgentPermissionSettings(target, commandPermissions) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup";
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.agentPermissions");
+      groupEl.appendChild(heading);
+
+      const row = document.createElement("label");
+      row.className = "settingsItem";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = commandPermissions.allowPythonModuleAndEval === true;
+
+      const textWrap = document.createElement("div");
+      const nameEl = document.createElement("div");
+      nameEl.className = "name";
+      nameEl.textContent = t("settings.allowPythonModuleAndEval");
+      const descEl = document.createElement("div");
+      descEl.className = "desc";
+      descEl.textContent = t("settings.allowPythonModuleAndEvalDesc");
+      textWrap.append(nameEl, descEl);
+
+      const badge = document.createElement("span");
+      badge.className = "riskBadge high";
+      badge.textContent = "high";
+
+      cb.addEventListener("change", async () => {
+        try {
+          await saveCommandPermissions({ allowPythonModuleAndEval: cb.checked });
+        } catch (err) {
+          cb.checked = !cb.checked;
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        }
+      });
+
+      row.append(cb, textWrap, badge);
+      groupEl.appendChild(row);
+      target.appendChild(groupEl);
+    }
+
+    function renderUpdateSettings(target) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup updateSettings";
+
+      const heading = document.createElement("h3");
+      heading.textContent = t("update.title");
+      groupEl.appendChild(heading);
+
+      const status = document.createElement("div");
+      status.className = "updateStatus";
+      status.textContent = t("update.notChecked");
+      groupEl.appendChild(status);
+
+      const meta = document.createElement("div");
+      meta.className = "updateMeta";
+      groupEl.appendChild(meta);
+
+      const actions = document.createElement("div");
+      actions.className = "updateActions";
+
+      const checkBtn = document.createElement("button");
+      checkBtn.type = "button";
+      checkBtn.className = "apiKeyBtn";
+      checkBtn.textContent = t("update.check");
+
+      const installBtn = document.createElement("button");
+      installBtn.type = "button";
+      installBtn.className = "apiKeyBtn primaryUpdateBtn";
+      installBtn.textContent = t("update.install");
+      installBtn.disabled = true;
+
+      actions.append(checkBtn, installBtn);
+      groupEl.appendChild(actions);
+
+      const note = document.createElement("div");
+      note.className = "apiModels";
+      note.textContent = t("update.note");
+      groupEl.appendChild(note);
+
+      let lastCheck = null;
+
+      function renderCheck(data) {
+        lastCheck = data;
+        meta.innerHTML = "";
+        const rows = [
+          [t("update.currentVersion"), data.currentVersion || "-"],
+          [t("update.latestVersion"), data.latestVersion || "-"],
+          [t("update.projectRoot"), data.projectRoot || "-"],
+        ];
+        for (const [label, value] of rows) {
+          const row = document.createElement("div");
+          row.className = "updateMetaRow";
+          const labelEl = document.createElement("span");
+          labelEl.textContent = label;
+          const valueEl = document.createElement("code");
+          valueEl.textContent = value;
+          row.append(labelEl, valueEl);
+          meta.appendChild(row);
+        }
+        if (data.error) {
+          status.textContent = t("update.checkFailed", { message: data.error });
+          status.className = "updateStatus error";
+        } else if (data.updateAvailable) {
+          status.textContent = t("update.available");
+          status.className = "updateStatus ready";
+        } else {
+          status.textContent = t("update.upToDate");
+          status.className = "updateStatus";
+        }
+        installBtn.disabled = !data.updateAvailable || !data.canUpdate;
+        if (data.updateAvailable && !data.canUpdate) {
+          status.textContent = t("update.gitRequired");
+          status.className = "updateStatus error";
+        }
+      }
+
+      async function check() {
+        checkBtn.disabled = true;
+        installBtn.disabled = true;
+        status.textContent = t("update.checking");
+        status.className = "updateStatus";
+        try {
+          renderCheck(await api("/api/update/check"));
+        } catch (err) {
+          status.textContent = t("update.checkFailed", { message: err.message });
+          status.className = "updateStatus error";
+        } finally {
+          checkBtn.disabled = false;
+        }
+      }
+
+      checkBtn.addEventListener("click", check);
+      installBtn.addEventListener("click", async () => {
+        if (!lastCheck?.updateAvailable) return;
+        if (!confirm(t("update.confirm"))) return;
+        checkBtn.disabled = true;
+        installBtn.disabled = true;
+        status.textContent = t("update.installing");
+        status.className = "updateStatus";
+        try {
+          const result = await api("/api/update/run", { method: "POST" });
+          renderCheck(result.after || lastCheck);
+          status.textContent = result.message || t("update.installed");
+          status.className = "updateStatus ready";
+          setStatus(status.textContent, false);
+        } catch (err) {
+          status.textContent = t("update.installFailed", { message: err.message });
+          status.className = "updateStatus error";
+          setStatus(status.textContent, true);
+        } finally {
+          checkBtn.disabled = false;
+        }
+      });
+
+      target.appendChild(groupEl);
+      check().catch(() => {});
+    }
+
     async function saveUiSettings(uiPatch, allowedCommands) {
       const currentUi = I18N.ui || {};
       const nextUi = { ...currentUi, ...uiPatch };
@@ -2004,6 +2231,16 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       });
       I18N.ui = saved.ui || nextUi;
       return saved;
+    }
+
+    async function saveCommandPermissions(commandPermissions) {
+      return api("/api/settings", {
+        method: "PUT",
+        body: {
+          allowedCommands: collectAllowedCommands(),
+          commandPermissions,
+        },
+      });
     }
 
     function renderOpenAISettings(target, info) {
@@ -2108,10 +2345,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     async function onToggle() {
       // Собираем актуальный список из всех чекбоксов и пушим на сервер.
-      const allCheckboxes = settingsBody.querySelectorAll('input[type="checkbox"][data-cmd]');
-      const selected = Array.from(allCheckboxes)
-        .filter((cb) => cb.checked)
-        .map((cb) => cb.dataset.cmd);
+      const selected = collectAllowedCommands();
       try {
         await api("/api/settings", { method: "PUT", body: { allowedCommands: selected } });
       } catch (err) {
@@ -2120,6 +2354,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         if (data) renderSettings(data);
         alert(t("settings.saveFailed", { message: err.message }));
       }
+    }
+
+    function collectAllowedCommands() {
+      const allCheckboxes = settingsBody.querySelectorAll('input[type="checkbox"][data-cmd]');
+      return Array.from(allCheckboxes)
+        .filter((cb) => cb.checked)
+        .map((cb) => cb.dataset.cmd);
     }
 
     function applySavedSidebarWidth() {

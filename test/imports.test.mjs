@@ -26,6 +26,7 @@ describe("module graph", () => {
       "../src/state/settings.mjs",
       "../src/state/window-state.mjs",
       "../src/state/conversations.mjs",
+      "../src/updater.mjs",
       "../src/window-app/http.mjs",
       "../src/window-app/server.mjs",
       "../src/window-app/ui-html.mjs",

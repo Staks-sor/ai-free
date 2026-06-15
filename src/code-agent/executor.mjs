@@ -8,10 +8,11 @@ import { spawn } from "node:child_process";
 import { COMMAND_CATALOG, loadSettings } from "../state/settings.mjs";
 
 export class WorkspaceToolError extends Error {
-  constructor(message, { fatal = false } = {}) {
+  constructor(message, { fatal = false, permissionRequest = null } = {}) {
     super(message);
     this.name = "WorkspaceToolError";
     this.fatal = fatal;
+    this.permissionRequest = permissionRequest;
   }
 }
 
@@ -117,7 +118,9 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
   }
 
   const args = Array.isArray(call.args) ? call.args.map((arg) => String(arg)) : [];
-  validateCommandArgs(workspaceRoot, cmd, args);
+  validateCommandArgs(workspaceRoot, cmd, args, {
+    allowPythonModuleAndEval: settings.commandPermissions?.allowPythonModuleAndEval === true,
+  });
 
   // Точечный валидатор аргументов конкретной команды (rm -rf, git clone и т.п.).
   const catalogEntry = COMMAND_CATALOG[cmd];
@@ -209,7 +212,7 @@ export function createUserQuestion(call) {
   };
 }
 
-export function validateCommandArgs(workspaceRoot, cmd, args) {
+export function validateCommandArgs(workspaceRoot, cmd, args, options = {}) {
   if ((cmd === "python" || cmd === "python3" || cmd === "node") && args.length === 0) {
     throw new WorkspaceToolError(`${cmd} without a script is blocked because it opens an interactive REPL. Use write_file/mkdir for file changes, or run a workspace script file.`, { fatal: true });
   }
@@ -226,8 +229,24 @@ export function validateCommandArgs(workspaceRoot, cmd, args) {
     throw new WorkspaceToolError("node eval/print flags are blocked. Run a workspace file instead.", { fatal: true });
   }
 
-  if ((cmd === "python" || cmd === "python3") && args.some((arg) => ["-c", "-m"].includes(arg))) {
-    throw new WorkspaceToolError("python -c/-m is blocked. Run a workspace file instead.", { fatal: true });
+  if (
+    (cmd === "python" || cmd === "python3") &&
+    args.some((arg) => ["-c", "-m"].includes(arg)) &&
+    options.allowPythonModuleAndEval !== true
+  ) {
+    throw new WorkspaceToolError(
+      "python -c/-m is blocked. Enable the Python module/eval permission in Settings if you trust this project.",
+      {
+        fatal: true,
+        permissionRequest: {
+          id: "allow-python-module-eval",
+          permissionKey: "allowPythonModuleAndEval",
+          title: "Разрешить Python -m / -c",
+          description:
+            "Агент попытался запустить Python через -m или -c. Это удобно для модулей вроде python -m package, но рискованнее обычного запуска файла.",
+        },
+      },
+    );
   }
 
   for (const arg of args) {

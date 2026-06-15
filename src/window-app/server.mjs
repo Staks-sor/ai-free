@@ -31,6 +31,7 @@ import { listBrowseDirectories } from "./browse-fs.mjs";
 import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
 import { getVoiceStatus, installSttRuntime, transcribeAudio } from "../stt/service.mjs";
+import { checkForUpdate, runUpdate } from "../updater.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
 import { setOpenAICorsHeaders } from "../../api/server.mjs";
 import {
@@ -604,6 +605,14 @@ export async function runWindowApp({
         return sendJson(res, { projects, defaultWorkspace: workspaceRoot, home: os.homedir() });
       }
 
+      if (req.method === "GET" && url.pathname === "/api/update/check") {
+        return sendJson(res, await checkForUpdate());
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/update/run") {
+        return sendJson(res, await runUpdate());
+      }
+
       // ===== Settings (whitelist команд для /code) =====
 
       if (req.method === "GET" && url.pathname === "/api/settings") {
@@ -622,6 +631,7 @@ export async function runWindowApp({
         }));
         return sendJson(res, {
           allowedCommands: current.allowedCommands,
+          commandPermissions: current.commandPermissions || {},
           ui: {
             language: current.ui?.language || "ru",
             webSearchDefault: current.ui?.webSearchDefault !== false,
@@ -650,9 +660,14 @@ export async function runWindowApp({
         const body = await readJsonBody(req);
         const saved = saveSettings({
           allowedCommands: body.allowedCommands,
+          commandPermissions: body.commandPermissions,
           ui: body.ui,
         });
-        return sendJson(res, { allowedCommands: saved.allowedCommands, ui: saved.ui });
+        return sendJson(res, {
+          allowedCommands: saved.allowedCommands,
+          commandPermissions: saved.commandPermissions,
+          ui: saved.ui,
+        });
       }
 
       // ===== Conversations =====
@@ -837,6 +852,33 @@ export async function runWindowApp({
         return sendJson(res, { conversation, runningInstall: true });
       }
 
+      const permissionMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/permission-request\/(approve|reject)$/);
+      if (req.method === "POST" && permissionMatch) {
+        const conversation = state.conversations.find((item) => item.id === permissionMatch[1]);
+        if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
+        const request = conversation.pendingPermissionRequest;
+        if (!request || request.status !== "pending") {
+          return sendJson(res, { error: "No pending permission request" }, 400);
+        }
+        if (permissionMatch[2] === "reject") {
+          conversation.pendingPermissionRequest = { ...request, status: "rejected", updatedAt: new Date().toISOString() };
+          saveWindowState(workspaceRoot, state);
+          return sendJson(res, { conversation });
+        }
+        const current = loadSettings();
+        const key = request.permissionKey;
+        const commandPermissions = { ...(current.commandPermissions || {}) };
+        if (key === "allowPythonModuleAndEval") {
+          commandPermissions.allowPythonModuleAndEval = true;
+        } else {
+          return sendJson(res, { error: `Unknown permission: ${key}` }, 400);
+        }
+        saveSettings({ allowedCommands: current.allowedCommands, commandPermissions });
+        conversation.pendingPermissionRequest = { ...request, status: "enabled", updatedAt: new Date().toISOString() };
+        saveWindowState(workspaceRoot, state);
+        return sendJson(res, { conversation });
+      }
+
       if (req.method === "DELETE" && conversationMatch) {
         const id = conversationMatch[1];
         const beforeCount = state.conversations.length;
@@ -989,6 +1031,7 @@ export async function runWindowApp({
                     onTool: (_call, result, log) => {
                       captureInstallRequest(conversation, result);
                       captureQuestionRequest(conversation, result);
+                      capturePermissionRequest(conversation, result);
                       progressLogs.push(log);
                       progressMessage.content = formatCodeProgressMessage(task, progressLogs);
                       progressMessage.updatedAt = new Date().toISOString();
@@ -1164,6 +1207,7 @@ export async function runWindowApp({
                 onTool: (_call, result, log) => {
                   captureInstallRequest(conversation, result);
                   captureQuestionRequest(conversation, result);
+                  capturePermissionRequest(conversation, result);
                   progressLogs.push(log);
                   progressMessage.content = formatCodeProgressMessage(task, progressLogs);
                   progressMessage.updatedAt = new Date().toISOString();
@@ -1316,6 +1360,18 @@ function captureQuestionRequest(conversation, toolResult) {
     details: question.details || "",
     choices: Array.isArray(question.choices) ? question.choices : [],
     createdAt: new Date().toISOString(),
+  };
+}
+
+function capturePermissionRequest(conversation, toolResult) {
+  const permission = toolResult?.permissionRequest;
+  if (!permission || !permission.id || !permission.permissionKey) return;
+  conversation.pendingPermissionRequest = {
+    requestId: randomUUID(),
+    status: "pending",
+    ...permission,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
 }
 

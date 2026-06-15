@@ -54,7 +54,12 @@ export async function runCodeTask(
       try {
         toolResult = await executeWorkspaceTool(workspaceRoot, call);
       } catch (error) {
-        toolResult = { ok: false, error: error.message, fatal: error.fatal === true };
+        toolResult = {
+          ok: false,
+          error: error.message,
+          fatal: error.fatal === true,
+          permissionRequest: error.permissionRequest || null,
+        };
       }
 
       const log = formatToolLog(call, toolResult);
@@ -170,6 +175,9 @@ export function formatToolLog(call, result) {
   }
   if (result.installRequest) {
     lines.push(`install request: ${result.installRequest.title}`);
+  }
+  if (result.permissionRequest) {
+    lines.push(`permission request: ${result.permissionRequest.title}`);
   }
 
   if (result.stdout) lines.push(`stdout:\n${result.stdout.trimEnd()}`);

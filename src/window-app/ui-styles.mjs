@@ -558,6 +558,61 @@ export const STYLES = `
       cursor: default;
       opacity: 0.8;
     }
+    .primaryUpdateBtn {
+      border-color: rgba(34, 197, 94, 0.35);
+      background: rgba(34, 197, 94, 0.12);
+    }
+    .primaryUpdateBtn:hover:not(:disabled) {
+      border-color: rgba(34, 197, 94, 0.55);
+      background: rgba(34, 197, 94, 0.18);
+    }
+    .updateSettings {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .updateStatus {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-2);
+      padding: 9px 10px;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+    .updateStatus.ready {
+      color: #22c55e;
+      border-color: rgba(34, 197, 94, 0.35);
+      background: rgba(34, 197, 94, 0.10);
+    }
+    .updateMeta {
+      display: grid;
+      gap: 7px;
+      margin-bottom: 10px;
+    }
+    .updateMetaRow {
+      display: grid;
+      grid-template-columns: 90px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .updateMetaRow code {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      color: var(--text);
+      background: var(--code-bg, #1e1e1e);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+    .updateActions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
     .apiModels {
       color: var(--muted);
       font-size: 12px;

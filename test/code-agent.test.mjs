@@ -252,6 +252,15 @@ describe("validateCommandArgs", () => {
     assert.throws(() => validateCommandArgs("/tmp", "python3", ["-m", "x"]));
   });
 
+  it("allows python -c / -m when the explicit permission is enabled", () => {
+    assert.doesNotThrow(() =>
+      validateCommandArgs("/tmp", "python", ["-c", "print(1)"], { allowPythonModuleAndEval: true }),
+    );
+    assert.doesNotThrow(() =>
+      validateCommandArgs("/tmp", "python3", ["-m", "room_agents.run_room"], { allowPythonModuleAndEval: true }),
+    );
+  });
+
   it("blocks interactive node/python without script args", () => {
     assert.throws(() => validateCommandArgs("/tmp", "node", []));
     assert.throws(() => validateCommandArgs("/tmp", "python", []));
