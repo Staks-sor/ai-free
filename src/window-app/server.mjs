@@ -161,11 +161,26 @@ export async function runWindowApp({
     return /access token is missing|HTTP 401|unauthorized|not logged in|authentication/i.test(message);
   }
 
+  function isChatGPTTransportError(error) {
+    const message = String(error?.message || error || "");
+    return /Execution context was destroyed|Target page, context or browser has been closed|Target closed|Page closed|Context closed|Browser has been closed|page\.waitForTimeout|Failed to fetch|request is finished/i.test(message);
+  }
+
   async function chatGPTApiCall(fn) {
     let client = await getOrCreateChatGPTClient();
+    let transportResetDone = false;
     try {
       return await fn(client);
     } catch (error) {
+      if (isChatGPTTransportError(error) && !transportResetDone) {
+        console.log(`[chatgpt] browser transport error, resetting proxy: ${error.message}`);
+        const { resetChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+        resetChatGPTBrowserProxy();
+        chatGPTClient = null;
+        client = await getOrCreateChatGPTClient({ forceRebuild: true });
+        transportResetDone = true;
+        return fn(client);
+      }
       if (!isChatGPTAuthError(error)) throw error;
       console.log("[chatgpt] auth error, reloading browser session…");
       const { resetChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");

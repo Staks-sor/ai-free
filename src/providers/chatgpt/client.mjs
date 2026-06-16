@@ -2,7 +2,7 @@
 // интерфейс chatgpt.com в фоновом браузере. Никаких PoW/Turnstile в Node —
 // React-фронтенд сам подписывает запросы. Вся механика в browser-proxy.mjs.
 
-import { getChatGPTBrowserProxy } from "./browser-proxy.mjs";
+import { getChatGPTBrowserProxy, resetChatGPTBrowserProxy } from "./browser-proxy.mjs";
 
 export class ChatGPTChatClient {
   constructor({ accessToken, cookies, cookieHeader, userAgent, debug = false }) {
@@ -27,7 +27,20 @@ export class ChatGPTChatClient {
       throw new Error("ChatGPT access token is missing. Войди в ChatGPT заново через кнопку авторизации.");
     }
 
-    const proxy = await getChatGPTBrowserProxy({ debug: this.debug });
-    return proxy.sendChat({ prompt, conversationId, onText, images });
+    try {
+      const proxy = await getChatGPTBrowserProxy({ debug: this.debug });
+      return await proxy.sendChat({ prompt, conversationId, onText, images });
+    } catch (error) {
+      if (!isChatGPTTransportError(error)) throw error;
+      if (this.debug) console.log(`[chatgpt-client] browser transport reset: ${error.message}`);
+      resetChatGPTBrowserProxy();
+      const proxy = await getChatGPTBrowserProxy({ debug: this.debug });
+      return proxy.sendChat({ prompt, conversationId, onText, images });
+    }
   }
+}
+
+function isChatGPTTransportError(error) {
+  const message = String(error?.message || error || "");
+  return /Execution context was destroyed|Target page, context or browser has been closed|Target closed|Page closed|Context closed|Browser has been closed|page\.waitForTimeout|Failed to fetch|request is finished/i.test(message);
 }
