@@ -45,13 +45,18 @@ function hashChatId(chatId) {
 }
 
 // Сброс singleton после re-login / refresh — следующий запрос поднимет прокси с новыми куками.
-export function resetQwenBrowserProxy() {
-  if (proxyPromise) {
-    proxyPromise
-      .then((proxy) => proxy.close?.())
-      .catch(() => {});
-  }
+export async function closeQwenBrowserProxy() {
+  const current = proxyPromise;
   proxyPromise = null;
+  if (!current) return;
+  try {
+    const proxy = await current;
+    await proxy.close?.();
+  } catch {}
+}
+
+export function resetQwenBrowserProxy() {
+  closeQwenBrowserProxy().catch(() => {});
 }
 
 // Возвращает singleton-инстанс прокси. Все вызовы делят один Chromium.
@@ -179,8 +184,6 @@ async function createProxy({ debug }) {
     } catch {}
   };
   process.once("exit", () => { close(); });
-  process.once("SIGINT", () => { close().then(() => process.exit(0)); });
-  process.once("SIGTERM", () => { close().then(() => process.exit(0)); });
 
   // Навигация на /c/<chatId>. Это, похоже, ЕДИНСТВЕННЫЙ способ зарегистрировать
   // chat_id на сервере Qwen — после goto JS-бандл сам делает скрытую синхронизацию

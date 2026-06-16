@@ -25,7 +25,7 @@ import { QWEN_AUTH_FILE } from "../src/providers/qwen/config.mjs";
 import { QwenChatClient } from "../src/providers/qwen/client.mjs";
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
-import { DeepSeekChatClient } from "../src/deepseek/client.mjs";
+import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
 import { parseModelToolCalls } from "./tool-calls.mjs";
 
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.

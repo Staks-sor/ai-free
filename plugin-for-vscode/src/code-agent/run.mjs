@@ -24,6 +24,11 @@ export async function runCodeTask(
   const maxTransientTextRetries = resolveTransientTextRetries(options.transientTextRetries);
 
   for (let step = 0; step < maxToolSteps; step += 1) {
+    if (options.signal?.aborted) {
+      const message = "⏹ Остановлено пользователем.";
+      options.onAssistant?.(message);
+      return { parentMessageId: parent, message, toolLogs, stopped: true };
+    }
     let transientTextRetries = 0;
 
     for (;;) {
@@ -54,7 +59,12 @@ export async function runCodeTask(
       try {
         toolResult = await executeWorkspaceTool(workspaceRoot, call);
       } catch (error) {
-        toolResult = { ok: false, error: error.message, fatal: error.fatal === true };
+        toolResult = {
+          ok: false,
+          error: error.message,
+          fatal: error.fatal === true,
+          permissionRequest: error.permissionRequest || null,
+        };
       }
 
       const log = formatToolLog(call, toolResult);
@@ -80,8 +90,18 @@ export async function runCodeTask(
         return { parentMessageId: parent, message, toolLogs };
       }
 
+      const clarifications = typeof options.takeInterrupts === "function"
+        ? options.takeInterrupts()
+        : [];
+      const clarificationText = Array.isArray(clarifications) && clarifications.length
+        ? `\n\nImportant user clarification received while you were working:\n${clarifications
+          .map((item, index) => `${index + 1}. ${item}`)
+          .join("\n")}\nUpdate your plan and next action to follow this clarification.`
+        : "";
+
       prompt = `Tool result for ${call.tool}:
 ${JSON.stringify(toolResult, null, 2)}
+${clarificationText}
 
 Continue the task. If more file access is needed, request one tool call as JSON. If finished, call finish.`;
       break;
@@ -158,11 +178,14 @@ export function formatToolLog(call, result) {
     return lines.join("\n");
   }
 
-  if (call.tool !== "run_command") return header;
+  if (call.tool !== "run_command" && call.tool !== "run_shell") return header;
 
   const lines = [
     header,
   ];
+  if (call.tool === "run_shell" && call.command) {
+    lines.push(`command: ${call.command}`);
+  }
   if (result.status !== undefined) {
     lines.push(`status: ${result.status}${result.timedOut ? " (timed out)" : ""}`);
   } else if (result.error) {
@@ -170,6 +193,9 @@ export function formatToolLog(call, result) {
   }
   if (result.installRequest) {
     lines.push(`install request: ${result.installRequest.title}`);
+  }
+  if (result.permissionRequest) {
+    lines.push(`permission request: ${result.permissionRequest.title}`);
   }
 
   if (result.stdout) lines.push(`stdout:\n${result.stdout.trimEnd()}`);

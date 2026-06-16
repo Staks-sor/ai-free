@@ -10,7 +10,7 @@ import { resolveAuth } from "../auth/files.mjs";
 import { saveCredentialsInteractive } from "../auth/credentials.mjs";
 import { AuthManager } from "../auth/manager.mjs";
 import { loginAndSaveAuth, refreshAuthFromProfile } from "../browser/login.mjs";
-import { DeepSeekChatClient } from "../deepseek/client.mjs";
+import { DeepSeekChatClient } from "../providers/deepseek/client.mjs";
 import { executeWorkspaceTool } from "../code-agent/executor.mjs";
 import { runCodeTask } from "../code-agent/run.mjs";
 import { runWindowApp } from "../window-app/server.mjs";

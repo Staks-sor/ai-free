@@ -8,10 +8,11 @@ import { spawn } from "node:child_process";
 import { COMMAND_CATALOG, loadSettings } from "../state/settings.mjs";
 
 export class WorkspaceToolError extends Error {
-  constructor(message, { fatal = false } = {}) {
+  constructor(message, { fatal = false, permissionRequest = null } = {}) {
     super(message);
     this.name = "WorkspaceToolError";
     this.fatal = fatal;
+    this.permissionRequest = permissionRequest;
   }
 }
 
@@ -103,6 +104,10 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
     return await runWorkspaceCommand(workspaceRoot, call);
   }
 
+  if (tool === "run_shell") {
+    return await runWorkspaceShell(workspaceRoot, call);
+  }
+
   throw new Error(`Unknown tool: ${tool}`);
 }
 
@@ -117,7 +122,9 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
   }
 
   const args = Array.isArray(call.args) ? call.args.map((arg) => String(arg)) : [];
-  validateCommandArgs(workspaceRoot, cmd, args);
+  validateCommandArgs(workspaceRoot, cmd, args, {
+    allowPythonModuleAndEval: settings.commandPermissions?.allowPythonModuleAndEval === true,
+  });
 
   // Точечный валидатор аргументов конкретной команды (rm -rf, git clone и т.п.).
   const catalogEntry = COMMAND_CATALOG[cmd];
@@ -152,6 +159,65 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
     ok: result.status === 0,
     cmd,
     args,
+    status: result.status,
+    signal: result.signal,
+    timedOut: result.timedOut,
+    stdout: truncateOutput(result.stdout),
+    stderr: truncateOutput(result.stderr),
+  };
+}
+
+export async function runWorkspaceShell(workspaceRoot, call) {
+  const settings = loadSettings();
+  if (settings.commandPermissions?.allowShell !== true) {
+    throw new WorkspaceToolError(
+      "Shell-команды (пайпы, &&, перенаправления) заблокированы. Включи shell-доступ в Settings → Agent permissions.",
+      {
+        fatal: true,
+        permissionRequest: {
+          id: "allow-shell",
+          permissionKey: "allowShell",
+          title: "Разрешить shell-команды",
+          description:
+            "Позволяет агенту запускать цепочки команд через run_shell: grep | wc, find + xargs, &&, перенаправления и т.п.",
+        },
+      },
+    );
+  }
+
+  const command = String(call.command || "").trim();
+  if (!command) {
+    throw new WorkspaceToolError("run_shell requires a non-empty command string.", { fatal: true });
+  }
+
+  const timeoutMs = Math.min(
+    Math.max(Number.isFinite(Number(call.timeoutMs)) ? Number(call.timeoutMs) : 20000, 1000),
+    60_000,
+  );
+
+  const shellCmd = process.platform === "win32" ? "cmd.exe" : "sh";
+  const shellArgs = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
+
+  let result;
+  try {
+    result = await spawnSyncSafe(shellCmd, shellArgs, {
+      cwd: path.resolve(workspaceRoot),
+      timeoutMs,
+      env: getCommandExecutionEnv(),
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      command,
+      shell: true,
+      error: error.message,
+    };
+  }
+
+  return {
+    ok: result.status === 0,
+    command,
+    shell: true,
     status: result.status,
     signal: result.signal,
     timedOut: result.timedOut,
@@ -209,36 +275,66 @@ export function createUserQuestion(call) {
   };
 }
 
-export function validateCommandArgs(workspaceRoot, cmd, args) {
+export function validateCommandArgs(workspaceRoot, cmd, args, options = {}) {
   if ((cmd === "python" || cmd === "python3" || cmd === "node") && args.length === 0) {
     throw new WorkspaceToolError(`${cmd} without a script is blocked because it opens an interactive REPL. Use write_file/mkdir for file changes, or run a workspace script file.`, { fatal: true });
   }
 
-  const blockedFlags = new Set([
-    "install", "add", "remove", "uninstall", "publish", "login", "logout", "token",
-  ]);
+  const blockedNpmFlags = new Set(["publish", "login", "logout", "token"]);
 
-  if (cmd === "npm" && args.some((arg) => blockedFlags.has(arg))) {
-    throw new WorkspaceToolError(`npm ${args.find((arg) => blockedFlags.has(arg))} is blocked.`, { fatal: true });
+  if (cmd === "npm" && args.some((arg) => blockedNpmFlags.has(arg))) {
+    throw new WorkspaceToolError(`npm ${args.find((arg) => blockedNpmFlags.has(arg))} is blocked.`, { fatal: true });
   }
 
   if (cmd === "node" && args.some((arg) => ["-e", "--eval", "-p", "--print"].includes(arg))) {
     throw new WorkspaceToolError("node eval/print flags are blocked. Run a workspace file instead.", { fatal: true });
   }
 
-  if ((cmd === "python" || cmd === "python3") && args.some((arg) => ["-c", "-m"].includes(arg))) {
-    throw new WorkspaceToolError("python -c/-m is blocked. Run a workspace file instead.", { fatal: true });
+  if (
+    (cmd === "python" || cmd === "python3") &&
+    args.some((arg) => ["-c", "-m"].includes(arg)) &&
+    options.allowPythonModuleAndEval === false
+  ) {
+    throw new WorkspaceToolError(
+      "python -c/-m is blocked. Enable the Python module/eval permission in Settings if you trust this project.",
+      {
+        fatal: true,
+        permissionRequest: {
+          id: "allow-python-module-eval",
+          permissionKey: "allowPythonModuleAndEval",
+          title: "Разрешить Python -m / -c",
+          description:
+            "Агент попытался запустить Python через -m или -c. Это удобно для модулей вроде python -m package, но рискованнее обычного запуска файла.",
+        },
+      },
+    );
   }
 
   for (const arg of args) {
     if (!arg || arg.startsWith("-")) continue;
-    if (/^https?:\/\//i.test(arg)) throw new WorkspaceToolError("Network URLs are blocked in command args.", { fatal: true });
-    if (arg.includes(";") || arg.includes("&&") || arg.includes("|") || arg.includes("`")) {
-      throw new WorkspaceToolError("Shell operators are blocked in command args.", { fatal: true });
+    if (!isNetworkArgAllowed(cmd, arg) && /^https?:\/\//i.test(arg)) {
+      throw new WorkspaceToolError("Network URLs are blocked in command args.", { fatal: true });
     }
 
-    if (looksLikePath(arg) && !isAllowedDevicePath(cmd, arg)) resolveWorkspacePath(workspaceRoot, arg);
+    if (looksLikePath(arg) && !isAllowedDevicePath(cmd, arg) && !isRemoteTransferArg(cmd, arg)) {
+      resolveWorkspacePath(workspaceRoot, arg);
+    }
   }
+}
+
+const NETWORK_URL_COMMANDS = new Set(["curl", "wget", "gh"]);
+const REMOTE_TRANSFER_COMMANDS = new Set(["ssh", "scp", "rsync", "sftp"]);
+
+export function isNetworkArgAllowed(cmd, arg) {
+  if (NETWORK_URL_COMMANDS.has(cmd)) return true;
+  if (REMOTE_TRANSFER_COMMANDS.has(cmd)) return true;
+  if (cmd === "git" && /^https?:\/\//i.test(arg)) return true;
+  return /^[\w.@+-]+@[\w.-]+/.test(arg);
+}
+
+export function isRemoteTransferArg(cmd, arg) {
+  if (!REMOTE_TRANSFER_COMMANDS.has(cmd)) return false;
+  return /^[\w.@+-]+@[\w.-]+/.test(arg) || /^[\w.-]+:\//.test(arg);
 }
 
 export function isAllowedDevicePath(cmd, value) {

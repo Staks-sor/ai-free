@@ -173,6 +173,10 @@ describe("loadSettings fallback", () => {
       assert.equal(typeof result.openAICompat.apiKeys[providerId], "string");
     }
     assert.equal(typeof result.commandPermissions.allowPythonModuleAndEval, "boolean");
+    assert.equal(result.commandPermissions.allowShell, true);
+    assert.equal(result.commandPermissions.allowPythonModuleAndEval, true);
+    assert.ok(result.allowedCommands.includes("docker"));
+    assert.ok(result.allowedCommands.includes("ssh"));
   });
 });
 

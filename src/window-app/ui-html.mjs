@@ -120,7 +120,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         <div id="workspace" class="workspace"></div>
         <button id="themeBtn" class="iconBtn themeBtn" type="button" title="${t("topbar.theme")}">◐</button>
         <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="${t("topbar.settings")}">⚙</button>
+        <button id="quitBtn" class="iconBtn quitBtn" type="button" title="${t("topbar.quit")}">⏻</button>
       </header>
+
+      <div id="shutdownOverlay" class="shutdownOverlay hidden" aria-hidden="true">
+        <div class="shutdownPanel">
+          <div id="shutdownTitle" class="shutdownTitle">${t("shutdown.gracefulTitle")}</div>
+          <div id="shutdownSub" class="shutdownSub">${t("shutdown.stoppingTasks")}</div>
+        </div>
+      </div>
 
       <div id="settingsOverlay" class="settingsOverlay hidden" aria-hidden="true">
         <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
@@ -1854,22 +1862,51 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return data;
     }
 
-    // ---- Heartbeat: закрываем окно, когда CLI остановлен (Ctrl+C / закрыли терминал).
-    // Три промаха подряд → сервер точно мёртв → показываем сообщение и закрываем окно.
-    // Порог в 3 защищает от случайного network blip (например, рестарт сервера юзером).
+    // ---- Heartbeat: закрываем окно при graceful shutdown или когда CLI мёртв (Ctrl+C в терминале).
     let heartbeatFailures = 0;
     let shutdownStarted = false;
+    const shutdownOverlay = document.getElementById("shutdownOverlay");
+    const shutdownTitle = document.getElementById("shutdownTitle");
+    const shutdownSub = document.getElementById("shutdownSub");
+
+    const SHUTDOWN_PHASE_KEYS = {
+      stopping_tasks: "shutdown.stoppingTasks",
+      closing_browsers: "shutdown.closingBrowsers",
+      closing_server: "shutdown.closingServer",
+      stopped: "shutdown.stoppedSub",
+    };
+
+    function showShutdownOverlay(phase) {
+      shutdownOverlay.classList.remove("hidden");
+      shutdownOverlay.setAttribute("aria-hidden", "false");
+      shutdownTitle.textContent = phase === "stopped" ? t("shutdown.stopped") : t("shutdown.gracefulTitle");
+      shutdownSub.textContent = t(SHUTDOWN_PHASE_KEYS[phase] || "shutdown.stoppingTasks");
+    }
+
+    function finishShutdownWindow() {
+      if (shutdownStarted) return;
+      shutdownStarted = true;
+      showShutdownOverlay("stopped");
+      setTimeout(() => {
+        try { window.close(); } catch {}
+      }, 800);
+    }
+
     async function tickHeartbeat() {
       if (shutdownStarted) return;
       try {
         const res = await fetch("/api/heartbeat", { cache: "no-store" });
         if (!res.ok) throw new Error("heartbeat not ok");
+        const data = await res.json().catch(() => ({}));
         heartbeatFailures = 0;
+        if (data.shuttingDown) {
+          showShutdownOverlay(data.phase || "stopping_tasks");
+          if (data.phase === "stopped") finishShutdownWindow();
+        }
       } catch {
         heartbeatFailures += 1;
         if (heartbeatFailures >= 3) {
           shutdownStarted = true;
-          // Показываем чистую заглушку и закрываем.
           document.body.innerHTML =
             '<div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px;color:#888;font-family:system-ui;background:#0a0a0a;text-align:center;padding:24px">' +
             '<div style="font-size:18px">' + t("shutdown.title") + '</div>' +
@@ -1881,7 +1918,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
       }
     }
-    setInterval(tickHeartbeat, 2000);
+    setInterval(tickHeartbeat, 1000);
+
+    document.getElementById("quitBtn").addEventListener("click", async () => {
+      if (shutdownStarted) return;
+      showShutdownOverlay("stopping_tasks");
+      try {
+        await fetch("/api/shutdown", { method: "POST" });
+      } catch {}
+    });
 
     // ---- Settings modal (разрешённые команды для /code) ----
     const settingsBtn = document.getElementById("settingsBtn");
@@ -2150,36 +2195,56 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       heading.textContent = t("settings.agentPermissions");
       groupEl.appendChild(heading);
 
-      const row = document.createElement("label");
-      row.className = "settingsItem";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = commandPermissions.allowPythonModuleAndEval === true;
+      const rows = [
+        {
+          key: "allowShell",
+          checked: commandPermissions.allowShell !== false,
+          name: t("settings.allowShell"),
+          desc: t("settings.allowShellDesc"),
+          risk: "medium",
+        },
+        {
+          key: "allowPythonModuleAndEval",
+          checked: commandPermissions.allowPythonModuleAndEval !== false,
+          name: t("settings.allowPythonModuleAndEval"),
+          desc: t("settings.allowPythonModuleAndEvalDesc"),
+          risk: "high",
+        },
+      ];
 
-      const textWrap = document.createElement("div");
-      const nameEl = document.createElement("div");
-      nameEl.className = "name";
-      nameEl.textContent = t("settings.allowPythonModuleAndEval");
-      const descEl = document.createElement("div");
-      descEl.className = "desc";
-      descEl.textContent = t("settings.allowPythonModuleAndEvalDesc");
-      textWrap.append(nameEl, descEl);
+      for (const spec of rows) {
+        const row = document.createElement("label");
+        row.className = "settingsItem";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = spec.checked;
 
-      const badge = document.createElement("span");
-      badge.className = "riskBadge high";
-      badge.textContent = "high";
+        const textWrap = document.createElement("div");
+        const nameEl = document.createElement("div");
+        nameEl.className = "name";
+        nameEl.textContent = spec.name;
+        const descEl = document.createElement("div");
+        descEl.className = "desc";
+        descEl.textContent = spec.desc;
+        textWrap.append(nameEl, descEl);
 
-      cb.addEventListener("change", async () => {
-        try {
-          await saveCommandPermissions({ allowPythonModuleAndEval: cb.checked });
-        } catch (err) {
-          cb.checked = !cb.checked;
-          setStatus(t("settings.saveFailed", { message: err.message }), true);
-        }
-      });
+        const badge = document.createElement("span");
+        badge.className = "riskBadge " + spec.risk;
+        badge.textContent = spec.risk;
 
-      row.append(cb, textWrap, badge);
-      groupEl.appendChild(row);
+        cb.addEventListener("change", async () => {
+          try {
+            await saveCommandPermissions({ [spec.key]: cb.checked });
+          } catch (err) {
+            cb.checked = !cb.checked;
+            setStatus(t("settings.saveFailed", { message: err.message }), true);
+          }
+        });
+
+        row.append(cb, textWrap, badge);
+        groupEl.appendChild(row);
+      }
+
       target.appendChild(groupEl);
     }
 

@@ -3,7 +3,7 @@
 
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
-import { extractDeltaText, parseSseEvent } from "../src/deepseek/sse.mjs";
+import { extractDeltaText, parseSseEvent } from "../src/providers/deepseek/sse.mjs";
 
 describe("parseSseEvent", () => {
   it("parses standard event:/data: pair", () => {

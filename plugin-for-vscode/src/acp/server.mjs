@@ -3,7 +3,7 @@ import readline from "node:readline";
 import { runCodeTask } from "../code-agent/run.mjs";
 import { AI_FREE_VERSION, DEFAULT_AUTH_FILE } from "../config.mjs";
 import { readSavedAuth } from "../auth/files.mjs";
-import { DeepSeekChatClient } from "../deepseek/client.mjs";
+import { DeepSeekChatClient } from "../providers/deepseek/client.mjs";
 import { QWEN_AUTH_FILE } from "../providers/qwen/config.mjs";
 import { readQwenAuth } from "../providers/qwen/auth-files.mjs";
 import { QwenChatClient } from "../providers/qwen/client.mjs";

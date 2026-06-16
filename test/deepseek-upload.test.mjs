@@ -4,7 +4,7 @@ import {
   formatDeepSeekFileFailure,
   isDeepSeekFileFailedStatus,
   isDeepSeekFileReadyStatus,
-} from "../src/deepseek/client.mjs";
+} from "../src/providers/deepseek/client.mjs";
 
 describe("isDeepSeekFileReadyStatus", () => {
   it("treats PARSING as not ready", () => {

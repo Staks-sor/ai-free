@@ -309,6 +309,44 @@ export const STYLES = `
       font-size: 16px;
       padding: 4px 8px;
     }
+    .quitBtn {
+      font-size: 15px;
+      padding: 4px 8px;
+      color: #f87171;
+    }
+    .quitBtn:hover { color: #fca5a5; }
+    .shutdownOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 12, 16, 0.82);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+    .shutdownOverlay.hidden { display: none; }
+    .shutdownPanel {
+      text-align: center;
+      padding: 32px 40px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #14171e;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.65);
+      max-width: min(420px, 90vw);
+    }
+    .shutdownTitle {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 10px;
+    }
+    .shutdownSub {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
     .settingsOverlay {
       position: fixed;
       inset: 0;

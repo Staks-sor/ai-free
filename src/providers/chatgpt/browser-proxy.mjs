@@ -60,13 +60,18 @@ function isOversizedHeaderError(error) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function resetChatGPTBrowserProxy() {
-  if (proxyPromise) {
-    proxyPromise
-      .then((proxy) => proxy.close?.())
-      .catch(() => {});
-  }
+export async function closeChatGPTBrowserProxy() {
+  const current = proxyPromise;
   proxyPromise = null;
+  if (!current) return;
+  try {
+    const proxy = await current;
+    await proxy.close?.();
+  } catch {}
+}
+
+export function resetChatGPTBrowserProxy() {
+  closeChatGPTBrowserProxy().catch(() => {});
 }
 
 export function getChatGPTBrowserProxy({ debug = false } = {}) {
@@ -298,8 +303,6 @@ async function createProxy({ debug, adoptedSession = null }) {
     }
   };
   process.once("exit", () => { close(); });
-  process.once("SIGINT", () => { close().then(() => process.exit(0)); });
-  process.once("SIGTERM", () => { close().then(() => process.exit(0)); });
 
   async function detectPageState() {
     try {

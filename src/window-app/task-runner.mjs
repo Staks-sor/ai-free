@@ -95,3 +95,11 @@ export function getTaskInfo(conversationId) {
 export function getRunningIds() {
   return [...runningTasks.keys()].filter((id) => Boolean(getFreshTask(id)));
 }
+
+export function stopAllTasks() {
+  let count = 0;
+  for (const id of [...runningTasks.keys()]) {
+    if (stopTask(id)) count += 1;
+  }
+  return count;
+}

@@ -1,3 +1,5 @@
+import { COMMAND_CATALOG } from "../state/settings.mjs";
+
 export const COMMAND_DESCRIPTIONS = {
   ru: {
     node: "Запуск JS-файлов через Node",
@@ -249,5 +251,6 @@ export function getCommandDescription(command, languageCode, fallback = "") {
   return COMMAND_DESCRIPTIONS[code]?.[command]
     || COMMAND_DESCRIPTIONS[code.split("-")[0]]?.[command]
     || COMMAND_DESCRIPTIONS.en[command]
+    || COMMAND_CATALOG[command]?.description
     || fallback;
 }

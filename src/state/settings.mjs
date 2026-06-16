@@ -12,14 +12,14 @@ import { getProviderIds } from "../providers/model-catalog.mjs";
 
 export const COMMAND_CATALOG = {
   node:    { description: "Запуск JS-файлов через Node",                       risk: "low",    enabledByDefault: true },
-  npm:     { description: "npm-скрипты (install/add/publish заблокированы)",   risk: "low",    enabledByDefault: true },
+  npm:     { description: "npm install/ci/run/test и скрипты (publish/login заблокированы)", risk: "low",    enabledByDefault: true },
   python3: { description: "Запуск Python-файлов",                              risk: "low",    enabledByDefault: true },
   python:  { description: "Алиас для python3",                                 risk: "low",    enabledByDefault: true },
   ls:      { description: "Листинг файлов и папок",                            risk: "low",    enabledByDefault: true },
   cat:     { description: "Печать содержимого файла",                          risk: "low",    enabledByDefault: true },
   pwd:     { description: "Текущая рабочая папка",                             risk: "low",    enabledByDefault: true },
 
-  mkdir:   { description: "Создание папок",                                    risk: "low",    enabledByDefault: false },
+  mkdir:   { description: "Создание папок",                                    risk: "low",    enabledByDefault: true },
   rmdir: {
     description: "Удаление пустых папок без рекурсивных флагов",
     risk: "low", enabledByDefault: false,
@@ -31,16 +31,35 @@ export const COMMAND_CATALOG = {
       }
     },
   },
-  cp:      { description: "Копирование файлов",                                risk: "low",    enabledByDefault: false },
-  touch:   { description: "Создание пустого файла / обновление mtime",         risk: "low",    enabledByDefault: false },
-  grep:    { description: "Поиск по тексту",                                   risk: "low",    enabledByDefault: false },
-  head:    { description: "Первые N строк файла",                              risk: "low",    enabledByDefault: false },
-  tail:    { description: "Последние N строк файла",                           risk: "low",    enabledByDefault: false },
-  wc:      { description: "Подсчёт строк / слов / байт",                       risk: "low",    enabledByDefault: false },
+  cp:      { description: "Копирование файлов",                                risk: "low",    enabledByDefault: true },
+  touch:   { description: "Создание пустого файла / обновление mtime",         risk: "low",    enabledByDefault: true },
+  grep:    { description: "Поиск по тексту (regex с | в аргументах — ок)",              risk: "low",    enabledByDefault: true },
+  rg:      { description: "ripgrep — быстрый поиск по проекту",                risk: "low",    enabledByDefault: true },
+  head:    { description: "Первые N строк файла",                              risk: "low",    enabledByDefault: true },
+  tail:    { description: "Последние N строк файла",                           risk: "low",    enabledByDefault: true },
+  wc:      { description: "Подсчёт строк / слов / байт",                       risk: "low",    enabledByDefault: true },
+  diff:    { description: "Сравнение файлов",                                  risk: "low",    enabledByDefault: true },
+  jq:      { description: "JSON из командной строки",                          risk: "low",    enabledByDefault: true },
+  yq:      { description: "YAML из командной строки",                          risk: "low",    enabledByDefault: true },
+  env:     { description: "Переменные окружения",                              risk: "low",    enabledByDefault: true },
+  which:   { description: "Где лежит бинарник в PATH",                         risk: "low",    enabledByDefault: true },
+  file:    { description: "Тип файла",                                         risk: "low",    enabledByDefault: true },
+  basename:{ description: "Имя файла из пути",                                   risk: "low",    enabledByDefault: true },
+  dirname: { description: "Папка из пути",                                     risk: "low",    enabledByDefault: true },
+  realpath:{ description: "Канонический путь",                                   risk: "low",    enabledByDefault: true },
+  readlink:{ description: "Ссылка на файл",                                    risk: "low",    enabledByDefault: true },
+  stat:    { description: "Метаданные файла",                                    risk: "low",    enabledByDefault: true },
+  du:      { description: "Размер каталогов",                                  risk: "low",    enabledByDefault: true },
+  df:      { description: "Свободное место на дисках",                         risk: "low",    enabledByDefault: true },
+  npx:     { description: "Запуск npm-пакетов без глобальной установки",         risk: "low",    enabledByDefault: true },
+  pnpm:    { description: "pnpm scripts и install",                              risk: "low",    enabledByDefault: true },
+  yarn:    { description: "yarn scripts и install",                              risk: "low",    enabledByDefault: true },
+  bun:     { description: "Bun runtime и пакеты",                              risk: "low",    enabledByDefault: true },
+  deno:    { description: "Deno runtime",                                      risk: "low",    enabledByDefault: true },
 
   find: {
     description: "Поиск файлов (-exec / -delete заблокированы)",
-    risk: "medium", enabledByDefault: false,
+    risk: "medium", enabledByDefault: true,
     validateArgs: (args) => {
       for (const arg of args) {
         if (arg === "-exec" || arg === "-execdir" || arg === "-delete" || arg === "-ok") {
@@ -50,31 +69,23 @@ export const COMMAND_CATALOG = {
     },
   },
   git: {
-    description: "git status/log/diff/add/commit/checkout/branch (clone, push --force, remote add — заблокированы)",
-    risk: "medium", enabledByDefault: false,
+    description: "git: status, diff, commit, clone, pull, push (push --force заблокирован)",
+    risk: "medium", enabledByDefault: true,
     validateArgs: (args) => {
       const sub = (args[0] || "").toLowerCase();
-      if (sub === "clone") throw new Error("git clone заблокирован (сетевая операция).");
-      if (sub === "fetch" || sub === "pull") throw new Error(`git ${sub} заблокирован (сетевая операция).`);
-      if (sub === "push" && (args.includes("--force") || args.includes("-f") || args.includes("+"))) {
+      if (sub === "push" && (args.includes("--force") || args.includes("-f") || args.some((a) => String(a).startsWith("+")))) {
         throw new Error("git push --force заблокирован.");
-      }
-      if (sub === "remote" && args[1] === "add") {
-        throw new Error("git remote add заблокирован (добавление чужого репо).");
-      }
-      if (sub === "submodule" && args[1] === "add") {
-        throw new Error("git submodule add заблокирован.");
       }
     },
   },
-  mv: { description: "Перемещение/переименование", risk: "medium", enabledByDefault: false },
+  mv: { description: "Перемещение/переименование", risk: "medium", enabledByDefault: true },
   sed: {
     description: "Замена/обработка текста",
-    risk: "medium", enabledByDefault: false,
+    risk: "medium", enabledByDefault: true,
   },
   chmod: {
     description: "Изменение прав (777, +x на всё — заблокированы)",
-    risk: "medium", enabledByDefault: false,
+    risk: "medium", enabledByDefault: true,
     validateArgs: (args) => {
       for (const arg of args) {
         if (arg === "777" || arg === "a+rwx" || arg === "ugo+rwx") {
@@ -85,8 +96,65 @@ export const COMMAND_CATALOG = {
   },
   make: {
     description: "Сборка по Makefile (выполняет команды из Makefile — будь осторожен)",
-    risk: "medium", enabledByDefault: false,
+    risk: "medium", enabledByDefault: true,
   },
+
+  pip:     { description: "pip install/list (в venv или --user)",              risk: "medium", enabledByDefault: true },
+  pip3:    { description: "Алиас pip для Python 3",                            risk: "medium", enabledByDefault: true },
+  uv:      { description: "uv — быстрый Python/pip",                           risk: "medium", enabledByDefault: true },
+  poetry:  { description: "Poetry: зависимости и venv",                        risk: "medium", enabledByDefault: true },
+  cargo:   { description: "Rust: build, test, run",                            risk: "medium", enabledByDefault: true },
+  rustc:   { description: "Компилятор Rust",                                   risk: "medium", enabledByDefault: true },
+  go:      { description: "Go build, test, run",                               risk: "medium", enabledByDefault: true },
+  cmake:   { description: "CMake configure/build",                             risk: "medium", enabledByDefault: true },
+  ninja:   { description: "Ninja build",                                       risk: "medium", enabledByDefault: true },
+  java:    { description: "Запуск JVM",                                        risk: "medium", enabledByDefault: true },
+  javac:   { description: "Компиляция Java",                                   risk: "medium", enabledByDefault: true },
+  mvn:     { description: "Maven",                                             risk: "medium", enabledByDefault: true },
+  gradle:  { description: "Gradle",                                              risk: "medium", enabledByDefault: true },
+
+  curl:    { description: "HTTP-запросы",                                      risk: "medium", enabledByDefault: true },
+  wget:    { description: "Скачивание по URL",                                 risk: "medium", enabledByDefault: true },
+  ssh:     { description: "SSH на удалённый сервер",                           risk: "high",   enabledByDefault: true },
+  scp:     { description: "Копирование по SSH",                                risk: "high",   enabledByDefault: true },
+  rsync:   { description: "Синхронизация файлов (локально и по SSH)",          risk: "high",   enabledByDefault: true },
+  sftp:    { description: "SFTP-сессия",                                       risk: "high",   enabledByDefault: true },
+
+  docker: {
+    description: "Docker: build, run, compose, ps, logs",
+    risk: "high", enabledByDefault: true,
+    validateArgs: (args) => {
+      const joined = args.join(" ").toLowerCase();
+      if (/\s-v\s+\/:\//.test(joined) || /\s--volume\s+\/:\//.test(joined)) {
+        throw new Error("docker: монтирование корня / заблокировано.");
+      }
+    },
+  },
+  "docker-compose": { description: "Docker Compose v1",                       risk: "high",   enabledByDefault: true },
+  podman:  { description: "Podman (альтернатива Docker)",                      risk: "high",   enabledByDefault: true },
+  kubectl: { description: "Kubernetes CLI",                                    risk: "high",   enabledByDefault: true },
+  helm:    { description: "Helm charts",                                       risk: "high",   enabledByDefault: true },
+  terraform: { description: "Terraform plan/apply",                          risk: "high",   enabledByDefault: true },
+  "ansible-playbook": { description: "Ansible playbooks",                    risk: "high",   enabledByDefault: true },
+
+  brew:    { description: "Homebrew (macOS/Linux)",                            risk: "high",   enabledByDefault: true },
+  gh:      { description: "GitHub CLI",                                        risk: "medium", enabledByDefault: true },
+  sqlite3: { description: "SQLite shell",                                      risk: "medium", enabledByDefault: true },
+  psql:    { description: "PostgreSQL client",                                 risk: "medium", enabledByDefault: true },
+  "redis-cli": { description: "Redis client",                                    risk: "medium", enabledByDefault: true },
+
+  tar:     { description: "Архивы tar",                                        risk: "medium", enabledByDefault: true },
+  zip:     { description: "Архив zip",                                         risk: "low",    enabledByDefault: true },
+  unzip:   { description: "Распаковка zip",                                    risk: "low",    enabledByDefault: true },
+  gzip:    { description: "Сжатие gzip",                                       risk: "low",    enabledByDefault: true },
+  gunzip:  { description: "Распаковка gzip",                                   risk: "low",    enabledByDefault: true },
+
+  ps:      { description: "Список процессов",                                  risk: "medium", enabledByDefault: true },
+  pgrep:   { description: "Поиск PID по имени",                                risk: "medium", enabledByDefault: true },
+  lsof:    { description: "Открытые файлы/порты",                              risk: "medium", enabledByDefault: true },
+  kill:    { description: "Завершение процесса по PID",                        risk: "high",   enabledByDefault: true },
+  ping:    { description: "Проверка сети",                                     risk: "medium", enabledByDefault: true },
+  nc:      { description: "netcat",                                            risk: "high",   enabledByDefault: true },
 
   pio: {
     description: "PlatformIO: поиск плат, сборка, upload и monitor для ESP/Arduino",
@@ -139,7 +207,7 @@ export const COMMAND_CATALOG = {
 
   rm: {
     description: "Удаление файлов (БЕЗ -r/-R/-rf)",
-    risk: "high", enabledByDefault: false,
+    risk: "high", enabledByDefault: true,
     validateArgs: (args) => {
       for (const arg of args) {
         if (arg === "--recursive" || arg === "--no-preserve-root") {
@@ -169,8 +237,17 @@ function normalizeProviderApiKeys(rawKeys = {}, legacyKey = "") {
 
 function normalizeCommandPermissions(rawPermissions = {}) {
   return {
-    allowPythonModuleAndEval: rawPermissions?.allowPythonModuleAndEval === true,
+    allowPythonModuleAndEval: rawPermissions?.allowPythonModuleAndEval !== false,
+    allowShell: rawPermissions?.allowShell !== false,
   };
+}
+
+function mergeDefaultAllowedCommands(allowed) {
+  const set = new Set(Array.isArray(allowed) ? allowed : []);
+  for (const [cmd, meta] of Object.entries(COMMAND_CATALOG)) {
+    if (meta.enabledByDefault) set.add(cmd);
+  }
+  return [...set];
 }
 
 export function loadSettings() {
@@ -194,7 +271,7 @@ export function loadSettings() {
     const legacyKey = typeof raw?.openAICompat?.apiKey === "string" ? raw.openAICompat.apiKey : "";
     const apiKeys = raw?.openAICompat?.apiKeys || {};
     return {
-      allowedCommands: allowed,
+      allowedCommands: mergeDefaultAllowedCommands(allowed),
       openAICompat: {
         apiKeys: normalizeProviderApiKeys(apiKeys, legacyKey),
       },

@@ -25,7 +25,7 @@ import { QWEN_AUTH_FILE } from "../src/providers/qwen/config.mjs";
 import { QwenChatClient } from "../src/providers/qwen/client.mjs";
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
-import { DeepSeekChatClient } from "../src/deepseek/client.mjs";
+import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
 import { parseModelToolCalls } from "./tool-calls.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";

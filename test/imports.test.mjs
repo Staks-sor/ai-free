@@ -15,10 +15,10 @@ describe("module graph", () => {
       "../src/auth/manager.mjs",
       "../src/browser/launch.mjs",
       "../src/browser/login.mjs",
-      "../src/deepseek/headers.mjs",
-      "../src/deepseek/client.mjs",
-      "../src/deepseek/pow.mjs",
-      "../src/deepseek/sse.mjs",
+      "../src/providers/deepseek/headers.mjs",
+      "../src/providers/deepseek/client.mjs",
+      "../src/providers/deepseek/pow.mjs",
+      "../src/providers/deepseek/sse.mjs",
       "../src/code-agent/prompt.mjs",
       "../src/code-agent/parser.mjs",
       "../src/code-agent/executor.mjs",
@@ -53,7 +53,7 @@ describe("module graph", () => {
     assert.ok(typeof authFiles.readSavedAuth === "function");
     assert.ok(typeof authFiles.writeSavedAuth === "function");
 
-    const client = await import("../src/deepseek/client.mjs");
+    const client = await import("../src/providers/deepseek/client.mjs");
     assert.ok(typeof client.DeepSeekChatClient === "function");
 
     const manager = await import("../src/auth/manager.mjs");

@@ -235,10 +235,11 @@ describe("extractFirstJsonObject", () => {
 });
 
 describe("validateCommandArgs", () => {
-  it("blocks npm install/add/remove/publish", () => {
-    assert.throws(() => validateCommandArgs("/tmp", "npm", ["install"]));
-    assert.throws(() => validateCommandArgs("/tmp", "npm", ["add", "left-pad"]));
+  it("allows npm install/add and blocks publish/login", () => {
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "npm", ["install"]));
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "npm", ["add", "left-pad"]));
     assert.throws(() => validateCommandArgs("/tmp", "npm", ["publish"]));
+    assert.throws(() => validateCommandArgs("/tmp", "npm", ["login"]));
   });
 
   it("blocks node -e / --eval / -p / --print", () => {
@@ -247,18 +248,14 @@ describe("validateCommandArgs", () => {
     assert.throws(() => validateCommandArgs("/tmp", "node", ["-p", "x"]));
   });
 
-  it("blocks python -c / -m", () => {
-    assert.throws(() => validateCommandArgs("/tmp", "python", ["-c", "x"]));
-    assert.throws(() => validateCommandArgs("/tmp", "python3", ["-m", "x"]));
+  it("allows python -c / -m by default", () => {
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "python", ["-c", "print(1)"]));
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "python3", ["-m", "room_agents.run_room"]));
   });
 
-  it("allows python -c / -m when the explicit permission is enabled", () => {
-    assert.doesNotThrow(() =>
-      validateCommandArgs("/tmp", "python", ["-c", "print(1)"], { allowPythonModuleAndEval: true }),
-    );
-    assert.doesNotThrow(() =>
-      validateCommandArgs("/tmp", "python3", ["-m", "room_agents.run_room"], { allowPythonModuleAndEval: true }),
-    );
+  it("blocks python -c / -m when disabled", () => {
+    assert.throws(() => validateCommandArgs("/tmp", "python", ["-c", "x"], { allowPythonModuleAndEval: false }));
+    assert.throws(() => validateCommandArgs("/tmp", "python3", ["-m", "x"], { allowPythonModuleAndEval: false }));
   });
 
   it("blocks interactive node/python without script args", () => {
@@ -267,11 +264,26 @@ describe("validateCommandArgs", () => {
     assert.throws(() => validateCommandArgs("/tmp", "python3", []));
   });
 
-  it("blocks shell operators in args", () => {
-    assert.throws(() => validateCommandArgs("/tmp", "ls", ["a;b"]));
-    assert.throws(() => validateCommandArgs("/tmp", "ls", ["a&&b"]));
-    assert.throws(() => validateCommandArgs("/tmp", "ls", ["a|b"]));
-    assert.throws(() => validateCommandArgs("/tmp", "ls", ["`whoami`"]));
+  it("allows regex alternation in run_command args (no shell)", () => {
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "grep", ["-E", "foo|bar", "file.txt"]));
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "grep", ["pattern|other", "src/"]));
+  });
+
+  it("runs shell pipelines through run_shell when enabled", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-shell-"));
+    fs.writeFileSync(path.join(dir, "a.txt"), "hello\nworld\n", "utf8");
+    try {
+      const { runWorkspaceShell } = await import("../src/code-agent/executor.mjs");
+      const { saveSettings, loadSettings } = await import("../src/state/settings.mjs");
+      const prev = loadSettings();
+      saveSettings({ ...prev, commandPermissions: { ...prev.commandPermissions, allowShell: true } });
+      const result = await runWorkspaceShell(dir, { command: "grep hello a.txt | wc -l" });
+      assert.equal(result.ok, true);
+      assert.match(result.stdout.trim(), /1/);
+      saveSettings(prev);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("blocks network URLs in args", () => {
@@ -581,24 +593,16 @@ describe("COMMAND_CATALOG.rmdir validateArgs", () => {
 describe("COMMAND_CATALOG.git validateArgs", () => {
   const v = COMMAND_CATALOG.git.validateArgs;
 
-  it("blocks clone, fetch, pull", () => {
-    assert.throws(() => v(["clone", "https://x"]));
-    assert.throws(() => v(["fetch"]));
-    assert.throws(() => v(["pull"]));
+  it("allows clone, fetch, pull", () => {
+    assert.doesNotThrow(() => v(["clone", "https://github.com/x/y.git"]));
+    assert.doesNotThrow(() => v(["fetch"]));
+    assert.doesNotThrow(() => v(["pull"]));
   });
 
   it("blocks push --force / -f", () => {
     assert.throws(() => v(["push", "--force"]));
     assert.throws(() => v(["push", "-f"]));
-    assert.throws(() => v(["push", "+"]));
-  });
-
-  it("blocks remote add", () => {
-    assert.throws(() => v(["remote", "add", "origin", "x"]));
-  });
-
-  it("blocks submodule add", () => {
-    assert.throws(() => v(["submodule", "add", "x"]));
+    assert.throws(() => v(["push", "+main"]));
   });
 
   it("allows normal git ops", () => {

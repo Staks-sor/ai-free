@@ -178,11 +178,14 @@ export function formatToolLog(call, result) {
     return lines.join("\n");
   }
 
-  if (call.tool !== "run_command") return header;
+  if (call.tool !== "run_command" && call.tool !== "run_shell") return header;
 
   const lines = [
     header,
   ];
+  if (call.tool === "run_shell" && call.command) {
+    lines.push(`command: ${call.command}`);
+  }
   if (result.status !== undefined) {
     lines.push(`status: ${result.status}${result.timedOut ? " (timed out)" : ""}`);
   } else if (result.error) {

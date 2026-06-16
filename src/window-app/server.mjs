@@ -23,6 +23,7 @@ import {
 } from "../state/settings.mjs";
 import { conversationList, makeConversationTitle, shouldAutoTitle } from "../state/conversations.mjs";
 import { startTask, isRunning, getRunningIds, stopTask } from "./task-runner.mjs";
+import { getShutdownStatus, registerShutdownServerCloser, requestAppShutdown } from "../app-shutdown.mjs";
 import { getStateFile, loadWindowState, saveWindowState } from "../state/window-state.mjs";
 import { LANGUAGES, getLanguageMeta } from "../i18n/index.mjs";
 import { getLocalizedAgentRoles } from "../i18n/agent-roles.mjs";
@@ -491,7 +492,24 @@ export async function runWindowApp({
 
       // Lifeline для фронта. Если этот endpoint не отвечает 3 раза подряд → окно закрывается.
       if (req.method === "GET" && url.pathname === "/api/heartbeat") {
+        const shutdown = getShutdownStatus();
+        if (shutdown.active) {
+          return sendJson(res, {
+            ok: true,
+            shuttingDown: true,
+            phase: shutdown.phase,
+          });
+        }
         return sendJson(res, { ok: true, ts: Date.now() });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/shutdown") {
+        if (!getShutdownStatus().active) {
+          requestAppShutdown({ source: "ui" }).finally(() => {
+            setTimeout(() => process.exit(0), 200).unref();
+          });
+        }
+        return sendJson(res, { ok: true, ...getShutdownStatus() });
       }
 
       // Список провайдеров + статус auth. UI рисует picker по этому ответу.
@@ -988,6 +1006,8 @@ export async function runWindowApp({
         const commandPermissions = { ...(current.commandPermissions || {}) };
         if (key === "allowPythonModuleAndEval") {
           commandPermissions.allowPythonModuleAndEval = true;
+        } else if (key === "allowShell") {
+          commandPermissions.allowShell = true;
         } else {
           return sendJson(res, { error: `Unknown permission: ${key}` }, 400);
         }
@@ -1566,16 +1586,22 @@ export async function runWindowApp({
     console.log("Window opening disabled. Console logging is enabled. Press Ctrl+C to stop.");
   }
 
-  // Graceful shutdown: Ctrl+C / kill / закрытие терминала.
-  // Сервер закрывается → фронт через heartbeat видит мёртвый CLI → окно закрывается.
+  // Graceful shutdown: Ctrl+C, кнопка «Выход» в UI, POST /api/shutdown.
   let shuttingDown = false;
   const shutdown = (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    if (signal) console.log(`\nReceived ${signal}, stopping window server...`);
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1500).unref();
+    if (signal === "SIGINT") process.stdout.write("\n");
+    requestAppShutdown({ source: signal || "signal" }).finally(() => {
+      process.exit(0);
+    });
   };
+
+  registerShutdownServerCloser((done) => {
+    server.close(() => done());
+    setTimeout(done, 2000).unref();
+  });
+
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGHUP", () => shutdown("SIGHUP"));
