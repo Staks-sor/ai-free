@@ -276,12 +276,13 @@ export const STYLES = `
     }
     .topbar {
       border-bottom: 1px solid var(--line);
-      padding: 10px 16px;
-      display: flex;
+      padding: 8px 12px;
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) minmax(0, auto) auto;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
+      gap: 8px;
       background: var(--sidebar);
+      min-width: 0;
     }
     .titleRow {
       display: flex;
@@ -289,10 +290,17 @@ export const STYLES = `
       gap: 8px;
       min-width: 0;
     }
+    .topbarTitle {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      overflow: hidden;
+    }
     .title {
       font-weight: 700;
       font-size: 14px;
       color: var(--text);
+      max-width: 100%;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -303,15 +311,38 @@ export const STYLES = `
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      display: none; /* Скрыто в сайдбаре VS Code, путь пишется в титле */
+      max-width: 100%;
+      display: none;
+    }
+    .topbarControls,
+    .topbarActions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .topbarControls {
+      justify-content: flex-end;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .topbarControls::-webkit-scrollbar { display: none; }
+    .topbarActions {
+      justify-content: flex-end;
+      flex-shrink: 0;
+      padding-left: 4px;
+      border-left: 1px solid var(--line);
+    }
+    .topbar .iconBtn {
+      height: 28px;
+      min-width: 28px;
+      padding: 0 8px;
     }
     .settingsBtn {
       font-size: 16px;
-      padding: 4px 8px;
     }
     .quitBtn {
       font-size: 15px;
-      padding: 4px 8px;
       color: #f87171;
     }
     .quitBtn:hover { color: #fca5a5; }
@@ -1011,24 +1042,35 @@ export const STYLES = `
     .modelPicker,
     .rolePicker {
       font-size: 11px;
-      padding: 4px 10px;
+      height: 28px;
+      padding: 3px 24px 3px 9px;
       border-radius: 6px;
       border: 1px solid var(--line);
       background: var(--input-bg);
       color: var(--text);
       cursor: pointer;
-      max-width: 200px;
+      max-width: 170px;
+      min-width: 0;
       font-weight: 600;
     }
     .modelPicker.hidden,
     .rolePicker.hidden { display: none; }
     .modelPicker:hover,
     .rolePicker:hover { border-color: var(--line-strong); }
-    .rolePicker { max-width: 150px; }
+    .modelPicker {
+      border-color: rgba(77, 124, 255, 0.34);
+      color: #c7d4ff;
+    }
+    .rolePicker {
+      border-color: rgba(20, 184, 166, 0.28);
+      color: #b7fff2;
+    }
+    .rolePicker { max-width: 135px; }
 
     .coderToggle {
       font-size: 11px;
-      padding: 4px 12px;
+      height: 28px;
+      padding: 3px 10px;
       border-radius: 999px;
       border: 1px solid var(--line);
       background: transparent;
@@ -1036,9 +1078,23 @@ export const STYLES = `
       cursor: pointer;
       font-weight: 600;
       transition: all 120ms;
+      white-space: nowrap;
+      flex: 0 0 auto;
     }
     .coderToggle.hidden { display: none; }
     .coderToggle:hover { color: var(--text); border-color: var(--line-strong); }
+    .coderToggle {
+      border-color: rgba(168, 85, 247, 0.26);
+      color: #c4b5fd;
+    }
+    .hardwareToggle {
+      border-color: rgba(245, 158, 11, 0.28);
+      color: #fcd34d;
+    }
+    .pipelineToggle {
+      border-color: rgba(20, 184, 166, 0.26);
+      color: #99f6e4;
+    }
     .coderToggle.active {
       background: rgba(168, 85, 247, 0.14);
       color: #d8b4fe;
@@ -1063,9 +1119,9 @@ export const STYLES = `
       color: #92400e;
     }
     .pipelinePanelBtn {
-      position: absolute;
-      right: 58px;
-      top: 10px;
+      flex: 0 0 auto;
+      color: #5eead4;
+      border-color: rgba(20, 184, 166, 0.25);
     }
     .pipelinePanel {
       position: absolute;
@@ -1177,6 +1233,43 @@ export const STYLES = `
       color: #6ee7b7;
       border: 1px solid rgba(16, 185, 129, 0.38);
     }
+
+    @media (max-width: 900px) {
+      .topbar {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "title actions"
+          "controls controls";
+        row-gap: 6px;
+      }
+      .topbarTitle { grid-area: title; }
+      .topbarControls {
+        grid-area: controls;
+        justify-content: flex-start;
+        padding-top: 2px;
+      }
+      .topbarActions { grid-area: actions; }
+    }
+
+    @media (max-width: 640px) {
+      .topbar {
+        padding: 7px 9px;
+      }
+      .title {
+        font-size: 13px;
+      }
+      .topbarControls {
+        gap: 5px;
+      }
+      .modelPicker { max-width: 132px; }
+      .rolePicker { max-width: 118px; }
+      .coderToggle {
+        max-width: 112px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
     .chatImage {
       display: block;
       max-width: min(420px, 100%);

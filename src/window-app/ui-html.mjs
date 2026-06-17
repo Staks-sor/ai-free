@@ -107,8 +107,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
     <main class="main">
       <header class="topbar">
-        <div id="activeTitleRow" class="titleRow">
+        <div id="activeTitleRow" class="titleRow topbarTitle">
           <div id="activeTitle" class="title">${t("app.noChat")}</div>
+          <div id="workspace" class="workspace"></div>
+        </div>
+        <div class="topbarControls">
           <span id="activeMode" class="modeBadge hidden"></span>
           <select id="modelPicker" class="modelPicker hidden" title="${t("topbar.model")}"></select>
           <select id="rolePicker" class="rolePicker hidden" title="${t("topbar.role")}"></select>
@@ -117,10 +120,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">${t("topbar.pipeline")}</button>
           <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="${t("topbar.flowTitle")}">${t("topbar.flow")}</button>
         </div>
-        <div id="workspace" class="workspace"></div>
-        <button id="themeBtn" class="iconBtn themeBtn" type="button" title="${t("topbar.theme")}">◐</button>
-        <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="${t("topbar.settings")}">⚙</button>
-        <button id="quitBtn" class="iconBtn quitBtn" type="button" title="${t("topbar.quit")}">⏻</button>
+        <div class="topbarActions">
+          <button id="themeBtn" class="iconBtn themeBtn" type="button" title="${t("topbar.theme")}">◐</button>
+          <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="${t("topbar.settings")}">⚙</button>
+          <button id="quitBtn" class="iconBtn quitBtn" type="button" title="${t("topbar.quit")}">⏻</button>
+        </div>
       </header>
 
       <div id="shutdownOverlay" class="shutdownOverlay hidden" aria-hidden="true">
