@@ -159,7 +159,8 @@ export function shouldRejectTextOnlyCodeResult(task, text, toolLogs = []) {
     /\b(created|made|added|edited|updated|changed|fixed|removed|deleted|renamed|implemented|wrote|modified|installed|ran|tested|verified|built|done|completed)\b/i.test(answer)
     || /(создал|сделал|добавил|изменил|обновил|исправил|починил|удалил|переименовал|реализовал|написал|установил|запустил|проверил|собрал|готово|выполнено)/i.test(answer);
   const answerRefusesWorkspace =
-    /environment mismatch|workspace files are not accessible|runtime is not mounted|re-run inside|cannot proceed|не вижу.*workspace|не доступ/i.test(answer);
+    /environment mismatch|workspace files are not accessible|runtime is not mounted|re-run inside|cannot proceed|не вижу.*workspace|не доступ/i.test(answer)
+    || /(не могу гарантировать|не подтверждается|write_file.*не доход|изменения.*не примен|пишутся.*в никуда|словно делается.*не делается|tool-call.*контекст)/i.test(answer);
   return taskRequiresWorkspace || answerClaimsWork || answerRefusesWorkspace;
 }
 

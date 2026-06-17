@@ -633,6 +633,17 @@ describe("runCodeTask text-only code responses", () => {
       true,
     );
   });
+
+  it("detects runtime uncertainty prose as a failed code-agent action", () => {
+    assert.equal(
+      shouldRejectTextOnlyCodeResult(
+        "сделай правки в проекте",
+        "Я НЕ могу гарантировать, что изменения реально применяются; часть write_file может не доходить до твоего диска.",
+        [],
+      ),
+      true,
+    );
+  });
 });
 
 describe("resolveMaxToolSteps", () => {
