@@ -24,6 +24,7 @@ import {
   formatToolLog,
   isTransientUpstreamTextError,
   resolveMaxToolSteps,
+  shouldRejectTextOnlyCodeResult,
   runCodeTask,
 } from "../src/code-agent/run.mjs";
 import { createCodeSystemPrompt } from "../src/code-agent/prompt.mjs";
@@ -528,6 +529,102 @@ describe("runCodeTask transient text retries", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("runCodeTask text-only code responses", () => {
+  it("does not accept claimed file changes until a workspace tool runs", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    const prompts = [];
+    let calls = 0;
+    try {
+      const fakeClient = {
+        async complete(options) {
+          calls += 1;
+          prompts.push(options.prompt);
+          if (calls === 1) {
+            return {
+              text: "Готово, создал файл notes.txt.",
+              lastAssistantMessageId: "plain",
+            };
+          }
+          if (calls === 2) {
+            return {
+              text: '{"tool":"write_file","path":"notes.txt","content":"ok\\n"}',
+              lastAssistantMessageId: "tool",
+            };
+          }
+          return {
+            text: '{"tool":"finish","message":"Создал notes.txt"}',
+            lastAssistantMessageId: "finish",
+          };
+        },
+      };
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "создай notes.txt", null, {
+        noToolTextRetries: 1,
+      });
+      assert.equal(calls, 3);
+      assert.equal(result.message, "Создал notes.txt");
+      assert.equal(fs.readFileSync(path.join(dir, "notes.txt"), "utf8"), "ok\n");
+      assert.match(prompts[1], /No tool call has been executed yet/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns an explicit error after repeated text-only false success", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    let calls = 0;
+    try {
+      const fakeClient = {
+        async complete() {
+          calls += 1;
+          return {
+            text: calls === 1 ? "Сделал файл app.js." : "Готово, файл создан.",
+            lastAssistantMessageId: `plain-${calls}`,
+          };
+        },
+      };
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "создай app.js", null, {
+        noToolTextRetries: 1,
+      });
+      assert.equal(calls, 2);
+      assert.match(result.message, /without using workspace tools/);
+      assert.equal(fs.existsSync(path.join(dir, "app.js")), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still allows informational answers that do not require workspace changes", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    try {
+      const fakeClient = {
+        async complete() {
+          return {
+            text: "Это обычное объяснение без изменений файлов.",
+            lastAssistantMessageId: "plain",
+          };
+        },
+      };
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "объясни что такое JSON", null, {
+        noToolTextRetries: 1,
+      });
+      assert.equal(result.message, "Это обычное объяснение без изменений файлов.");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects environment mismatch text as a failed code-agent action", () => {
+    assert.equal(
+      shouldRejectTextOnlyCodeResult(
+        "проверь проект",
+        "Environment mismatch: workspace files are not accessible here.",
+        [],
+      ),
+      true,
+    );
   });
 });
 

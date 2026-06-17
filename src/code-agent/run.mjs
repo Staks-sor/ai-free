@@ -22,6 +22,8 @@ export async function runCodeTask(
   const toolLogs = [];
   const maxToolSteps = resolveMaxToolSteps(options.maxToolSteps);
   const maxTransientTextRetries = resolveTransientTextRetries(options.transientTextRetries);
+  const maxNoToolTextRetries = resolveNoToolTextRetries(options.noToolTextRetries);
+  let noToolTextRetries = 0;
 
   for (let step = 0; step < maxToolSteps; step += 1) {
     if (options.signal?.aborted) {
@@ -50,6 +52,16 @@ export async function runCodeTask(
           continue;
         }
         parent = nextParent;
+        if (shouldRejectTextOnlyCodeResult(task, result.text, toolLogs)) {
+          if (noToolTextRetries >= maxNoToolTextRetries) {
+            const message = "Error: the model answered without using workspace tools, so no file changes were made. Retry the task or switch provider.";
+            options.onAssistant?.(message);
+            return { parentMessageId: parent, message, toolLogs };
+          }
+          noToolTextRetries += 1;
+          prompt = buildNoToolCorrectionPrompt(workspaceRoot, task, result.text);
+          continue;
+        }
         options.onAssistant?.(result.text);
         return { parentMessageId: parent, message: result.text, toolLogs };
       }
@@ -126,8 +138,48 @@ export function resolveTransientTextRetries(value) {
   return Math.min(Math.max(Math.floor(parsed), 0), 5);
 }
 
+export function resolveNoToolTextRetries(value) {
+  const parsed = Number(value ?? process.env.DSCLI_CODE_NO_TOOL_RETRIES ?? 2);
+  if (!Number.isFinite(parsed)) return 2;
+  return Math.min(Math.max(Math.floor(parsed), 0), 5);
+}
+
 export function isTransientUpstreamTextError(text) {
   return /allocated quota exceeded|quota\/token-limit|token-limit|too many requests|rate limit/i.test(String(text || ""));
+}
+
+export function shouldRejectTextOnlyCodeResult(task, text, toolLogs = []) {
+  if (Array.isArray(toolLogs) && toolLogs.length > 0) return false;
+  const taskText = String(task || "").toLowerCase();
+  const answer = String(text || "").toLowerCase();
+  const taskRequiresWorkspace =
+    /\b(create|make|add|edit|update|change|fix|repair|remove|delete|rename|implement|write|modify|install|run|test|verify|check|build|refactor)\b/i.test(taskText)
+    || /(созда|сдела|добав|измени|обнов|исправ|почини|удали|переимен|реализ|напиш|установ|запусти|проверь|собери|рефактор)/i.test(taskText);
+  const answerClaimsWork =
+    /\b(created|made|added|edited|updated|changed|fixed|removed|deleted|renamed|implemented|wrote|modified|installed|ran|tested|verified|built|done|completed)\b/i.test(answer)
+    || /(создал|сделал|добавил|изменил|обновил|исправил|починил|удалил|переименовал|реализовал|написал|установил|запустил|проверил|собрал|готово|выполнено)/i.test(answer);
+  const answerRefusesWorkspace =
+    /environment mismatch|workspace files are not accessible|runtime is not mounted|re-run inside|cannot proceed|не вижу.*workspace|не доступ/i.test(answer);
+  return taskRequiresWorkspace || answerClaimsWork || answerRefusesWorkspace;
+}
+
+function buildNoToolCorrectionPrompt(workspaceRoot, task, previousText) {
+  return `Your previous response was plain text, but this code-agent task requires workspace tools.
+No tool call has been executed yet, so no file changes have been made.
+
+Workspace root is mounted and available to the local tool runtime:
+${workspaceRoot}
+
+User task:
+${task}
+
+Previous plain-text response to correct:
+${String(previousText || "").slice(0, 2000)}
+
+Reply with exactly one JSON tool call and no prose.
+Start with list_files/read_file if you need context, or use write_file/mkdir/run_command/run_shell as appropriate.
+If the task truly needs no workspace action, call {"tool":"finish","message":"No changes made: ..."}.
+Do not claim that you created, changed, checked, or ran anything until a tool result confirms it.`;
 }
 
 function sleep(ms) {
