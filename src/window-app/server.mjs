@@ -1147,7 +1147,8 @@ export async function runWindowApp({
             const slashCode = prompt === "/code" || prompt.startsWith("/code ");
             const coderMode = conversation.coderMode === true;
             const hardwareMode = conversation.hardwareMode === true;
-            if (slashCode || coderMode || hardwareMode) {
+            const autoCodeMode = shouldAutoRunCodeTask(prompt);
+            if (slashCode || coderMode || hardwareMode || autoCodeMode) {
               const task = slashCode ? prompt.slice(5).trim() : prompt;
               if (!task) {
                 conversation.messages.push({
@@ -1178,7 +1179,7 @@ export async function runWindowApp({
               };
               const parentId = getCodeParentMessageId(conversation);
               const progressLogs = [];
-              const progressMessage = createCodeProgressMessage(conversation, task);
+              const progressMessage = createCodeProgressMessage(task);
               conversation.messages.push(progressMessage);
               conversation.updatedAt = new Date().toISOString();
               saveWindowState(workspaceRoot, state);
@@ -1277,7 +1278,8 @@ export async function runWindowApp({
           const slashCode = prompt === "/code" || prompt.startsWith("/code ");
           const coderMode = conversation.coderMode === true;
           const hardwareMode = conversation.hardwareMode === true;
-          if (slashCode || coderMode || hardwareMode) {
+          const autoCodeMode = shouldAutoRunCodeTask(prompt);
+          if (slashCode || coderMode || hardwareMode || autoCodeMode) {
             const task = slashCode ? prompt.slice(5).trim() : prompt;
             if (!task) {
               conversation.messages.push({
@@ -1361,7 +1363,7 @@ export async function runWindowApp({
                 }
                 conversation.updatedAt = new Date().toISOString();
                 saveWindowState(workspaceRoot, state);
-              }, "ChatGPT /code");
+              }, autoCodeMode && !slashCode && !coderMode && !hardwareMode ? "ChatGPT auto-code" : "ChatGPT /code");
 
               return sendJson(res, { conversation, running: true });
             } catch (error) {
@@ -1477,7 +1479,8 @@ export async function runWindowApp({
         const dsSlashCode = prompt === "/code" || prompt.startsWith("/code ");
         const dsCoderMode = conversation.coderMode === true;
         const dsHardwareMode = conversation.hardwareMode === true;
-        if (dsSlashCode || dsCoderMode || dsHardwareMode) {
+        const dsAutoCodeMode = shouldAutoRunCodeTask(prompt);
+        if (dsSlashCode || dsCoderMode || dsHardwareMode || dsAutoCodeMode) {
           const task = dsSlashCode ? prompt.slice(5).trim() : prompt;
           if (!task) {
             conversation.messages.push({
@@ -1513,7 +1516,7 @@ export async function runWindowApp({
           };
           const parentId = getCodeParentMessageId(conversation);
           const progressLogs = [];
-          const progressMessage = createCodeProgressMessage(conversation, task);
+          const progressMessage = createCodeProgressMessage(task);
           conversation.messages.push(progressMessage);
           conversation.updatedAt = new Date().toISOString();
           saveWindowState(workspaceRoot, state);
@@ -1551,7 +1554,7 @@ export async function runWindowApp({
             }
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
-          }, "DeepSeek /code");
+          }, dsAutoCodeMode && !dsSlashCode && !dsCoderMode && !dsHardwareMode ? "DeepSeek auto-code" : "DeepSeek /code");
 
           return sendJson(res, { conversation, running: true });
         }
@@ -1875,6 +1878,37 @@ function formatCodeProgressMessage(task, logs) {
     `${prefix}${visibleLogs}`.trimEnd(),
     "```",
   ].join("\n\n");
+}
+
+export function shouldAutoRunCodeTask(prompt) {
+  const text = String(prompt || "").trim();
+  if (!text || text === "/code" || text.startsWith("/code ")) return false;
+  const normalized = text.toLowerCase();
+  const hasAny = (terms) => terms.some((term) => normalized.includes(term));
+
+  if (/^(как|что|почему|зачем|объясни|расскажи|покажи пример|можешь объяснить)\b/u.test(normalized)) {
+    return false;
+  }
+  if (/^(how|what|why|explain|tell me|can you explain)\b/u.test(normalized)) {
+    return false;
+  }
+
+  const directAction =
+    hasAny(["добавь", "добавить", "сделай", "сделать", "измени", "изменить", "исправь", "исправить", "почини", "починить", "обнови", "обновить", "удали", "удалить", "переименуй", "переименовать", "реализуй", "реализовать", "напиши", "написать", "создай", "создать", "встрой", "встраивай", "встроить", "подключи", "подключить", "проверь", "проверить", "запусти", "запустить", "собери", "собрать", "протестируй", "протестировать", "переведи", "перевести"])
+    || /\b(add|create|make|edit|update|change|fix|repair|remove|delete|rename|implement|write|modify|install|run|test|verify|check|build|refactor|wire|integrate)\b/u.test(normalized);
+
+  if (!directAction) return false;
+
+  const strongCodeAction =
+    hasAny(["добавь", "измени", "исправь", "почини", "обнови", "удали", "переименуй", "реализуй", "встрой", "встраивай", "встроить", "подключи", "проверь", "запусти", "собери", "протестируй", "переведи"])
+    || /\b(add|edit|update|change|fix|repair|remove|delete|rename|implement|modify|install|run|test|verify|build|refactor|wire|integrate)\b/u.test(normalized);
+  const projectSignal =
+    hasAny(["проект", "код", "файл", "папк", "репозитор", "интерфейс", "плагин", "десктоп", "настройк", "чат", "агент", "модель", "функц", "компонент"])
+    || /\b(api|memory|loop|ui|src|test|package|repo|repository|workspace|plugin|desktop|settings|agent|provider)\b/u.test(normalized)
+    || /\.(mjs|js|ts|tsx|jsx|json|css|html|md|py|sh|yml|yaml)\b/u.test(normalized)
+    || /[/\\]/u.test(normalized);
+
+  return strongCodeAction || projectSignal;
 }
 
 // Маппинг режима из UI в значение model_type для DeepSeek API.
