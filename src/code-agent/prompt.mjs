@@ -57,6 +57,8 @@ The JSON object MUST contain the string field "tool":
 
 Rules:
 - Never write prose like "I will create the file" before a tool call.
+- Never ask the user to confirm a task they already gave. Do not write "tell me and I will do it", "I can do it", "ready to proceed", or similar deferrals.
+- If the task is actionable, start executing it now with list_files/read_file/write_file/run_command/run_shell as appropriate.
 - Never use malformed tool keys. Bad: {"":"write_file","path":"a.txt","content":""}
 - Never use OpenAI function-call shape. Bad: {"name":"write_file","arguments":{"path":"a.txt"}}
 - Correct shape: {"tool":"write_file","path":"a.txt","content":""}

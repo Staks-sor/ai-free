@@ -644,6 +644,17 @@ describe("runCodeTask text-only code responses", () => {
       true,
     );
   });
+
+  it("detects deferred action prose as a failed code-agent action", () => {
+    assert.equal(
+      shouldRejectTextOnlyCodeResult(
+        "добавь кнопку в интерфейс",
+        "Могу сделать. Скажи, если хочешь, и я добавлю кнопку в интерфейс.",
+        [],
+      ),
+      true,
+    );
+  });
 });
 
 describe("resolveMaxToolSteps", () => {

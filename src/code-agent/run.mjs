@@ -161,7 +161,10 @@ export function shouldRejectTextOnlyCodeResult(task, text, toolLogs = []) {
   const answerRefusesWorkspace =
     /environment mismatch|workspace files are not accessible|runtime is not mounted|re-run inside|cannot proceed|не вижу.*workspace|не доступ/i.test(answer)
     || /(не могу гарантировать|не подтверждается|write_file.*не доход|изменения.*не примен|пишутся.*в никуда|словно делается.*не делается|tool-call.*контекст)/i.test(answer);
-  return taskRequiresWorkspace || answerClaimsWork || answerRefusesWorkspace;
+  const answerDefersAction =
+    /\b(i can|i could|i will|ready to|let me know|tell me|say the word|would you like me to|do you want me to)\b.*\b(do|make|create|change|fix|update|implement|write|run)\b/i.test(answer)
+    || /(могу|готов|давай|скажи|напиши|подтверди|если хочешь|хочешь).*?(сдела|созда|добав|измени|исправ|почин|обнов|реализ|напиш|запущ|провер)/i.test(answer);
+  return taskRequiresWorkspace || answerClaimsWork || answerRefusesWorkspace || answerDefersAction;
 }
 
 function buildNoToolCorrectionPrompt(workspaceRoot, task, previousText) {
@@ -179,6 +182,7 @@ ${String(previousText || "").slice(0, 2000)}
 
 Reply with exactly one JSON tool call and no prose.
 Start with list_files/read_file if you need context, or use write_file/mkdir/run_command/run_shell as appropriate.
+Do not ask the user to confirm the task again. Do not say "tell me and I will do it"; do it now with a tool call.
 If the task truly needs no workspace action, call {"tool":"finish","message":"No changes made: ..."}.
 Do not claim that you created, changed, checked, or ran anything until a tool result confirms it.`;
 }
