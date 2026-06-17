@@ -218,6 +218,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     let appState = { conversations: [], activeConversationId: null, workspaceRoot: "" };
     let activeConversation = null;
     let sending = false;
+    const typewriterTimers = new Set();
 
     const chatList = document.getElementById("chatList");
     const appShell = document.querySelector(".app");
@@ -1135,7 +1136,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
         activeConversation = data.conversation;
         await loadState(activeConversation.id);
-        renderConversation(activeConversation);
+        renderConversation(activeConversation, { animateLastAssistant: true });
         setStatus("");
       } catch (error) {
         if (!messageInput.value.trim()) {
@@ -1399,7 +1400,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       pipelinePanel.setAttribute("aria-hidden", "true");
     });
 
-    function renderConversation(conversation) {
+    function renderConversation(conversation, options = {}) {
+      stopTypewriters();
       activeTitle.textContent = conversation.title;
       workspace.textContent = conversation.workspace || appState.workspaceRoot;
       if (appState.stateFile) workspace.title = t("chat.history", { file: appState.stateFile });
@@ -1496,7 +1498,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         return;
       }
 
-      for (const message of conversation.messages) {
+      const animateIndex = options.animateLastAssistant === true
+        ? findLastTextAssistantIndex(conversation.messages)
+        : -1;
+
+      for (const [index, message] of conversation.messages.entries()) {
         const row = document.createElement("article");
         row.className = "msg " + message.role;
         const role = document.createElement("div");
@@ -1510,7 +1516,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         bubble.className = "bubble";
         if (message.content) {
           const textEl = document.createElement("div");
-          textEl.textContent = message.content;
+          if (index === animateIndex) {
+            textEl.textContent = "";
+            typeText(textEl, message.content, () => {
+              messages.scrollTop = messages.scrollHeight;
+            });
+          } else {
+            textEl.textContent = message.content;
+          }
           bubble.appendChild(textEl);
         }
         // Сгенерированные ChatGPT картинки (data-URL) — рендерим как <img>.
@@ -1532,6 +1545,44 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderQuestionRequest(conversation);
       renderPermissionRequest(conversation);
       messages.scrollTop = messages.scrollHeight;
+    }
+
+    function findLastTextAssistantIndex(items) {
+      if (!Array.isArray(items)) return -1;
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        const message = items[i];
+        if (message?.role === "assistant" && String(message.content || "").trim()) return i;
+      }
+      return -1;
+    }
+
+    function stopTypewriters() {
+      for (const timer of typewriterTimers) clearTimeout(timer);
+      typewriterTimers.clear();
+    }
+
+    function typeText(target, text, onStep) {
+      const full = String(text || "");
+      if (!full) return;
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        target.textContent = full;
+        return;
+      }
+      const chunkSize = full.length > 5000 ? 28 : full.length > 1800 ? 16 : 7;
+      const delayMs = full.length > 5000 ? 4 : 10;
+      let offset = 0;
+      const tick = () => {
+        offset = Math.min(full.length, offset + chunkSize);
+        target.textContent = full.slice(0, offset);
+        onStep?.();
+        if (offset >= full.length) return;
+        const timer = setTimeout(() => {
+          typewriterTimers.delete(timer);
+          tick();
+        }, delayMs);
+        typewriterTimers.add(timer);
+      };
+      tick();
     }
 
     async function updatePipelineEdges(edges) {
