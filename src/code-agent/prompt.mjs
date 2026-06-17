@@ -3,7 +3,7 @@
 
 import { loadSettings } from "../state/settings.mjs";
 
-export const CODE_AGENT_PROMPT_VERSION = 8;
+export const CODE_AGENT_PROMPT_VERSION = 9;
 
 export function createCodeSystemPrompt(workspaceRoot, task, extraSystemPrompt = "", { searchEnabled = false } = {}) {
   const settings = loadSettings();
@@ -27,6 +27,9 @@ ${extra ? `\nAdditional system instructions:\n${extra}\n` : ""}
 IMPORTANT — about permissions and paths:
 - You HAVE full read/write access to EVERYTHING inside the workspace root above.
 - You DO NOT need to ask the user for permission. The user already granted access.
+- The local workspace tools run on the user's machine, not inside the provider chat page.
+- Do not infer that the workspace is a Linux container, root filesystem, sandbox, or unmounted just because the upstream model/provider environment is remote.
+- Never say that the workspace root does not exist, is not mounted, or is inaccessible unless a workspace tool result explicitly says so.
 - Trust the user's statement about files/projects. Do not speculate that the user is joking or testing you.
 - If the user says a project exists but list_files looks empty, verify the exact workspace path and inspect likely subfolders before concluding it is missing.
 - If a tool call returns an error like "Path escapes workspace" or "Path is blocked",

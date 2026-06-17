@@ -40,6 +40,13 @@ describe("code agent prompt", () => {
     assert.match(prompt, /Do not say you have no internet access/);
     assert.doesNotMatch(prompt, /Forbidden: network access/);
   });
+
+  it("prevents provider-environment confusion about the local workspace", () => {
+    const prompt = createCodeSystemPrompt("/Users/staks_mini/Documents/ai-free", "проверь проект");
+    assert.match(prompt, /local workspace tools run on the user's machine/);
+    assert.match(prompt, /not inside the provider chat page/);
+    assert.match(prompt, /Never say that the workspace root does not exist/);
+  });
 });
 
 describe("localized command descriptions", () => {
