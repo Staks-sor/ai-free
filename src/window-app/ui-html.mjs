@@ -1061,6 +1061,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       sending = true;
       setComposerEnabled(false);
+      const sentDraftText = messageInput.value;
       messageInput.value = "";
       // Сбросить авто-рост на исходную высоту (но если юзер тянул руками — оставить).
       if (!userResizedInput) messageInput.style.height = "";
@@ -1133,6 +1134,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         renderConversation(activeConversation);
         setStatus("");
       } catch (error) {
+        if (!messageInput.value.trim()) {
+          messageInput.value = sentDraftText;
+          autoGrowInput();
+        }
         // Возвращаем файлы юзеру — иначе он не поймёт, что они пропали.
         attachments = sentAttachments;
         renderAttachments();
