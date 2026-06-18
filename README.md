@@ -1,6 +1,10 @@
-# AI Free
+<h1 align="center">AI Free</h1>
 
-## Выберите язык / Choose your language
+<p align="center">
+  <strong>Бесплатные AI-чаты, код-агент, память и локальный API в одном приложении</strong>
+</p>
+
+## 🌍 Выберите язык / Choose your language
 
 <p>
   <a href="README.md"><img src="https://img.shields.io/badge/Русский-0969da?style=for-the-badge" height="30" alt="Русский"></a>
@@ -14,7 +18,14 @@
   <a href="docs/readme/README.ar.md"><img src="https://img.shields.io/badge/العربية-1a7f37?style=for-the-badge" height="30" alt="العربية"></a>
 </p>
 
-> CLI и десктопное окно для бесплатных AI-веб-чатов в одном интерфейсе. Сейчас: **DeepSeek + Qwen**. На очереди: Kimi, Mistral, Claude.ai. Кросс-платформенно — macOS, Linux, Windows.
+<p align="center">
+  <img src="https://img.shields.io/github/package-json/v/Staks-sor/ai-free?style=flat-square&amp;label=version" alt="Версия">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-8250df?style=flat-square" alt="macOS, Linux, Windows">
+  <img src="https://img.shields.io/badge/Node.js-18%2B-1f883d?style=flat-square" alt="Node.js 18+">
+  <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
+</p>
+
+> CLI и десктопное окно для бесплатных AI-веб-чатов в одном интерфейсе. Сейчас: **DeepSeek + Qwen + ChatGPT**. Кросс-платформенно — macOS, Linux, Windows.
 
 ---
 
@@ -34,24 +45,25 @@
 
 Архитектурно проект разделён на модули в `src/` (auth, browser, providers, code-agent, **memory**, **skills**, agent-orchestrator, state, window-app, api, cli). Точка входа — `bin/deepseek.mjs`. Юнит-тесты: `npm test` (**190** кейсов, встроенный Node test runner). Архитектура памяти и skills — [docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md](docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md). Сценарий для видео — [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md).
 
-## Что внутри
+## ✨ Что внутри
 
-- **Два провайдера:** DeepSeek (`chat.deepseek.com`) и Qwen (`chat.qwen.ai`) — в одном окне чатов, переключение при создании беседы.
-- **Авто-логин DeepSeek:** один раз заходишь через браузер (Google OAuth / email-пароль / captcha). Дальше сессия подхватывается из Chromium-профиля; при протухании — тихий refresh или окно re-login.
-- **Авто-логин Qwen:** отдельный профиль и `auth.json`; тихий refresh из профиля, re-login из UI («нажми — подключить») или `npm run login-qwen`.
-- **Окно чатов** (`localhost:4317`): несколько параллельных бесед, каждая привязана к своей папке-проекту.
-- **CLI-режим:** REPL в терминале для скриптовых сценариев и быстрых вопросов.
-- **`/code` агент:** доступ к файлам workspace и whitelist-командам (DeepSeek и Qwen).
+- 💬 **Три провайдера:** DeepSeek, Qwen и ChatGPT в одном окне с выбором модели при создании беседы.
+- 🔑 **Авто-логин DeepSeek:** один вход через браузер, затем тихое восстановление сессии или окно re-login.
+- 🔐 **Авто-логин Qwen и ChatGPT:** отдельные профили и локальные сессии для каждого провайдера.
+- 🪟 **Окно чатов** (`localhost:4317`): несколько параллельных бесед, каждая привязана к своей папке-проекту.
+- ⌨️ **CLI-режим:** REPL в терминале для скриптовых сценариев и быстрых вопросов.
+- 🛠️ **`/code` агент:** доступ к файлам workspace и разрешённым командам.
 - **🧠 Memory:** долговременная память агента — SQLite FTS5 + Markdown vault (`~/.ai-free/memory/`). Переключатель в topbar, просмотр в Settings → Агент.
 - **🔗 Memory graph:** связи task ↔ file ↔ bug ↔ fix; расширяет контекст при повторных задачах.
 - **⚡ Skills:** встроенные `code-review`, `bug-fix`, `video-script`; auto-match по задаче; `/skill <id> <task>`.
 - **Agent orchestrator:** перед `/code` собирает memory + skill в system prompt.
-- **OpenAI-совместимый API** (`localhost:4318`): для Kilo Code, Continue и других IDE.
-- **Файловый браузер:** при создании чата можно открыть проводник, выбрать папку или создать новую.
+- 🔌 **Совместимые API** (`localhost:4318`): OpenAI и Anthropic для Kilo Code, Continue и других IDE.
+- 🎙️ **Голосовой ввод:** Parakeet V3 скачивается отдельно только при первом использовании.
+- 📁 **Файловый браузер:** при создании чата можно выбрать папку или создать новую.
 
 ---
 
-## Требования
+## 📋 Требования
 
 Везде нужно:
 
@@ -65,7 +77,7 @@
 
 ---
 
-## Установка (один раз)
+## 🚀 Установка
 
 ### macOS / Linux
 
@@ -97,7 +109,7 @@ npm install
 
 ---
 
-## Первый запуск
+## 🎬 Первый запуск
 
 ```bash
 npm start
@@ -115,7 +127,7 @@ npm start
 
 ---
 
-## Где что хранится
+## 📁 Где что хранится
 
 Служебные файлы — вне проекта, в домашней папке пользователя.
 
@@ -154,7 +166,7 @@ npm start
 
 ---
 
-## Команды npm
+## ⌨️ Команды npm
 
 | Команда | Что делает |
 |---------|------------|
@@ -195,7 +207,7 @@ npm run server
 
 ---
 
-## Подключение Qwen
+## 🔌 Подключение Qwen
 
 Qwen использует **отдельный** Chromium-профиль и API через встроенный browser-proxy (подпись `bx-ua` на стороне chat.qwen.ai). Без логина Qwen в чатах не появится.
 
@@ -232,7 +244,7 @@ npm run import-qwen -- /path/to/cookies.json
 
 ---
 
-## Авто-логин email/пароль (только DeepSeek, опционально)
+## 🔐 Авто-логин email/пароль
 
 Если у тебя обычный email-вход (не Google OAuth) и хочется полный автомат:
 
@@ -248,7 +260,7 @@ npm run save-creds
 
 ---
 
-## Настройка разрешённых команд
+## 🛡️ Настройка разрешённых команд
 
 В окне чата справа сверху — кнопка ⚙. Открывается панель с тремя группами команд по уровню риска:
 
@@ -260,7 +272,7 @@ npm run save-creds
 
 ---
 
-## Привязка чатов к папкам
+## 🗂️ Привязка чатов к папкам
 
 В UI окна:
 
@@ -274,7 +286,7 @@ npm run save-creds
 
 ---
 
-## Memory и Skills
+## 🧠 Memory и Skills
 
 ### Topbar (в активном чате)
 
@@ -306,7 +318,7 @@ npm run save-creds
 
 ---
 
-## Закрытие
+## 🛑 Закрытие
 
 `Ctrl+C` в терминале → сервер останавливается → окно чатов через ~4–6 секунд само закрывается (heartbeat polling в фронте определяет, что сервер мёртв).
 
@@ -316,7 +328,7 @@ npm run save-creds
 
 ---
 
-## Платформенные нюансы
+## 🖥️ Платформенные нюансы
 
 ### macOS
 
@@ -341,7 +353,7 @@ npm run save-creds
 
 ---
 
-## Если что-то ломается
+## 🧰 Если что-то ломается
 
 **Правило №1:** `rm -rf ~/.deepseek-cli && npm start` (или `Remove-Item -Recurse -Force $env:USERPROFILE\.deepseek-cli` на Windows). Это ядерный сброс — снесёт сессию, токены, профиль, настройки. После сброса заново заходишь, всё работает с нуля.
 
@@ -377,7 +389,7 @@ npm run login-qwen
 
 ---
 
-## Интеграция с Kilo Code (OpenAI-совместимый API)
+## 🔗 Интеграция с Kilo Code
 
 Этот проект можно использовать как провайдер для Kilo Code или других IDE с поддержкой OpenAI-совместимых API.
 
@@ -410,7 +422,7 @@ npm run api
 
 ---
 
-## Интеграция с PyCharm ACP
+## 🧩 Интеграция с PyCharm ACP
 
 PyCharm AI Assistant запускает ACP-агента как subprocess из `~/.jetbrains/acp.json`.
 Для этого в проекте есть режим:
@@ -449,7 +461,7 @@ ACP-агент ходит в наш OpenAI-compatible API (`http://127.0.0.1:431
 
 ---
 
-## Безопасность (краткое резюме)
+## 🔒 Безопасность
 
 - Токены и cookies — в `~/.deepseek-cli/` и `~/.qwen-cli/` (plaintext, `0o600` на Unix, ACL на Windows).
 - `credentials.json` — только DeepSeek, опционально. **Не используй тот же пароль, что для банка/почты.**
@@ -459,10 +471,10 @@ ACP-агент ходит в наш OpenAI-compatible API (`http://127.0.0.1:431
 
 ---
 
-## Обратная связь
+## 💬 Обратная связь
 
 Нашёл баг или есть идея? Открой [Issue](https://github.com/Staks-sor/ai-free/issues) — отвечу.
 
-## Лицензия
+## 📄 Лицензия
 
 Personal-Use-Only — см. [LICENSE](LICENSE). Кратко: использовать в личных целях можно, распространять и модифицировать для распространения — только с разрешения автора. При любом одобренном использовании имя автора должно сохраняться.

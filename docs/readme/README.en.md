@@ -1,6 +1,10 @@
-# AI Free
+<h1 align="center">AI Free</h1>
 
-## Choose your language
+<p align="center">
+  <strong>Free AI chats, a code agent, memory, and local APIs in one app</strong>
+</p>
+
+## 🌍 Choose your language
 
 <p>
   <a href="../../README.md"><img src="https://img.shields.io/badge/Русский-0969da?style=for-the-badge" height="30" alt="Русский"></a>
@@ -14,33 +18,40 @@
   <a href="README.ar.md"><img src="https://img.shields.io/badge/العربية-1a7f37?style=for-the-badge" height="30" alt="العربية"></a>
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/github/package-json/v/Staks-sor/ai-free?style=flat-square&amp;label=version" alt="Version">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-8250df?style=flat-square" alt="macOS, Linux, Windows">
+  <img src="https://img.shields.io/badge/Node.js-18%2B-1f883d?style=flat-square" alt="Node.js 18+">
+  <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
+</p>
+
 > A CLI and desktop app that brings free AI web chats into one interface. Currently supports **DeepSeek, Qwen, and ChatGPT**. Runs on macOS, Linux, and Windows.
 
-## Support the project
+## ⭐ Support the project
 
 If AI Free saves you time, please [star the repository](https://github.com/Staks-sor/ai-free). It helps other people discover the project.
 
 - Donation card (OTP Bank): `2201 9604 2500 7505`
 
-## Features
+## ✨ Features
 
-- DeepSeek, Qwen, and ChatGPT conversations in one desktop window.
-- Automatic browser login and session recovery for each provider.
-- Multiple chats, each connected to its own project folder.
-- A `/code` agent with workspace file access and an allowlist of commands.
-- Long-term agent memory, a memory graph, and reusable skills.
-- OpenAI-compatible and Anthropic-compatible local APIs for IDE integrations.
-- Optional multilingual Parakeet V3 voice input, downloaded only when first used.
-- Configurable language, API, permissions, and agent settings.
+- 💬 **One interface:** DeepSeek, Qwen, and ChatGPT conversations in one desktop window.
+- 🔑 **Easy sign-in:** automatic browser login and session recovery for each provider.
+- 📁 **Project workspaces:** multiple chats, each connected to its own folder.
+- 🛠️ **Code agent:** workspace file access with a controlled command allowlist.
+- 🧠 **Memory and skills:** long-term memory, a memory graph, and reusable workflows.
+- 🔌 **Local APIs:** OpenAI-compatible and Anthropic-compatible endpoints for IDE integrations.
+- 🎙️ **Voice input:** optional multilingual Parakeet V3, downloaded only when first used.
+- ⚙️ **Flexible settings:** language, API, permissions, and agent controls.
 
-## Requirements
+## 📋 Requirements
 
 - Node.js 18 or newer.
 - npm.
 - Internet access for AI providers and the initial Chromium installation.
 - On Linux, Chromium system dependencies may also be required.
 
-## Installation
+## 🚀 Installation
 
 ### macOS and Linux
 
@@ -68,7 +79,7 @@ npm start
 
 During the first launch, select the providers you want to connect and sign in through the browser window. Sessions are stored locally and reused on later launches.
 
-## Main commands
+## ⌨️ Main commands
 
 | Command | Purpose |
 |---|---|
@@ -80,7 +91,7 @@ During the first launch, select the providers you want to connect and sign in th
 | `npm run login-chatgpt` | Sign in to ChatGPT again |
 | `npm test` | Run the test suite |
 
-## Local API
+## 🔌 Local API
 
 Start the API server:
 
@@ -96,11 +107,11 @@ http://127.0.0.1:4318/v1
 
 API keys and provider-specific settings are available in the app under **Settings → API**.
 
-## Project workspaces
+## 📁 Project workspaces
 
 When creating a chat, choose a project folder. Code-agent tools in that chat operate only inside the selected workspace. Recent folders remain available for quick selection.
 
-## Memory and skills
+## 🧠 Memory and skills
 
 - **Coder** sends tasks directly to the code agent.
 - **Memory** retrieves relevant previous fixes and stores useful outcomes.
@@ -109,7 +120,7 @@ When creating a chat, choose a project folder. Code-agent tools in that chat ope
 
 Detailed architecture: [AI Free Brains and Skills Plan](../AI_FREE_BRAINS_AND_SKILLS_PLAN.md).
 
-## Local data
+## 💾 Local data
 
 Provider sessions and settings are stored outside the repository:
 
@@ -119,7 +130,7 @@ Provider sessions and settings are stored outside the repository:
 
 Tokens and cookies remain on the local machine. The chat and API servers listen on `127.0.0.1`.
 
-## Troubleshooting
+## 🧰 Troubleshooting
 
 - Reconnect DeepSeek with `npm run login`.
 - Reconnect Qwen with `npm run login-qwen`.
@@ -127,7 +138,7 @@ Tokens and cookies remain on the local machine. The chat and API servers listen 
 - If Playwright Chromium is missing, run `npx playwright install chromium`.
 - On Linux, run `sudo npx playwright install-deps chromium` if browser libraries are missing.
 
-## Feedback and license
+## 💬 Feedback and license
 
 Found a bug or have an idea? [Open an issue](https://github.com/Staks-sor/ai-free/issues).
 

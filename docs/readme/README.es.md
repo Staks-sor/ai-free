@@ -1,6 +1,10 @@
-# AI Free
+<h1 align="center">AI Free</h1>
 
-## Elige tu idioma
+<p align="center">
+  <strong>Chats de IA gratuitos, agente de código, memoria y API locales en una sola aplicación</strong>
+</p>
+
+## 🌍 Elige tu idioma
 
 <p>
   <a href="../../README.md"><img src="https://img.shields.io/badge/Русский-0969da?style=for-the-badge" height="30" alt="Русский"></a>
@@ -14,32 +18,39 @@
   <a href="README.ar.md"><img src="https://img.shields.io/badge/العربية-1a7f37?style=for-the-badge" height="30" alt="العربية"></a>
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/github/package-json/v/Staks-sor/ai-free?style=flat-square&amp;label=versión" alt="Versión">
+  <img src="https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux%20%7C%20Windows-8250df?style=flat-square" alt="macOS, Linux, Windows">
+  <img src="https://img.shields.io/badge/Node.js-18%2B-1f883d?style=flat-square" alt="Node.js 18+">
+  <img src="https://img.shields.io/badge/proveedores-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
+</p>
+
 > CLI y aplicación de escritorio que reúne chats web de IA gratuitos en una sola interfaz. Actualmente admite **DeepSeek, Qwen y ChatGPT** en macOS, Linux y Windows.
 
-## Apoya el proyecto
+## ⭐ Apoya el proyecto
 
 Si AI Free te resulta útil, [añade una estrella al repositorio](https://github.com/Staks-sor/ai-free). Así ayudas a que más personas lo encuentren.
 
 - Tarjeta para donaciones (OTP Bank): `2201 9604 2500 7505`
 
-## Funciones
+## ✨ Funciones
 
-- Conversaciones de DeepSeek, Qwen y ChatGPT en una sola ventana.
-- Inicio de sesión automático y recuperación de sesión por proveedor.
-- Varios chats, cada uno vinculado a su propia carpeta de proyecto.
-- Agente `/code` con acceso a los archivos del workspace y comandos permitidos.
-- Memoria de largo plazo, grafo de memoria y skills reutilizables.
-- API locales compatibles con OpenAI y Anthropic para IDE.
-- Entrada de voz multilingüe opcional con Parakeet V3, descargada al usarla por primera vez.
-- Ajustes independientes de idioma, API, permisos y agente.
+- 💬 **Una sola interfaz:** DeepSeek, Qwen y ChatGPT en una ventana.
+- 🔑 **Acceso sencillo:** inicio automático y recuperación de sesión por proveedor.
+- 📁 **Proyectos separados:** cada chat puede usar su propia carpeta.
+- 🛠️ **Agente de código:** acceso al workspace con comandos controlados.
+- 🧠 **Memoria y skills:** contexto a largo plazo y flujos reutilizables.
+- 🔌 **API locales:** compatibilidad con OpenAI y Anthropic para IDE.
+- 🎙️ **Entrada de voz:** Parakeet V3 multilingüe se descarga solo al primer uso.
+- ⚙️ **Configuración completa:** idioma, API, permisos y agente.
 
-## Requisitos
+## 📋 Requisitos
 
 - Node.js 18 o posterior.
 - npm.
 - Internet para los proveedores y la instalación inicial de Chromium.
 
-## Instalación
+## 🚀 Instalación
 
 ### macOS y Linux
 
@@ -67,7 +78,7 @@ npm start
 
 En el primer inicio, selecciona los proveedores y accede desde la ventana del navegador. Las sesiones se guardan localmente.
 
-## Comandos principales
+## ⌨️ Comandos principales
 
 | Comando | Función |
 |---|---|
@@ -79,7 +90,7 @@ En el primer inicio, selecciona los proveedores y accede desde la ventana del na
 | `npm run login-chatgpt` | Vuelve a conectar ChatGPT |
 | `npm test` | Ejecuta las pruebas |
 
-## API local
+## 🔌 API local
 
 ```bash
 npm run api
@@ -93,7 +104,7 @@ http://127.0.0.1:4318/v1
 
 Las claves y opciones de cada proveedor están en **Configuración → API**.
 
-## Proyectos, memoria y skills
+## 🧠 Proyectos, memoria y skills
 
 Al crear un chat, selecciona una carpeta de proyecto. Las herramientas del agente trabajan solo dentro de ese workspace.
 
@@ -104,7 +115,7 @@ Al crear un chat, selecciona una carpeta de proyecto. Las herramientas del agent
 
 Arquitectura detallada: [Plan de memoria y skills](../AI_FREE_BRAINS_AND_SKILLS_PLAN.md).
 
-## Datos locales y seguridad
+## 🔒 Datos locales y seguridad
 
 - DeepSeek y estado compartido: `~/.deepseek-cli/`
 - Qwen: `~/.qwen-cli/`
@@ -112,7 +123,7 @@ Arquitectura detallada: [Plan de memoria y skills](../AI_FREE_BRAINS_AND_SKILLS_
 
 Los tokens y cookies permanecen en el equipo. Los servidores escuchan únicamente en `127.0.0.1`.
 
-## Problemas y licencia
+## 🧰 Problemas y licencia
 
 Para volver a conectar un proveedor, usa su comando `login`. Si falta Chromium, ejecuta `npx playwright install chromium`.
 
