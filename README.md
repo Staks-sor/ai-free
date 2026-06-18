@@ -1,5 +1,7 @@
 # AI Free
 
+[<kbd>Русский</kbd>](README.md) [<kbd>English</kbd>](docs/readme/README.en.md) [<kbd>Español</kbd>](docs/readme/README.es.md) [<kbd>Português</kbd>](docs/readme/README.pt.md) [<kbd>Deutsch</kbd>](docs/readme/README.de.md) [<kbd>Français</kbd>](docs/readme/README.fr.md) [<kbd>中文</kbd>](docs/readme/README.zh.md) [<kbd>हिन्दी</kbd>](docs/readme/README.hi.md) [<kbd>العربية</kbd>](docs/readme/README.ar.md)
+
 > CLI и десктопное окно для бесплатных AI-веб-чатов в одном интерфейсе. Сейчас: **DeepSeek + Qwen**. На очереди: Kimi, Mistral, Claude.ai. Кросс-платформенно — macOS, Linux, Windows.
 
 ---
@@ -18,7 +20,7 @@
 
 ---
 
-Архитектурно проект разделён на модули в `src/` (auth, browser, deepseek, providers/qwen, code-agent, state, window-app, api, cli). Точка входа — `bin/deepseek.mjs`. Юнит-тесты: `npm test` (97 кейсов, встроенный Node test runner). Подробности — [REFACTOR_NOTES.md](REFACTOR_NOTES.md).
+Архитектурно проект разделён на модули в `src/` (auth, browser, providers, code-agent, **memory**, **skills**, agent-orchestrator, state, window-app, api, cli). Точка входа — `bin/deepseek.mjs`. Юнит-тесты: `npm test` (**190** кейсов, встроенный Node test runner). Архитектура памяти и skills — [docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md](docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md). Сценарий для видео — [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md).
 
 ## Что внутри
 
@@ -28,6 +30,10 @@
 - **Окно чатов** (`localhost:4317`): несколько параллельных бесед, каждая привязана к своей папке-проекту.
 - **CLI-режим:** REPL в терминале для скриптовых сценариев и быстрых вопросов.
 - **`/code` агент:** доступ к файлам workspace и whitelist-командам (DeepSeek и Qwen).
+- **🧠 Memory:** долговременная память агента — SQLite FTS5 + Markdown vault (`~/.ai-free/memory/`). Переключатель в topbar, просмотр в Settings → Агент.
+- **🔗 Memory graph:** связи task ↔ file ↔ bug ↔ fix; расширяет контекст при повторных задачах.
+- **⚡ Skills:** встроенные `code-review`, `bug-fix`, `video-script`; auto-match по задаче; `/skill <id> <task>`.
+- **Agent orchestrator:** перед `/code` собирает memory + skill в system prompt.
 - **OpenAI-совместимый API** (`localhost:4318`): для Kilo Code, Continue и других IDE.
 - **Файловый браузер:** при создании чата можно открыть проводник, выбрать папку или создать новую.
 
@@ -121,7 +127,18 @@ npm start
 └── browser-profile/       # Chromium-профиль для chat.qwen.ai и browser-proxy
 ```
 
-Чаты и настройки `/code` — только в `~/.deepseek-cli/state.json` (общие для всех провайдеров).
+**Memory + Skills** (общие для всех провайдеров):
+
+```
+~/.ai-free/
+├── memory/
+│   ├── memory.db          # SQLite FTS5 (+ graph tables)
+│   ├── vault/             # Markdown-файлы заметок {id}.md
+│   └── graph.json         # fallback графа (Node < 22)
+└── skills/                # пользовательские skills (builtins в репо)
+```
+
+Чаты и настройки `/code` — в `~/.deepseek-cli/state.json` (общие для всех провайдеров).
 
 ---
 
@@ -140,7 +157,7 @@ npm start
 | `npm run login-qwen` | Re-login Qwen → `~/.qwen-cli/auth.json`. |
 | `npm run import-qwen` | Импорт cookies из JSON (Chrome / Cookie Editor), без Playwright. |
 | `npm run save-creds` | Email + пароль для авто-заполнения формы DeepSeek. |
-| `npm test` | Юнит-тесты (97 кейсов). |
+| `npm test` | Юнит-тесты (**190** кейсов). |
 
 Запуск OpenAI-совместимого API (отдельный процесс):
 
@@ -242,6 +259,38 @@ npm run save-creds
 5. **Создать чат** → чат привязан к этой папке. Любой `/code` в этом чате работает с файлами в его папке, не пересекаясь с другими.
 
 В сайдбаре под именем чата видно `📁 имя-папки` — это его workspace.
+
+---
+
+## Memory и Skills
+
+### Topbar (в активном чате)
+
+| Элемент | Назначение |
+|---------|------------|
+| **🛠 Coder** | Каждое сообщение → `/code`-агент (без префикса) |
+| **🧠 Память** | Подтягивать прошлые ошибки/фиксы в prompt; сохранять опыт после задачи |
+| **Skill auto** | Автовыбор skill по ключевым словам задачи |
+| **Skill dropdown** | Ручной skill: `code-review`, `bug-fix`, `video-script` |
+
+### CLI / чат
+
+```
+/code исправь баг в auth
+/skill code-review проверь src/memory/
+/skill video-script hook для YouTube Short про memory
+```
+
+После задачи внизу ответа — footer: `memory used · graph · saved · skill`.
+
+### Settings → вкладка «Агент»
+
+- Defaults для новых чатов (память, auto-skill)
+- Список установленных skills
+- Recent memory + удаление записей
+- Badge backend: `sqlite · graph: sqlite`
+
+Подробнее: [docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md](docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md). Сценарий для записи видео: [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md).
 
 ---
 
