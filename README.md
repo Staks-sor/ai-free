@@ -1,6 +1,18 @@
 # AI Free
 
-[<kbd>Русский</kbd>](README.md) [<kbd>English</kbd>](docs/readme/README.en.md) [<kbd>Español</kbd>](docs/readme/README.es.md) [<kbd>Português</kbd>](docs/readme/README.pt.md) [<kbd>Deutsch</kbd>](docs/readme/README.de.md) [<kbd>Français</kbd>](docs/readme/README.fr.md) [<kbd>中文</kbd>](docs/readme/README.zh.md) [<kbd>हिन्दी</kbd>](docs/readme/README.hi.md) [<kbd>العربية</kbd>](docs/readme/README.ar.md)
+## Выберите язык / Choose your language
+
+<p>
+  <a href="README.md"><img src="https://img.shields.io/badge/Русский-0969da?style=for-the-badge" height="30" alt="Русский"></a>
+  <a href="docs/readme/README.en.md"><img src="https://img.shields.io/badge/English-1f883d?style=for-the-badge" height="30" alt="English"></a>
+  <a href="docs/readme/README.es.md"><img src="https://img.shields.io/badge/Español-d29922?style=for-the-badge" height="30" alt="Español"></a>
+  <a href="docs/readme/README.pt.md"><img src="https://img.shields.io/badge/Português-8250df?style=for-the-badge" height="30" alt="Português"></a>
+  <a href="docs/readme/README.de.md"><img src="https://img.shields.io/badge/Deutsch-cf222e?style=for-the-badge" height="30" alt="Deutsch"></a>
+  <a href="docs/readme/README.fr.md"><img src="https://img.shields.io/badge/Français-0550ae?style=for-the-badge" height="30" alt="Français"></a>
+  <a href="docs/readme/README.zh.md"><img src="https://img.shields.io/badge/中文-b35900?style=for-the-badge" height="30" alt="中文"></a>
+  <a href="docs/readme/README.hi.md"><img src="https://img.shields.io/badge/हिन्दी-9a6700?style=for-the-badge" height="30" alt="हिन्दी"></a>
+  <a href="docs/readme/README.ar.md"><img src="https://img.shields.io/badge/العربية-1a7f37?style=for-the-badge" height="30" alt="العربية"></a>
+</p>
 
 > CLI и десктопное окно для бесплатных AI-веб-чатов в одном интерфейсе. Сейчас: **DeepSeek + Qwen**. На очереди: Kimi, Mistral, Claude.ai. Кросс-платформенно — macOS, Linux, Windows.
 
