@@ -6,7 +6,7 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 import { loadDotEnv, parseArgs } from "../args.mjs";
-import { resolveAuth } from "../auth/files.mjs";
+import { readSavedAuth, resolveAuth } from "../auth/files.mjs";
 import { saveCredentialsInteractive } from "../auth/credentials.mjs";
 import { AuthManager } from "../auth/manager.mjs";
 import { loginAndSaveAuth, refreshAuthFromProfile } from "../browser/login.mjs";
@@ -71,14 +71,16 @@ export async function run() {
   // Welcome TUI: показывается ТОЛЬКО если ни один провайдер не залогинен,
   // ИЛИ если юзер явно попросил через --welcome (для добавления провайдера).
   const { configuredCount } = await import("../providers/registry.mjs");
-  if (args.forceWelcome || configuredCount() === 0) {
+  if (!args.window && (args.forceWelcome || configuredCount() === 0)) {
     const { runWelcome } = await import("./welcome.mjs");
     await runWelcome();
   }
 
   // resolveAuth получает callbacks для login и silent-refresh — это избегает
   // цикла зависимостей между src/auth/files.mjs и src/browser/login.mjs.
-  const auth = await resolveAuth(args, { loginAndSaveAuth, refreshAuthFromProfile });
+  const auth = args.window
+    ? resolveWindowStartupAuth(args)
+    : await resolveAuth(args, { loginAndSaveAuth, refreshAuthFromProfile });
   const authManager = new AuthManager({
     authFile: args.authFile,
     debug: args.debug,
@@ -227,4 +229,25 @@ export async function run() {
   }
 
   rl.close();
+}
+
+function resolveWindowStartupAuth(args) {
+  try {
+    return readSavedAuth(args.authFile) || emptyAuth(args.authFile);
+  } catch (error) {
+    if (args.debug) {
+      console.error(`[debug] window startup auth unreadable, continuing without DeepSeek auth: ${error.message}`);
+    }
+    return emptyAuth(args.authFile);
+  }
+}
+
+function emptyAuth(source = "") {
+  return {
+    token: "",
+    cookieHeader: "",
+    hifLeim: "",
+    hifDliq: "",
+    source,
+  };
 }
