@@ -64,26 +64,12 @@ export async function launchPersistentDeepSeekContext(chromium, profileDir, head
   }
 }
 
-// Открыть URL в новом окне-приложении. На macOS — через `open -na "Google Chrome" --app=`.
-// На Win/Linux — сами ищем chrome.exe / google-chrome и запускаем с --app.
-// Fallback: дефолтный браузер обычной вкладкой.
+// Открыть URL в окне-приложении (--app): без вкладок и адресной строки.
 export function openAppWindow(url) {
-  if (process.platform === "darwin") {
-    const chrome = spawn("open", ["-na", "Google Chrome", "--args", `--app=${url}`], {
-      detached: true,
-      stdio: "ignore",
-    });
-    chrome.on("error", () => {
-      spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
-    });
-    chrome.unref();
-    return;
-  }
-
   const chromeBinary = findChromeBinary();
   if (chromeBinary) {
     try {
-      const proc = spawn(chromeBinary, [`--app=${url}`, "--new-window"], {
+      const proc = spawn(chromeBinary, [`--app=${url}`, "--new-window", "--disable-blink-features=AutomationControlled"], {
         detached: true,
         stdio: "ignore",
       });
@@ -93,6 +79,16 @@ export function openAppWindow(url) {
     } catch {
       // fall through
     }
+  }
+
+  if (process.platform === "darwin") {
+    const chrome = spawn("open", ["-na", "Google Chrome", "--args", `--app=${url}`], {
+      detached: true,
+      stdio: "ignore",
+    });
+    chrome.on("error", () => fallbackOpen(url));
+    chrome.unref();
+    return;
   }
 
   fallbackOpen(url);

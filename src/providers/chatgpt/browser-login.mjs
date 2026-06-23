@@ -13,6 +13,238 @@ import {
   clearBrowserCookiesViaCdp,
   pickEssentialChatGPTCookies,
 } from "./auth-files.mjs";
+import { withChatGPTProfileLock } from "./chrome-profile-lock.mjs";
+
+// Не передаём --disable-blink-features=AutomationControlled: Chrome/ChatGPT показывают
+// предупреждение и Cloudflare режет такую сессию.
+
+// Embed: headed Chrome за экраном (как обычный браузер для Cloudflare). CHATGPT_EMBED_HEADED=0 — headless.
+export function getChatGPTBrowserLaunchOptions() {
+  if (process.env.CHATGPT_HEADLESS === "0") {
+    return { useExternalChrome: true, headless: false, offscreen: false, internalHeadless: false, preferBundled: false, applyStealth: false };
+  }
+  if (process.env.CHATGPT_HEADLESS === "1") {
+    return { useExternalChrome: true, headless: true, offscreen: false, internalHeadless: true, preferBundled: false, applyStealth: false };
+  }
+  if (process.env.CHATGPT_EMBED_IN_UI === "1") {
+    const headless = process.env.CHATGPT_EMBED_HEADED === "0";
+    return {
+      useExternalChrome: false,
+      headless,
+      offscreen: !headless,
+      internalHeadless: headless,
+      preferBundled: false,
+      applyStealth: false,
+    };
+  }
+  return { useExternalChrome: true, headless: false, offscreen: false, internalHeadless: false, preferBundled: false, applyStealth: false };
+}
+
+export {
+  tryAssistCloudflareClick,
+  detectCloudflareChallenge,
+  waitForCloudflareClearance,
+  trySolveTurnstileCheckbox,
+} from "./cloudflare-challenge.mjs";
+
+export async function launchInternalBrowserContext(
+  chromium,
+  profileDir,
+  {
+    viewport = { width: 1280, height: 900 },
+    headless = true,
+    userAgent,
+    offscreen = false,
+    preferBundled = false,
+    applyStealth = false,
+  } = {},
+) {
+  fs.mkdirSync(profileDir, { recursive: true });
+  cleanupChromeProfileForLaunch(profileDir, { clearCookies: false });
+
+  const windowArgs = offscreen
+    ? [
+      "--window-position=-24000,-24000",
+      `--window-size=${viewport.width},${viewport.height}`,
+      "--start-minimized",
+    ]
+    : [];
+
+  const launchOptions = {
+    headless,
+    viewport,
+    locale: "en-US",
+    ignoreDefaultArgs: ["--enable-automation"],
+    args: windowArgs,
+    ...(userAgent ? { userAgent } : {}),
+  };
+
+  let context;
+  if (preferBundled) {
+    context = await chromium.launchPersistentContext(profileDir, launchOptions);
+  } else {
+    try {
+      context = await chromium.launchPersistentContext(profileDir, { ...launchOptions, channel: "chrome" });
+    } catch {
+      cleanupChromeProfileForLaunch(profileDir, { clearCookies: false });
+      context = await chromium.launchPersistentContext(profileDir, launchOptions);
+    }
+  }
+
+  if (applyStealth) {
+    await applyChatGPTStealth(context);
+  }
+  const page = context.pages()[0] || (await context.newPage());
+  return {
+    context,
+    page,
+    close: async () => {
+      try { await context.close(); } catch {}
+    },
+    mode: "internal",
+  };
+}
+
+export function cleanupStaleBrowserProfiles(profileDirs = []) {
+  let killed = false;
+  for (const profileDir of profileDirs) {
+    if (killStaleChromeForProfile(profileDir)) killed = true;
+    cleanupChromeProfileForLaunch(profileDir, { clearCookies: false });
+  }
+  return killed;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** @type {Promise<void> | null} */
+let profileReadyPromise = null;
+
+// Один раз перед первым in-app Chrome: убить зомби и снять locks.
+export function ensureChatGPTProfileReady(profileDir = CHATGPT_BROWSER_PROFILE) {
+  if (!profileReadyPromise) {
+    profileReadyPromise = withChatGPTProfileLock(() => prepareChromeProfileForLaunchInternal(profileDir, { clearCookies: false }));
+  }
+  return profileReadyPromise;
+}
+
+export function resetChatGPTProfileReady() {
+  profileReadyPromise = null;
+}
+
+// Перед spawn Chrome: убить зомби, подождать, снять lock-файлы.
+async function prepareChromeProfileForLaunchInternal(profileDir, { clearCookies = false } = {}) {
+  let killed = killStaleChromeForProfile(profileDir);
+  const lockPath = path.join(profileDir, "SingletonLock");
+  if (!killed && fs.existsSync(lockPath)) {
+    killed = killStaleChromeForProfile(profileDir);
+  }
+  if (killed) {
+    await sleep(2000);
+  }
+  cleanupChromeProfileForLaunch(profileDir, { clearCookies });
+  await sleep(300);
+}
+
+export async function prepareChromeProfileForLaunch(profileDir, options = {}) {
+  return withChatGPTProfileLock(() => prepareChromeProfileForLaunchInternal(profileDir, options));
+}
+
+async function minimizeEmbeddedChromeWindows(browser, viewport) {
+  let cdp;
+  try {
+    cdp = await browser.newBrowserCDPSession();
+  } catch {
+    return;
+  }
+
+  const minimizeOnce = async () => {
+    try {
+      const { targetInfos } = await cdp.send("Target.getTargets");
+      const seen = new Set();
+      for (const target of targetInfos || []) {
+        if (target.type !== "page" || !target.targetId) continue;
+        try {
+          const { windowId } = await cdp.send("Browser.getWindowForTarget", { targetId: target.targetId });
+          if (!windowId || seen.has(windowId)) continue;
+          seen.add(windowId);
+          try {
+            await cdp.send("Browser.setWindowBounds", {
+              windowId,
+              bounds: { windowState: "minimized" },
+            });
+          } catch {
+            await cdp.send("Browser.setWindowBounds", {
+              windowId,
+              bounds: {
+                left: -32000,
+                top: -32000,
+                width: Math.max(400, viewport?.width || 580),
+                height: Math.max(600, viewport?.height || 900),
+                windowState: "normal",
+              },
+            });
+          }
+        } catch {}
+      }
+    } catch {}
+  };
+
+  await minimizeOnce();
+  try {
+    cdp.on("Target.targetCreated", () => {
+      minimizeOnce().catch(() => {});
+    });
+  } catch {}
+  for (const delay of [80, 250, 800, 2000]) {
+    setTimeout(() => { minimizeOnce().catch(() => {}); }, delay);
+  }
+}
+
+export async function isChromeProfileErrorPage(page, context = null) {
+  const pages = context?.pages?.()?.length ? context.pages() : (page ? [page] : []);
+  for (const item of pages) {
+    if (item?.isClosed?.()) continue;
+    try {
+      const hit = await item.evaluate(() => {
+        const text = String(document.body?.innerText || document.title || "");
+        return /Не удалось открыть профиль|Failed to open profile|Some features may be unavailable/i.test(text);
+      });
+      if (hit) return true;
+    } catch {}
+  }
+  return false;
+}
+
+export async function applyChatGPTStealth(context) {
+  try {
+    await context.addInitScript(() => {
+      // 1. Delete webdriver from prototype
+      try {
+        const proto = Object.getPrototypeOf(navigator);
+        delete proto.webdriver;
+      } catch {}
+
+      // 2. Add chrome object if missing
+      try {
+        if (!window.chrome) {
+          window.chrome = {
+            app: { isInstalled: false, InstallState: { DISABLED: "disabled", INSTALLED: "installed", NOT_INSTALLED: "not_installed" }, RunningState: { CANNOT_RUN: "cannot_run", CAN_RUN: "can_run", RUNNING: "running" } },
+            runtime: { OnInstalledReason: { CHROME_UPDATE: "chrome_update", INSTALL: "install", SHARED_MODULE_UPDATE: "shared_module_update", UPDATE: "update" }, OnRestartRequiredReason: { APP_UPDATE: "app_update", OS_UPDATE: "os_update", PERIODIC: "periodic" }, PlatformArch: { ARM: "arm", ARM64: "arm64", MIPS: "mips", MIPS64: "mips64", X86_32: "x86-32", X86_64: "x86-64" }, PlatformNaclArch: { ARM: "arm", MIPS: "mips", MIPS64: "mips64", X86_32: "x86-32", X86_64: "x86-64" }, PlatformOs: { ANDROID: "android", CROS: "cros", LINUX: "linux", MAC: "mac", OPENBSD: "openbsd", WIN: "win" }, RequestUpdateCheckStatus: { NO_UPDATE: "no_update", THROTTLED: "throttled", UPDATE_AVAILABLE: "update_available" } }
+          };
+        }
+      } catch {}
+
+      // 3. Mock permissions query
+      try {
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) =>
+          parameters.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : originalQuery(parameters);
+      } catch {}
+    });
+  } catch {}
+}
 
 async function readSessionFromPage(page) {
   return page.evaluate(async () => {
@@ -30,11 +262,9 @@ async function readSessionFromPage(page) {
 
 async function isChatGPTChallengePage(page) {
   try {
-    return await page.evaluate(() => {
-      const title = String(document.title || "");
-      const text = String(document.body?.innerText || "");
-      return /cloudflare|confirm.*human|verify.*human|подтвердите.*человек|идет проверка|один момент/i.test(`${title}\n${text}`);
-    });
+    const { detectCloudflareChallenge } = await import("./cloudflare-challenge.mjs");
+    const state = await detectCloudflareChallenge(page);
+    return state.challenge;
   } catch {
     return true;
   }
@@ -67,10 +297,9 @@ async function connectOverCDP(chromium, port, timeoutMs = 45_000) {
   throw new Error(`Не удалось подключиться к Chrome через ${endpoint}: ${lastError?.message || "timeout"}`);
 }
 
-// Убиваем «зависшие» Chrome, которые держат именно этот профиль. Браузер запускается
-// detached+unref и переживает выход/перезапуск приложения, из-за чего профиль остаётся
-// заблокированным и новый Chrome выдаёт «Не удалось открыть профиль».
+// Убиваем «зависшие» Chrome на этом user-data-dir (в т.ч. detached после прошлого запуска).
 export function killStaleChromeForProfile(profileDir) {
+  let killed = false;
   try {
     if (process.platform === "win32") {
       const escaped = String(profileDir).replace(/'/g, "''");
@@ -85,19 +314,31 @@ export function killStaleChromeForProfile(profileDir) {
       );
       return result.status === 0;
     }
-    // -f сопоставляет полную командную строку, поэтому путь профиля делает матч точечным
-    // и не трогает обычный Chrome пользователя. Код 0 = что-то совпало и было убито.
-    const result = spawnSync("pkill", ["-f", `--user-data-dir=${profileDir}`], {
-      stdio: "ignore",
-      timeout: 10_000,
-    });
-    return result.status === 0;
+    const dir = String(profileDir);
+    const patterns = [
+      `--user-data-dir=${dir}`,
+      `--user-data-dir=${dir}/`,
+      dir,
+    ];
+    for (const pattern of patterns) {
+      const term = spawnSync("pkill", ["-f", pattern], {
+        stdio: "ignore",
+        timeout: 10_000,
+      });
+      if (term.status === 0) killed = true;
+      const kill = spawnSync("pkill", ["-9", "-f", pattern], {
+        stdio: "ignore",
+        timeout: 10_000,
+      });
+      if (kill.status === 0) killed = true;
+    }
+    return killed;
   } catch {
-    return false;
+    return killed;
   }
 }
 
-function cleanupChromeProfileForLaunch(profileDir, { clearCookies = false } = {}) {
+export function cleanupChromeProfileForLaunch(profileDir, { clearCookies = false } = {}) {
   fs.mkdirSync(profileDir, { recursive: true });
   for (const file of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
     try { fs.unlinkSync(path.join(profileDir, file)); } catch {}
@@ -157,50 +398,68 @@ async function openChatGPTForLogin(page, context) {
 export async function launchNormalChromeForChatGPT(
   chromium,
   profileDir,
-  { initialUrl = CHATGPT_BASE_URL, clearCookies = false, offscreen = false, headless = false, skipKillStale = false } = {},
+  {
+    initialUrl = CHATGPT_BASE_URL,
+    clearCookies = false,
+    offscreen = false,
+    headless = false,
+    skipKillStale = false,
+    embedded = false,
+    windowSize = { width: 580, height: 900 },
+  } = {},
 ) {
   const chromeBinary = findChromeBinary();
   if (!chromeBinary) {
     return null;
   }
 
-  // Сначала закрываем зомби-Chrome, держащий профиль, иначе будет «Не удалось открыть профиль».
+  return withChatGPTProfileLock(async () => {
   if (!skipKillStale) {
-    const killedStale = killStaleChromeForProfile(profileDir);
-    if (killedStale) {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-    }
+    await prepareChromeProfileForLaunchInternal(profileDir, { clearCookies });
+  } else {
+    cleanupChromeProfileForLaunch(profileDir, { clearCookies });
   }
-  cleanupChromeProfileForLaunch(profileDir, { clearCookies });
   const port = await reserveLocalPort();
+  const w = Math.max(400, Number(windowSize.width) || 580);
+  const h = Math.max(600, Number(windowSize.height) || 900);
   const args = [
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profileDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    "--disable-features=ChromeWhatsNewUI,ProfilePickerOnStartup",
   ];
   if (headless) {
-    // Тот же Google Chrome и профиль, но без окна — cookies из логина читаются корректно.
     args.push("--headless=new", "--disable-gpu");
+  } else if (offscreen || embedded) {
+    args.push(
+      "--start-minimized",
+      "--window-position=-32000,-32000",
+      `--window-size=${w},${h}`,
+    );
   } else {
     args.push("--new-window");
-    if (offscreen) {
-      args.push("--window-position=-32000,-32000", "--window-size=1280,900");
-    }
   }
-  args.push(initialUrl || "about:blank");
+  args.push(initialUrl || CHATGPT_BASE_URL);
   let chromeProcess = null;
   let browser = null;
   try {
+    // embedded: дочерний процесс — закрывается вместе с ai-free, без зомби-профиля.
     chromeProcess = spawn(chromeBinary, args, {
-      detached: true,
+      detached: !embedded,
       stdio: "ignore",
     });
-    chromeProcess.unref();
+    if (!embedded) {
+      chromeProcess.unref();
+    }
     browser = await connectOverCDP(chromium, port);
+    if (!headless && (offscreen || embedded)) {
+      await minimizeEmbeddedChromeWindows(browser, { width: w, height: h });
+    }
   } catch (error) {
     try { chromeProcess?.kill("SIGTERM"); } catch {}
-    try { if (chromeProcess?.pid) process.kill(-chromeProcess.pid, "SIGTERM"); } catch {}
+    try { if (chromeProcess?.pid && !embedded) process.kill(-chromeProcess.pid, "SIGTERM"); } catch {}
+    try { if (chromeProcess?.pid && embedded) chromeProcess.kill("SIGKILL"); } catch {}
     return null;
   }
   const context = browser.contexts()[0] || null;
@@ -215,23 +474,40 @@ export async function launchNormalChromeForChatGPT(
   const page = context.pages().find((item) => item.url().includes("chatgpt.com"))
     || context.pages()[0]
     || await context.newPage();
-  if (initialUrl && page.url() !== initialUrl) {
-    await page.goto(initialUrl, { waitUntil: "domcontentloaded" });
+  if (!headless && (offscreen || embedded)) {
+    await minimizeEmbeddedChromeWindows(browser, { width: w, height: h });
+  }
+  await sleep(400);
+  if (await isChromeProfileErrorPage(page, context)) {
+    try {
+      const cdp = await browser.newBrowserCDPSession();
+      await cdp.send("Browser.close");
+    } catch {}
+    try { await browser.close(); } catch {}
+    try { chromeProcess?.kill("SIGKILL"); } catch {}
+    return null;
+  }
+  if (initialUrl && !page.url().includes("chatgpt.com") && page.url() !== initialUrl) {
+    await page.goto(initialUrl, { waitUntil: "domcontentloaded", timeout: 90_000 });
   }
   return {
     context,
     page,
+    chromeProcess,
     close: async () => {
       try {
         const cdp = await browser.newBrowserCDPSession();
         await cdp.send("Browser.close");
       } catch {}
       try { await browser.close(); } catch {}
-      try { chromeProcess.kill("SIGTERM"); } catch {}
-      try { process.kill(-chromeProcess.pid, "SIGTERM"); } catch {}
+      try { chromeProcess?.kill("SIGTERM"); } catch {}
+      if (!embedded && chromeProcess?.pid) {
+        try { process.kill(-chromeProcess.pid, "SIGTERM"); } catch {}
+      }
     },
-    mode: "chrome-cdp",
+    mode: embedded ? "chrome-cdp-embedded" : "chrome-cdp",
   };
+  });
 }
 
 async function launchPlaywrightChromeForLogin(chromium, profileDir) {
@@ -315,28 +591,104 @@ export async function importChatGPTFromJson(jsonPath, authFile = CHATGPT_AUTH_FI
 
 export async function loginChatGPTAndSave(authFile = CHATGPT_AUTH_FILE) {
   const profileDir = CHATGPT_BROWSER_PROFILE;
+  const embedUi = process.env.CHATGPT_EMBED_IN_UI === "1";
+  const launch = getChatGPTBrowserLaunchOptions();
   const { resetChatGPTBrowserProxy } = await import("./browser-proxy.mjs");
   resetChatGPTBrowserProxy();
   await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  if (embedUi) {
+    console.log("🔓 ChatGPT: откройте 🧠 → Браузер → ChatGPT в окне ai-free.");
+    console.log("   Войдите вручную в экране панели — сессия сохранится в ~/.chatgpt-cli/auth.json");
+    const { warmChatGPTInAppBrowser } = await import("../../window-app/chatgpt-live-panel.mjs");
+    await warmChatGPTInAppBrowser();
+    const { getChatGPTBrowserProxy } = await import("./browser-proxy.mjs");
+    const proxy = await getChatGPTBrowserProxy();
+    const page = proxy.getPage();
+    const context = proxy.getContext();
+
+    let captured;
+    try {
+      captured = await new Promise((resolve, reject) => {
+        let done = false;
+        let interval = null;
+        const timeout = setTimeout(() => {
+          if (done) return;
+          done = true;
+          if (interval) clearInterval(interval);
+          reject(new Error("Превышено время ожидания входа (10 минут)."));
+        }, 10 * 60 * 1000);
+
+        const captureCurrentSession = async () => {
+          if (done) return;
+          try {
+            if (await isChatGPTChallengePage(page)) return;
+            const body = await readSessionFromPage(page);
+            if (body && body.accessToken) {
+              done = true;
+              clearTimeout(timeout);
+              clearInterval(interval);
+              const cookies = pickEssentialChatGPTCookies(await context.cookies());
+              const userAgent = await page.evaluate(() => navigator.userAgent);
+              resolve({
+                accessToken: body.accessToken,
+                sessionToken: body.sessionToken || cookies.find((c) => c.name === "__Secure-next-auth.session-token")?.value || "",
+                cookies,
+                userAgent,
+              });
+            }
+          } catch {}
+        };
+
+        interval = setInterval(captureCurrentSession, 4000);
+        captureCurrentSession();
+      });
+    } catch (error) {
+      throw error;
+    }
+
+    writeChatGPTAuth(authFile, {
+      cookies: captured.cookies,
+      accessToken: captured.accessToken,
+      sessionToken: captured.sessionToken,
+      profileDir,
+      userAgent: captured.userAgent,
+    });
+    console.log("✅ ChatGPT: сессия сохранена.");
+    return captured;
+  }
+
   repairChatGPTBrowserProfile(profileDir);
 
   const { getChatGPTChromium } = await import("./engine.mjs");
   const chromium = await getChatGPTChromium();
-  const session = await launchNormalChromeForChatGPT(chromium, profileDir, {
-    initialUrl: "about:blank",
-    clearCookies: true,
-    skipKillStale: true,
-  })
-    || await launchPlaywrightChromeForLogin(chromium, profileDir);
+  let session;
+  if (launch.useExternalChrome) {
+    session = await launchNormalChromeForChatGPT(chromium, profileDir, {
+      initialUrl: "about:blank",
+      clearCookies: true,
+      skipKillStale: true,
+      headless: launch.headless,
+      offscreen: launch.offscreen,
+    })
+      || await launchPlaywrightChromeForLogin(chromium, profileDir);
+  } else {
+    const { attachInAppBrowserSession } = await import("../../window-app/in-app-browser.mjs");
+    session = await attachInAppBrowserSession("chatgpt");
+  }
   const { context, page } = session;
 
   await clearBrowserCookiesViaCdp(page, context);
   await openChatGPTForLogin(page, context);
 
-  console.log("🔓 Открываем окно ChatGPT (chatgpt.com).");
-  console.log("   • Пройдите Cloudflare вручную, если появится чекбокс.");
-  console.log("   • Затем залогиньтесь вручную (Google, email, etc.).");
-  console.log("   • Окно останется открытым — через него идут все запросы к ChatGPT.");
+  if (embedUi) {
+    console.log("🔓 ChatGPT: войдите через 🧠 → Браузер в окне ai-free (отдельное окно Chrome не откроется).");
+  } else {
+    console.log("🔓 Открываем окно ChatGPT (chatgpt.com).");
+    console.log("   • Пройдите Cloudflare вручную, если появится чекбокс.");
+    console.log("   • Затем залогиньтесь вручную (Google, email, etc.).");
+    console.log("   • Окно останется открытым — через него идут все запросы к ChatGPT.");
+  }
   if (session.mode === "chrome-cdp") {
     console.log("   • Используется обычный Google Chrome, не Playwright Chromium.");
   }
@@ -418,6 +770,8 @@ export async function loginChatGPTAndSave(authFile = CHATGPT_AUTH_FILE) {
 
   const { adoptChatGPTBrowserSession } = await import("./browser-proxy.mjs");
   adoptChatGPTBrowserSession(session, { debug: Boolean(process.env.DEEPSEEK_DEBUG_CHATGPT) });
-  console.log("✅ Успешный вход в ChatGPT! Окно браузера остаётся открытым.");
+  console.log(embedUi
+    ? "✅ Успешный вход в ChatGPT! Сессия сохранена (фоновый Chrome, панель 🧠 → Браузер)."
+    : "✅ Успешный вход в ChatGPT! Окно браузера остаётся открытым.");
   return captured;
 }

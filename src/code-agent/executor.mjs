@@ -16,6 +16,8 @@ export class WorkspaceToolError extends Error {
   }
 }
 
+import { executeBrowserTool } from "../browser/service.mjs";
+
 export async function executeWorkspaceTool(workspaceRoot, call) {
   const tool = call.tool;
 
@@ -108,6 +110,10 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
     return await runWorkspaceShell(workspaceRoot, call);
   }
 
+  if (String(tool || "").startsWith("browser_")) {
+    return executeBrowserTool(call);
+  }
+
   throw new Error(`Unknown tool: ${tool}`);
 }
 
@@ -117,17 +123,18 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
   const settings = loadSettings();
   const allowedCommands = new Set(settings.allowedCommands);
   const cmd = String(call.cmd || "").trim();
-  if (!allowedCommands.has(cmd)) {
+  const permissionCommand = normalizePermissionCommand(cmd, workspaceRoot);
+  if (!permissionCommand || !allowedCommands.has(permissionCommand)) {
     throw new WorkspaceToolError(`Команда "${cmd}" не разрешена. Включи её в Settings → Allowed commands в окне чата.`, { fatal: true });
   }
 
   const args = Array.isArray(call.args) ? call.args.map((arg) => String(arg)) : [];
-  validateCommandArgs(workspaceRoot, cmd, args, {
+  validateCommandArgs(workspaceRoot, permissionCommand, args, {
     allowPythonModuleAndEval: settings.commandPermissions?.allowPythonModuleAndEval === true,
   });
 
   // Точечный валидатор аргументов конкретной команды (rm -rf, git clone и т.п.).
-  const catalogEntry = COMMAND_CATALOG[cmd];
+  const catalogEntry = COMMAND_CATALOG[permissionCommand];
   if (catalogEntry?.validateArgs) {
     catalogEntry.validateArgs(args);
   }
@@ -165,6 +172,45 @@ export async function runWorkspaceCommand(workspaceRoot, call) {
     stdout: truncateOutput(result.stdout),
     stderr: truncateOutput(result.stderr),
   };
+}
+
+const TRUSTED_UNIX_COMMAND_DIRS = [
+  "/bin",
+  "/usr/bin",
+  "/usr/local/bin",
+  "/opt/homebrew/bin",
+  "/opt/local/bin",
+];
+
+export function normalizePermissionCommand(command, workspaceRoot = "") {
+  const cmd = String(command || "").trim();
+  if (!cmd) return "";
+  if (COMMAND_CATALOG[cmd]) return cmd;
+
+  const normalized = cmd.replace(/\\/g, "/");
+  const lower = normalized.toLowerCase();
+  const basename = lower.split("/").pop() || "";
+  const isPython = /^python(?:3(?:\.\d+)?)?(?:\.exe)?$/.test(basename) || basename === "py.exe";
+  if (!isPython) return "";
+
+  if (TRUSTED_UNIX_COMMAND_DIRS.some((dir) => lower.startsWith(`${dir}/`))) {
+    return "python3";
+  }
+  if (
+    /^[a-z]:\/windows\/(?:system32\/)?(?:python|py)(?:3(?:\.\d+)?)?\.exe$/i.test(normalized)
+    || /^[a-z]:\/program files(?: \(x86\))?\/.+\/(?:python|py)(?:3(?:\.\d+)?)?\.exe$/i.test(normalized)
+    || /^[a-z]:\/users\/[^/]+\/appdata\/local\/programs\/python\/.+\/(?:python|py)(?:3(?:\.\d+)?)?\.exe$/i.test(normalized)
+  ) {
+    return "python3";
+  }
+  if (workspaceRoot) {
+    const workspace = path.resolve(workspaceRoot);
+    const candidate = path.resolve(workspace, cmd);
+    if (candidate === workspace || candidate.startsWith(`${workspace}${path.sep}`)) {
+      return "python3";
+    }
+  }
+  return "";
 }
 
 export async function runWorkspaceShell(workspaceRoot, call) {

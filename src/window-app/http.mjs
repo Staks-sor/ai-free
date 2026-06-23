@@ -40,3 +40,19 @@ export function sendHtml(res, html) {
   });
   res.end(html);
 }
+
+export function beginNdjsonStream(res, status = 200) {
+  res.writeHead(status, {
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-store",
+    Connection: "keep-alive",
+  });
+}
+
+export function writeNdjsonLine(res, body) {
+  res.write(`${JSON.stringify(body)}\n`);
+}
+
+export function endNdjsonStream(res) {
+  res.end();
+}

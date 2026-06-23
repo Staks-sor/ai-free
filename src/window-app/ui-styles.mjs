@@ -64,6 +64,7 @@ export const STYLES = `
     }
     * { box-sizing: border-box; }
     html {
+      width: 100%;
       height: 100%;
       overflow: hidden;
       background: var(--bg);
@@ -73,7 +74,8 @@ export const STYLES = `
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--text);
-      height: 100vh;
+      width: 100%;
+      height: 100%;
       overflow: hidden;
     }
     button, input, textarea {
@@ -102,21 +104,53 @@ export const STYLES = `
       --sidebar-width: 300px;
       display: grid;
       grid-template-columns: var(--sidebar-width) 6px minmax(0, 1fr);
-      height: 100vh;
-      width: 100vw;
+      height: 100%;
+      width: 100%;
+      max-width: 100%;
       overflow: hidden;
+      transition: width 0.12s ease, max-width 0.12s ease;
     }
     .sidebar {
       background: var(--sidebar);
       display: flex;
       flex-direction: column;
-      height: 100vh;
+      height: 100%;
       min-width: 0;
+      min-height: 0;
       overflow: hidden;
+    }
+    .sidebarMenu {
+      display: flex;
+      gap: 4px;
+      padding: 8px 8px 6px;
+      border-bottom: 1px solid var(--line);
+      flex: 0 0 auto;
+    }
+    .sidebarMenuBtn {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: var(--button-bg);
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 120ms ease;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sidebarMenuBtn:hover {
+      color: var(--text);
+      border-color: var(--line-strong);
+      background: var(--button-hover);
     }
     .sidebarResizer {
       width: 6px;
-      height: 100vh;
+      height: 100%;
+      min-height: 0;
       background: var(--panel-2);
       border-left: 1px solid var(--line);
       border-right: 1px solid var(--line);
@@ -133,17 +167,19 @@ export const STYLES = `
       user-select: none;
     }
     .sideHead {
-      padding: 14px;
+      padding: 8px;
       border-bottom: 1px solid var(--line);
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      flex: 0 0 auto;
     }
     .brand {
       font-weight: 700;
       flex: 1;
       min-width: 0;
       color: var(--text);
+      font-size: 13px;
     }
     .iconBtn, .sendBtn {
       border: 1px solid var(--line);
@@ -186,22 +222,22 @@ export const STYLES = `
       min-height: 0;
       overflow-y: auto;
       overflow-x: hidden;
-      padding: 8px;
+      padding: 4px 6px;
       display: grid;
       align-content: start;
-      gap: 4px;
+      gap: 2px;
     }
     .chatItem {
       border: 1px solid transparent;
       background: transparent;
       color: var(--text);
-      border-radius: 6px;
-      padding: 10px;
+      border-radius: 5px;
+      padding: 5px 6px;
       text-align: left;
       cursor: pointer;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 6px;
+      grid-template-columns: minmax(0, 1fr) 18px;
+      gap: 1px 4px;
       width: 100%;
       transition: all 120ms ease;
     }
@@ -211,12 +247,13 @@ export const STYLES = `
       border-color: rgba(77, 124, 255, 0.25);
     }
     .chatTitle {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       min-width: 0;
+      grid-column: 1;
     }
     .chatTitleText {
       min-width: 0;
@@ -224,17 +261,25 @@ export const STYLES = `
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .chatSubline {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      grid-column: 1;
+    }
     .chatMeta {
       color: var(--muted);
-      font-size: 11px;
+      font-size: 10px;
+      flex: 0 0 auto;
     }
     .chatDelete {
-      width: 26px;
-      height: 26px;
+      width: 18px;
+      height: 18px;
       border: 1px solid transparent;
       background: transparent;
       color: var(--muted);
-      border-radius: 6px;
+      border-radius: 4px;
       cursor: pointer;
       align-self: center;
       grid-row: 1 / span 2;
@@ -242,6 +287,9 @@ export const STYLES = `
       display: flex;
       align-items: center;
       justify-content: center;
+      font-size: 13px;
+      line-height: 1;
+      padding: 0;
     }
     .chatDelete:hover {
       color: var(--danger);
@@ -252,7 +300,7 @@ export const STYLES = `
       display: grid;
       grid-template-rows: auto minmax(120px, 1fr) 6px var(--composer-height, auto);
       min-width: 0;
-      height: 100vh;
+      height: 100%;
       min-height: 0;
       background: var(--panel);
       overflow: hidden;
@@ -392,6 +440,37 @@ export const STYLES = `
       padding: 20px 10px;
     }
     .settingsOverlay.hidden { display: none; }
+    .confirmOverlay {
+      align-items: center;
+    }
+    .confirmPanel {
+      width: min(420px, 92vw);
+    }
+    .confirmBody {
+      padding: 18px 20px 20px;
+    }
+    .confirmBody p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .confirmTarget {
+      margin-bottom: 18px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .confirmActions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
     .settingsPanel {
       background: #14171e;
       color: var(--text);
@@ -481,6 +560,24 @@ export const STYLES = `
       border-radius: 8px;
       margin-bottom: 6px;
     }
+    .settingsItemRow {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-bottom: 6px;
+    }
+    .settingsItemRow .textWrap {
+      flex: 1;
+      min-width: 0;
+    }
+    .settingsItemRow .iconBtn {
+      flex: 0 0 auto;
+      margin-top: 2px;
+    }
     .settingsItem input[type="checkbox"] {
       margin-top: 3px;
       width: 18px;
@@ -496,6 +593,21 @@ export const STYLES = `
       font-size: 12px;
       line-height: 1.4;
       margin-top: 2px;
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+    .settingsItemRow .name {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .settingsItemRow .desc {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+      word-break: normal;
     }
     .riskBadge {
       align-self: center;
@@ -703,10 +815,10 @@ export const STYLES = `
     }
 
     .newChatBtn {
-      width: 100%;
-      padding: 10px;
-      font-size: 14px;
-      margin: 8px 0;
+      width: calc(100% - 16px);
+      margin: 6px 8px;
+      padding: 7px 8px;
+      font-size: 12px;
     }
     .formField {
       display: grid;
@@ -782,6 +894,16 @@ export const STYLES = `
     .primaryBtn:active {
       transform: translateY(0);
     }
+    .dangerBtn {
+      border-color: rgba(255, 119, 109, 0.4);
+      background: rgba(255, 119, 109, 0.14);
+      color: var(--danger);
+      font-weight: 700;
+    }
+    .dangerBtn:hover {
+      border-color: var(--danger);
+      background: rgba(255, 119, 109, 0.22);
+    }
     .formError {
       margin-top: 10px;
       padding: 10px 12px;
@@ -793,12 +915,14 @@ export const STYLES = `
     }
     .formError.hidden { display: none; }
     .chatItem .chatFolder {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--muted);
       font-family: ui-monospace, "SF Mono", Menlo, monospace;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      flex: 1;
+      min-width: 0;
     }
     .pathRow {
       display: flex;
@@ -944,6 +1068,16 @@ export const STYLES = `
       color: var(--text);
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
       transition: all 120ms ease;
+    }
+    .msg.streaming .streamingText::after {
+      content: "▋";
+      display: inline-block;
+      margin-left: 2px;
+      color: var(--accent);
+      animation: streamCursor 0.9s step-end infinite;
+    }
+    @keyframes streamCursor {
+      50% { opacity: 0; }
     }
     .user .bubble {
       background: linear-gradient(135deg, #3b66ff, #5c4dff);
@@ -1110,6 +1244,58 @@ export const STYLES = `
       color: #5eead4;
       border-color: rgba(20, 184, 166, 0.45);
     }
+    .memoryToggle {
+      border-color: rgba(59, 130, 246, 0.28);
+      color: #93c5fd;
+    }
+    .memoryToggle.active {
+      background: rgba(59, 130, 246, 0.16);
+      color: #bfdbfe;
+      border-color: rgba(59, 130, 246, 0.48);
+    }
+    .autoSkillToggle {
+      border-color: rgba(236, 72, 153, 0.28);
+      color: #f9a8d4;
+    }
+    .autoSkillToggle.active {
+      background: rgba(236, 72, 153, 0.14);
+      color: #fbcfe8;
+      border-color: rgba(236, 72, 153, 0.45);
+    }
+    .skillPicker {
+      max-width: 148px;
+      height: 28px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 999px;
+      border: 1px solid rgba(236, 72, 153, 0.28);
+      background: transparent;
+      color: #f9a8d4;
+      padding: 0 10px;
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    .skillPicker.hidden { display: none; }
+    .skillPicker:focus {
+      outline: none;
+      border-color: rgba(236, 72, 153, 0.55);
+      box-shadow: 0 0 0 2px rgba(236, 72, 153, 0.12);
+    }
+    .memorySettingsList {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 280px;
+      overflow: auto;
+    }
+    .memorySettingsItem {
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .memorySettingsItem.settingsItemRow .iconBtn {
+      flex: 0 0 auto;
+      margin-top: 2px;
+    }
     body[data-theme="light"] .coderToggle.active,
     body[data-theme="contrast"] .coderToggle.active {
       color: #6d28d9;
@@ -1139,6 +1325,191 @@ export const STYLES = `
       grid-template-rows: auto minmax(0, 1fr);
     }
     .pipelinePanel.hidden { display: none; }
+
+    .agentDrawerBtn {
+      flex: 0 0 auto;
+      color: #c4b5fd;
+      border-color: rgba(167, 139, 250, 0.28);
+    }
+    .agentDrawerBtn.active {
+      background: rgba(167, 139, 250, 0.14);
+      border-color: rgba(167, 139, 250, 0.45);
+    }
+    .agentDrawerBackdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      z-index: 24;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease;
+    }
+    .agentDrawerBackdrop.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    /* Браузер + чат одновременно: backdrop не перехватывает клики/фокус в основном окне */
+    body.agentBrowserDrawerOpen .agentDrawerBackdrop.open {
+      opacity: 0;
+      pointer-events: none;
+    }
+    body.agentBrowserDrawerOpen .app {
+      width: calc(100% - var(--agent-drawer-width, 640px));
+      max-width: calc(100% - var(--agent-drawer-width, 640px));
+    }
+    body.agentBrowserDrawerOpen .main {
+      padding-right: 0;
+      box-sizing: border-box;
+    }
+    body.agentDrawerResizing .main,
+    body.agentDrawerResizing .agentDrawer,
+    body.agentDrawerResizing .app {
+      transition: none;
+    }
+    body.agentDrawerResizing {
+      user-select: none;
+      cursor: col-resize;
+    }
+    .agentDrawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 25;
+      width: var(--agent-drawer-width, 480px);
+      height: auto;
+      max-height: 100%;
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      box-shadow: -12px 0 40px rgba(0, 0, 0, 0.35);
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      transform: translateX(100%);
+      transition: transform 0.22s ease, width 0.12s ease;
+    }
+    .agentDrawer.open { transform: translateX(0); }
+    .agentDrawerResize {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 8px;
+      transform: translateX(-4px);
+      cursor: col-resize;
+      touch-action: none;
+      z-index: 30;
+      background: transparent;
+      display: none;
+    }
+    .agentDrawerResize.visible { display: block; }
+    .agentDrawerResize:hover,
+    .agentDrawerResize.dragging {
+      background: rgba(77, 124, 255, 0.35);
+    }
+    .agentDrawerHead {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 14px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .agentDrawerTitle { font-size: 15px; font-weight: 800; }
+    .agentDrawerSub { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .agentDrawerTabs {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .agentDrawerTab {
+      flex: 1;
+      border: 1px solid var(--line);
+      background: var(--button-bg);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .agentDrawerTab.active {
+      border-color: rgba(167, 139, 250, 0.45);
+      background: rgba(167, 139, 250, 0.12);
+    }
+    .agentDrawerBody { min-height: 0; overflow: hidden; position: relative; }
+    .agentDrawerPanel {
+      display: none;
+      height: 100%;
+      overflow: auto;
+      padding: 12px;
+    }
+    .agentDrawerPanel.active { display: block; }
+    .agentDrawerPanel[data-panel="browser"] {
+      padding: 0;
+      display: none;
+      grid-template-rows: minmax(0, 1fr);
+      min-height: 0;
+      overflow: hidden;
+    }
+    .agentDrawerPanel[data-panel="browser"].active { display: grid; }
+    .agentDrawerSection {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .agentDrawerSection h4 {
+      margin: 0 0 4px;
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .agentDrawerRow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .agentDrawerRow .coderToggle,
+    .agentDrawerRow .skillPicker {
+      flex: 1 1 auto;
+      min-width: 120px;
+    }
+    .agentDrawerHint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .agentBrowserFrame {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      border: 0;
+      background: var(--bg);
+      display: block;
+    }
+    .agentMiniList { display: grid; gap: 6px; }
+    .agentMiniItem {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: var(--bg-soft, var(--panel-2));
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .agentDrawer.disabled .agentDrawerControls { opacity: 0.45; pointer-events: none; }
+    .pluginInstallRow { display: flex; gap: 8px; align-items: center; }
+    .pluginInstallInput {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--input-bg);
+      color: var(--text);
+      padding: 8px 10px;
+    }
+
     .pipelineHead {
       display: flex;
       justify-content: space-between;
@@ -1211,12 +1582,13 @@ export const STYLES = `
       display: inline-flex;
       align-items: center;
       flex: 0 0 auto;
-      font-size: 10px;
-      padding: 1px 6px;
+      font-size: 9px;
+      padding: 0 4px;
       border-radius: 3px;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.3px;
+      letter-spacing: 0.2px;
+      line-height: 1.5;
     }
     .providerBadge.deepseek {
       background: rgba(77, 124, 255, 0.12);

@@ -1,5 +1,7 @@
 # AI Free: мозги как Obsidian + skills как Codex/Claude
 
+> **Статус MVP (июнь 2026):** Memory Core (SQLite FTS + Markdown vault + graph) ✅ · Skills (builtins + UI + `/skill`) ✅ · Agent Orchestrator ✅ · UI toggles ✅ · Vector search — позже.
+
 Документ фиксирует рабочую архитектуру, как превратить AI Free из мульти-провайдерного чата/код-агента в полноценный продукт с долговременной памятью, skill-системой и агентными режимами.
 
 ## 1. Что уже есть в проекте

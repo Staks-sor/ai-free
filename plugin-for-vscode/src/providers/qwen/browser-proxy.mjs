@@ -68,13 +68,14 @@ function installPlaywrightChromium() {
 }
 
 // Сброс singleton после re-login / refresh — следующий запрос поднимет прокси с новыми куками.
-export function resetQwenBrowserProxy() {
-  if (proxyPromise) {
-    proxyPromise
-      .then((proxy) => proxy.close?.())
-      .catch(() => {});
-  }
+export async function resetQwenBrowserProxy() {
+  const current = proxyPromise;
   proxyPromise = null;
+  if (!current) return;
+  try {
+    const proxy = await current;
+    await proxy.close?.();
+  } catch {}
 }
 
 // Возвращает singleton-инстанс прокси. Все вызовы делят один Chromium.
@@ -347,10 +348,14 @@ async function createProxy({ debug }) {
                 "Content-Type": "application/json",
                 Accept: accept,
                 source: "web",
-                version: "0.2.64",
                 timezone: new Date().toString().replace(/\s*\(.+\)$/, ""),
                 "x-request-id": requestId,
               };
+              const clientScript = Array.from(document.scripts)
+                .map((script) => script.src)
+                .find((src) => /\/qwen-chat-fe\/[^/]+\/js\/main\.js(?:$|\?)/.test(src));
+              const clientVersion = clientScript?.match(/\/qwen-chat-fe\/([^/]+)\//)?.[1];
+              if (clientVersion) headers.version = clientVersion;
               if (isCompletionRequest) headers["x-accel-buffering"] = "no";
               const res = await fetch(fetchUrl, {
                 method: "POST",

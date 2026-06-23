@@ -30,6 +30,7 @@ import {
 import {
   applyQwenCookiesToContext,
   qwenCookieHeaderFromArray,
+  readQwenAuth,
   writeQwenAuth,
 } from "./auth-files.mjs";
 
@@ -121,10 +122,12 @@ export async function importQwenFromJson(jsonPath, authFile = QWEN_AUTH_FILE) {
   return { token: tokenCookie.value, userId, cookies: normalized };
 }
 
-// Главный entry-point для `npm run login-qwen`.
-export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE) {
+// Главный entry-point для `npm run login-qwen` и in-app re-login.
+export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession = false } = {}) {
   const profileDir = QWEN_BROWSER_PROFILE;
-  const { chromium } = await import("playwright");
+  const previousToken = clearSession ? (readQwenAuth(authFile)?.token || "") : "";
+  const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
+  const chromium = await getChatGPTChromium();
   // Переиспользуем launch-функцию от DeepSeek — она запускает реальный Chrome.
   const context = await launchPersistentDeepSeekContext(chromium, profileDir, false);
 
@@ -154,20 +157,37 @@ export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE) {
   });
 
   const page = context.pages()[0] || (await context.newPage());
+
+  if (clearSession) {
+    console.log("🔒 Сбрасываю старую сессию Qwen в профиле — нужен новый вход.");
+    await context.clearCookies();
+    await page.evaluate(() => {
+      try { localStorage.removeItem("token"); } catch {}
+    });
+  }
+
   await page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded" });
 
   console.log("🔓 Qwen login window открыто (chat.qwen.ai).");
   console.log("   • Залогинься любым способом (Google OAuth, email/пароль).");
   console.log("   • НИЧЕГО нажимать в терминале не нужно.");
-  console.log("   • Окно закроется автоматически, когда появится JWT-токен.");
+  if (clearSession) {
+    console.log("   • Окно не закроется, пока не завершишь вход заново (старый токен сброшен).");
+  } else {
+    console.log("   • Окно закроется автоматически, когда появится JWT-токен.");
+  }
 
   let captured;
   try {
-    captured = await waitForQwenToken(context);
+    captured = await waitForQwenToken(context, { previousToken });
   } catch (error) {
     await context.close().catch(() => {});
     throw error;
   }
+
+  await page.evaluate((token) => {
+    try { localStorage.setItem("token", token); } catch {}
+  }, captured.token);
 
   writeQwenAuth(authFile, {
     cookies: captured.cookies,
@@ -189,10 +209,14 @@ export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE) {
 }
 
 // Ждём, пока в cookies появится валидный JWT в `token`.
-// JWT — 3 части через точку, каждая base64url. Простой regex отсеивает «пустые» значения.
-async function waitForQwenToken(context, { timeoutMs = 5 * 60 * 1000, intervalMs = 1000 } = {}) {
+// previousToken — при re-login не принимаем тот же JWT, что был до сброса сессии.
+async function waitForQwenToken(
+  context,
+  { timeoutMs = 5 * 60 * 1000, intervalMs = 1000, previousToken = "" } = {},
+) {
   const startedAt = Date.now();
   let lastSeen = "";
+  let staleTokenLogged = false;
   while (Date.now() - startedAt < timeoutMs) {
     let cookies;
     try {
@@ -207,11 +231,17 @@ async function waitForQwenToken(context, { timeoutMs = 5 * 60 * 1000, intervalMs
     const looksLikeJwt = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
 
     if (allRequired && looksLikeJwt) {
-      // cnaui — user UUID (опционально).
-      const userId = cookies.find((c) => c.name === "cnaui")?.value
-        || cookies.find((c) => c.name === "aui")?.value
-        || "";
-      return { cookies, token, userId };
+      if (previousToken && token === previousToken) {
+        if (!staleTokenLogged) {
+          staleTokenLogged = true;
+          console.log("[qwen-login] Старый JWT ещё в профиле — заверши вход заново в окне браузера…");
+        }
+      } else {
+        const userId = cookies.find((c) => c.name === "cnaui")?.value
+          || cookies.find((c) => c.name === "aui")?.value
+          || "";
+        return { cookies, token, userId };
+      }
     }
 
     if (token && token !== lastSeen) {
@@ -269,7 +299,8 @@ export async function refreshQwenAuthFromProfile(authFile = QWEN_AUTH_FILE) {
     // используем дефолтный профиль
   }
 
-  const { chromium } = await import("playwright");
+  const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
+  const chromium = await getChatGPTChromium();
   const context = await launchPersistentDeepSeekContext(chromium, profileDir, true);
   try {
     const page = context.pages()[0] || (await context.newPage());
@@ -283,7 +314,8 @@ export async function refreshQwenAuthFromProfile(authFile = QWEN_AUTH_FILE) {
 
 // Записать импортированные/обновлённые куки в persistent-профиль для browser-proxy.
 export async function syncQwenCookiesToProfile(cookies, profileDir = QWEN_BROWSER_PROFILE) {
-  const { chromium } = await import("playwright");
+  const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
+  const chromium = await getChatGPTChromium();
   const context = await launchPersistentDeepSeekContext(chromium, profileDir, true);
   try {
     await applyQwenCookiesToContext(context, cookies);

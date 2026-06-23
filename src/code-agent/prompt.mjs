@@ -1,11 +1,25 @@
 // Системный промпт для /code-агента. Динамический — подтягивает актуальный
-// whitelist команд из settings.json, чтобы LLM знал, что РЕАЛЬНО доступно.
+// whitelist команд из settings.json, skills и memory context.
 
 import { loadSettings } from "../state/settings.mjs";
+import { getSkillPrompt } from "../skills/registry.mjs";
+import { formatAllowedToolsHint } from "../skills/permissions.mjs";
 
-export const CODE_AGENT_PROMPT_VERSION = 9;
+export const CODE_AGENT_PROMPT_VERSION = 17;
 
-export function createCodeSystemPrompt(workspaceRoot, task, extraSystemPrompt = "", { searchEnabled = false } = {}) {
+export function createCodeSystemPrompt(
+  workspaceRoot,
+  task,
+  extraSystemPrompt = "",
+  {
+    searchEnabled = false,
+    skillId = null,
+    skillPrompt = null,
+    memoryContext = "",
+    browserContext = "",
+    allowedTools = null,
+  } = {},
+) {
   const settings = loadSettings();
   const allowed = settings.allowedCommands.join(", ");
   const extra = String(extraSystemPrompt || "").trim();
@@ -18,16 +32,48 @@ export function createCodeSystemPrompt(workspaceRoot, task, extraSystemPrompt = 
 - You can still work with local files and local commands.
 - For current/latest/news/time-sensitive questions, say that web search is disabled for this request.`;
 
+  const resolvedSkillPrompt = skillPrompt || (skillId ? getSkillPrompt(skillId) : null);
+  const skillSection = resolvedSkillPrompt
+    ? `\n\n=== ACTIVE SKILL: ${skillId} ===\n${resolvedSkillPrompt}\n=== END SKILL ===\n`
+    : "";
+
+  const memory = String(memoryContext || "").trim();
+  const memorySection = memory
+    ? `\n\n=== MEMORY (past project context) ===\n${memory}\n=== END MEMORY ===\n`
+    : "";
+
+  const browser = String(browserContext || "").trim();
+  const browserSection = browser
+    ? `\n\n=== BROWSER (shared in-app browser, 🧠 → Web) ===\n${browser}\n=== END BROWSER ===\n`
+    : "";
+  const browserFirstHint = browser
+    ? `\nBrowser-first rule: for web tasks use browser_* tools only (NOT provider web search, NOT run_command node/playwright/npm scripts).
+Workflow: browser_navigate → browser_snapshot → browser_click/browser_type by ref → browser_snapshot to verify.
+If browser tools fail or the page is stuck: browser_reset (do NOT delete_dir on ~/.deepseek-cli or run custom Playwright scripts).
+Refs like e3 come from browser_snapshot tree/refs. Screenshot saved to ~/.deepseek-cli/browser-cache/last-snapshot.jpg\n`
+    : "";
+
+  const toolsHint = formatAllowedToolsHint(allowedTools);
+
   return `You are a coding agent connected to a local workspace.
 Code agent prompt/tool version: ${CODE_AGENT_PROMPT_VERSION}
 Workspace root: ${workspaceRoot}
 ${searchGuidance}
-${extra ? `\nAdditional system instructions:\n${extra}\n` : ""}
+${extra ? `\nAdditional system instructions:\n${extra}\n` : ""}${skillSection}${memorySection}${browserSection}${browserFirstHint}${toolsHint ? `\n${toolsHint}\n` : ""}
 
 IMPORTANT — about permissions and paths:
 - You HAVE full read/write access to EVERYTHING inside the workspace root above.
 - You DO NOT need to ask the user for permission. The user already granted access.
 - The local workspace tools run on the user's machine, not inside the provider chat page.
+- A managed platform browser (🧠 → Browser → Web) runs on Playwright with persistent profile ~/.deepseek-cli/web-browser-profile.
+- Browser tools (Codex-style): browser_snapshot, browser_navigate, browser_click, browser_type, browser_key, browser_scroll, browser_wait, browser_go_back, browser_list_tabs, browser_switch_tab, browser_reset.
+- browser_snapshot returns accessibility tree, interactive refs (e1, e2…), visible text, and JPEG screenshot path.
+- browser_click prefers ref from browser_snapshot; also accepts text, selector, or x/y.
+- browser_type accepts ref to focus a textbox before typing; use clear:true to replace field content.
+- After browser_click/browser_type/browser_scroll/browser_key, call browser_snapshot to verify state.
+- Never fix browser issues with delete_dir on ~/.deepseek-cli, package.json edits, npm install playwright, or run_command node scripts — use browser_reset and browser_* only.
+- Do not say you cannot use the browser — these tools run locally via Playwright, same session as the embedded Web panel.
+- Do not say you cannot see the browser if BROWSER context or browser_snapshot results are present.
 - Do not infer that the workspace is a Linux container, root filesystem, sandbox, or unmounted just because the upstream model/provider environment is remote.
 - Never say that the workspace root does not exist, is not mounted, or is inaccessible unless a workspace tool result explicitly says so.
 - Never say that tool calls may not reach disk, that the runtime is unconfirmed, or that you cannot guarantee file changes. Use a workspace tool and trust its result.
@@ -53,6 +99,20 @@ The JSON object MUST contain the string field "tool":
 {"tool":"ask_user","question":"What should I do next?","details":"Optional short context","choices":["Option A","Option B"]}
 {"tool":"run_command","cmd":"node","args":["relative/file.js"],"timeoutMs":20000}
 {"tool":"run_shell","command":"grep -r pattern . | head -n 20","timeoutMs":20000}
+{"tool":"browser_snapshot","maxTextChars":8000,"includeScreenshot":true}
+{"tool":"browser_navigate","url":"https://example.com"}
+{"tool":"browser_click","ref":"e3"}
+{"tool":"browser_click","text":"Accept all"}
+{"tool":"browser_click","x":290,"y":420}
+{"tool":"browser_type","ref":"e5","text":"search query","clear":true}
+{"tool":"browser_type","text":"fallback typing"}
+{"tool":"browser_key","key":"Enter"}
+{"tool":"browser_scroll","deltaY":600}
+{"tool":"browser_wait","ms":1500}
+{"tool":"browser_go_back"}
+{"tool":"browser_list_tabs"}
+{"tool":"browser_switch_tab","index":0}
+{"tool":"browser_reset"}
 {"tool":"finish","message":"short summary for the user"}
 
 Rules:

@@ -34,7 +34,7 @@ export class QwenAuthManager {
       try {
         if (this.debug) console.error("[qwen-auth] trying silent refresh from profile…");
         const auth = await refreshQwenAuthFromProfile(this.authFile);
-        resetQwenBrowserProxy();
+        await resetQwenBrowserProxy();
         this._consecutiveFailures = 0;
         console.log("🔄 Qwen auth refreshed silently from saved profile.");
         return auth;
@@ -56,7 +56,7 @@ export class QwenAuthManager {
 
     console.log("\n🔒 Qwen session expired or missing. Opening login window (chat.qwen.ai)…");
     const auth = await loginQwenAndSave(this.authFile);
-    resetQwenBrowserProxy();
+    await resetQwenBrowserProxy();
     this._consecutiveFailures = 0;
     console.log("✅ Qwen re-login completed.");
     return auth;

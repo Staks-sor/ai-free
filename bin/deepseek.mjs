@@ -42,8 +42,16 @@ if (!isHelpOnly && !fs.existsSync(playwrightPkg)) {
   console.log("\n✅ Зависимости установлены. Запускаюсь...\n");
 }
 
+// До импорта модулей ChatGPT: headless-сессия, без отдельного окна Chrome.
+if (process.env.CHATGPT_EMBED_IN_UI == null) {
+  process.env.CHATGPT_EMBED_IN_UI = "1";
+}
+
 // Импортируем динамически — на случай если в будущем какой-то модуль захочет
 // что-то проверить перед стартом. Сейчас работает и через static, но dynamic безопаснее.
+const { ensureBrowserBinaries } = await import("../src/browser/ensure-binaries.mjs");
+await ensureBrowserBinaries();
+
 const { run } = await import("../src/cli/run.mjs");
 
 run().catch((error) => {

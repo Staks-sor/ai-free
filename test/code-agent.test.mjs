@@ -16,6 +16,7 @@ import {
   isAllowedDevicePath,
   listSerialPorts,
   looksLikePath,
+  normalizePermissionCommand,
   resolveWorkspacePath,
   truncateOutput,
   validateCommandArgs,
@@ -243,6 +244,18 @@ describe("extractFirstJsonObject", () => {
 });
 
 describe("validateCommandArgs", () => {
+  it("maps trusted system Python paths to the python permission", () => {
+    assert.equal(normalizePermissionCommand("/usr/bin/python3"), "python3");
+    assert.equal(normalizePermissionCommand("/opt/homebrew/bin/python3"), "python3");
+    assert.equal(normalizePermissionCommand("C:\\Windows\\py.exe"), "python3");
+    assert.equal(
+      normalizePermissionCommand("C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python313\\python.exe"),
+      "python3",
+    );
+    assert.equal(normalizePermissionCommand("/tmp/project/.venv/bin/python", "/tmp/project"), "python3");
+    assert.equal(normalizePermissionCommand("/tmp/python3", "/tmp/project"), "");
+  });
+
   it("allows npm install/add and blocks publish/login", () => {
     assert.doesNotThrow(() => validateCommandArgs("/tmp", "npm", ["install"]));
     assert.doesNotThrow(() => validateCommandArgs("/tmp", "npm", ["add", "left-pad"]));

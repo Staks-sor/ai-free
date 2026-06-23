@@ -20,24 +20,38 @@ import {
   applyCookiesToContext,
   clearBrowserCookiesViaCdp,
   estimateCookieHeaderBytes,
+  isChatGPTAuthUsable,
   pickEssentialChatGPTCookies,
   readChatGPTAuth,
   replaceCookiesInContext,
   writeChatGPTAuth,
 } from "./auth-files.mjs";
-import { killStaleChromeForProfile, launchNormalChromeForChatGPT } from "./browser-login.mjs";
+import {
+  detectCloudflareChallenge,
+  trySolveTurnstileCheckbox,
+  waitForCloudflareClearance,
+} from "./cloudflare-challenge.mjs";
+import { killStaleChromeForProfile, launchNormalChromeForChatGPT, getChatGPTBrowserLaunchOptions } from "./browser-login.mjs";
 import { getChatGPTChromium, getChatGPTEngineName } from "./engine.mjs";
 
+const EMBED_PANEL_VIEWPORT = { width: 580, height: 900 };
+
 let proxyPromise = null;
+let proxyStatus = { state: "idle", error: "" };
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const DEFAULT_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-const NAV_TIMEOUT_MS = Number(process.env.CHATGPT_NAV_TIMEOUT_MS || 90_000);
-const READY_DELAY_MS = Number(process.env.CHATGPT_READY_DELAY_MS || 4000);
-const COMPOSER_TIMEOUT_MS = Number(process.env.CHATGPT_COMPOSER_TIMEOUT_MS || 45_000);
+const NAV_TIMEOUT_MS = Number(process.env.CHATGPT_NAV_TIMEOUT_MS || 35_000);
+const READY_DELAY_MS = Number(process.env.CHATGPT_READY_DELAY_MS || 1500);
+const COMPOSER_TIMEOUT_MS = Number(process.env.CHATGPT_COMPOSER_TIMEOUT_MS || 25_000);
 const GENERATION_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATION_TIMEOUT_MS || 300_000);
-// По умолчанию — видимое окно Chrome (сессия стабильнее). Невидимый режим: CHATGPT_HEADLESS=1
-const HEADLESS = process.env.CHATGPT_HEADLESS === "1";
+const CLOUDFLARE_WAIT_MS = Number(process.env.CHATGPT_CLOUDFLARE_WAIT_MS || 30_000);
+
+function getChatGPTLaunchProfile() {
+  return getChatGPTBrowserLaunchOptions();
+}
 
 function isTransientBrowserError(error) {
   if (isOversizedHeaderError(error)) return false;
@@ -58,11 +72,41 @@ function isOversizedHeaderError(error) {
     || (/net::ERR_HTTP_RESPONSE_CODE_FAILURE/i.test(message) && /chatgpt\.com/i.test(message));
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Code-agent иногда получает от ChatGPT сырой JSON tool-call — вытаскиваем message для UI.
+export function normalizeChatGPTAssistantText(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return "";
+
+  const tryParseJson = (raw) => {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message.trim();
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  if (trimmed.startsWith("{")) {
+    const fromJson = tryParseJson(trimmed);
+    if (fromJson) return fromJson;
+  }
+
+  const fenced = trimmed.match(/```(?:json|python)?\s*(\{[\s\S]*?\})\s*```/i);
+  if (fenced) {
+    const fromFence = tryParseJson(fenced[1]);
+    if (fromFence) return fromFence;
+  }
+
+  return trimmed;
+}
 
 export async function closeChatGPTBrowserProxy() {
   const current = proxyPromise;
   proxyPromise = null;
+  proxyStatus = { state: "idle", error: "" };
   if (!current) return;
   try {
     const proxy = await current;
@@ -76,12 +120,28 @@ export function resetChatGPTBrowserProxy() {
 
 export function getChatGPTBrowserProxy({ debug = false } = {}) {
   if (!proxyPromise) {
-    proxyPromise = createProxy({ debug }).catch((err) => {
-      proxyPromise = null;
-      throw err;
-    });
+    proxyStatus = { state: "starting", error: "" };
+    proxyPromise = createProxy({ debug })
+      .then((proxy) => {
+        proxyStatus = { state: "ready", error: "" };
+        return proxy;
+      })
+      .catch((err) => {
+        proxyPromise = null;
+        proxyStatus = { state: "error", error: String(err?.message || err) };
+        throw err;
+      });
   }
   return proxyPromise;
+}
+
+export function getChatGPTBrowserProxyStatus() {
+  return { ...proxyStatus };
+}
+
+export function startChatGPTBrowserProxy(options = {}) {
+  getChatGPTBrowserProxy(options).catch(() => {});
+  return getChatGPTBrowserProxyStatus();
 }
 
 // После логина не закрываем Chrome — передаём живое окно в прокси (сессия не слетает).
@@ -102,10 +162,17 @@ export function adoptChatGPTBrowserSession(session, { debug = false } = {}) {
       .then((proxy) => proxy.close?.())
       .catch(() => {});
   }
-  proxyPromise = createProxy({ debug, adoptedSession: session }).catch((err) => {
-    proxyPromise = null;
-    throw err;
-  });
+  proxyStatus = { state: "starting", error: "" };
+  proxyPromise = createProxy({ debug, adoptedSession: session })
+    .then((proxy) => {
+      proxyStatus = { state: "ready", error: "" };
+      return proxy;
+    })
+    .catch((err) => {
+      proxyPromise = null;
+      proxyStatus = { state: "error", error: String(err?.message || err) };
+      throw err;
+    });
 }
 
 function cleanupProfileLocks(profileDir) {
@@ -116,6 +183,7 @@ function cleanupProfileLocks(profileDir) {
 
 async function createProxy({ debug, adoptedSession = null }) {
   const chromium = await getChatGPTChromium();
+  const embedUi = process.env.CHATGPT_EMBED_IN_UI === "1";
   if (debug) console.log(`[chatgpt-proxy] using browser engine: ${getChatGPTEngineName()}`);
 
   const authState = { data: readChatGPTAuth(CHATGPT_AUTH_FILE) };
@@ -125,33 +193,45 @@ async function createProxy({ debug, adoptedSession = null }) {
   let page = null;
   let browserSession = null;
   let sendCount = 0;
+  let authPollTimer = null;
+  let authWatchersAttached = false;
 
   async function syncAuthFromBrowser() {
     try {
-      const session = await page.evaluate(async () => {
-        const r = await fetch("/api/auth/session", {
-          credentials: "include",
-          headers: { Accept: "application/json" },
-        });
-        if (!r.ok) return null;
-        return r.json();
-      });
-      if (!session?.accessToken) return;
       const cookies = pickEssentialChatGPTCookies(await context.cookies());
-      const ua = await page.evaluate(() => navigator.userAgent);
+      const sessionTokenFromCookie = cookies.find((c) => c.name === "__Secure-next-auth.session-token")?.value || "";
+
+      let session = null;
+      try {
+        session = await page.evaluate(async () => {
+          const r = await fetch("/api/auth/session", {
+            credentials: "include",
+            headers: { Accept: "application/json" },
+          });
+          if (!r.ok) return null;
+          return r.json();
+        });
+      } catch {}
+
+      const accessToken = session?.accessToken || authState.data?.accessToken || "";
+      const sessionToken = session?.sessionToken || sessionTokenFromCookie || authState.data?.sessionToken || "";
+
+      if (!accessToken && !sessionToken) return null;
+
+      const ua = await page.evaluate(() => navigator.userAgent).catch(() => userAgent);
       writeChatGPTAuth(CHATGPT_AUTH_FILE, {
         cookies,
-        accessToken: session.accessToken,
-        sessionToken:
-          session.sessionToken
-          || cookies.find((c) => c.name === "__Secure-next-auth.session-token")?.value
-          || authState.data?.sessionToken
-          || "",
+        accessToken,
+        sessionToken,
         profileDir: CHATGPT_BROWSER_PROFILE,
         userAgent: ua,
       });
       authState.data = readChatGPTAuth(CHATGPT_AUTH_FILE);
-      if (debug) console.log(`[chatgpt-proxy] synced auth (${cookies.length} essential cookies)`);
+      if (debug) {
+        console.log(
+          `[chatgpt-proxy] synced auth (${cookies.length} cookies, token: ${Boolean(accessToken)}, session: ${Boolean(sessionToken)})`,
+        );
+      }
       return authState.data;
     } catch (error) {
       if (debug) console.log(`[chatgpt-proxy] syncAuth failed: ${error.message}`);
@@ -185,60 +265,50 @@ async function createProxy({ debug, adoptedSession = null }) {
   }
 
   async function launchBrowser() {
-    // Не убиваем живой Chrome, если прокси уже держит сессию — иначе «Не удалось открыть профиль».
-    if (!browserSession && killStaleChromeForProfile(CHATGPT_BROWSER_PROFILE)) {
-      await sleep(1200);
-    }
-    fs.mkdirSync(CHATGPT_BROWSER_PROFILE, { recursive: true });
-    cleanupProfileLocks(CHATGPT_BROWSER_PROFILE);
+    const launch = getChatGPTLaunchProfile();
+    const embedUi = process.env.CHATGPT_EMBED_IN_UI === "1";
 
-    // Логин пишет сессию в профиль НАСТОЯЩЕГО Google Chrome. Patchright/Chromium
-    // не всегда читает эти cookies (другой движок / шифрование профиля) — поэтому
-    // прокси тоже поднимаем через тот же Chrome по CDP, как при авторизации.
-    browserSession = await launchNormalChromeForChatGPT(chromium, CHATGPT_BROWSER_PROFILE, {
-      initialUrl: "about:blank",
-      clearCookies: false,
-      headless: HEADLESS,
-    });
-
-    if (browserSession) {
-      const ctx = browserSession.context;
-      const pg = browserSession.page;
-      // Профиль Chrome уже содержит cookies — повторно не инъектим (иначе HTTP 431).
-      if (debug) console.log(`[chatgpt-proxy] using real Chrome (cdp) ${HEADLESS ? "headless" : "visible"}`);
-      return { ctx, pg };
-    }
-
-    if (debug) console.log("[chatgpt-proxy] real Chrome unavailable; falling back to patchright persistent");
-
-    const launchOptions = {
-      headless: HEADLESS,
-      viewport: { width: 1280, height: 900 },
-      userAgent,
-      locale: "en-US",
-      args: [],
-    };
-
-    let ctx;
-    try {
-      ctx = await chromium.launchPersistentContext(CHATGPT_BROWSER_PROFILE, { ...launchOptions, channel: "chrome" });
-    } catch (chromeError) {
-      if (debug) console.log(`[chatgpt-proxy] chrome channel failed (${chromeError.message}); falling back to bundled Chromium`);
+    if (launch.useExternalChrome && !embedUi) {
+      if (!browserSession && killStaleChromeForProfile(CHATGPT_BROWSER_PROFILE)) {
+        await sleep(1200);
+      }
+      fs.mkdirSync(CHATGPT_BROWSER_PROFILE, { recursive: true });
       cleanupProfileLocks(CHATGPT_BROWSER_PROFILE);
-      ctx = await chromium.launchPersistentContext(CHATGPT_BROWSER_PROFILE, launchOptions);
+
+      browserSession = await launchNormalChromeForChatGPT(chromium, CHATGPT_BROWSER_PROFILE, {
+        initialUrl: "about:blank",
+        clearCookies: false,
+        headless: launch.headless,
+        offscreen: launch.offscreen,
+      });
+
+      if (browserSession) {
+        const ctx = browserSession.context;
+        const pg = browserSession.page;
+        const modeLabel = launch.offscreen ? "offscreen" : (launch.headless ? "headless" : "visible");
+        if (debug) console.log(`[chatgpt-proxy] using real Chrome (cdp) ${modeLabel}`);
+        return { ctx, pg };
+      }
     }
 
-    // Fallback-движок не видит cookies из профиля Chrome — подставляем полный набор из auth.json.
+    const { attachInAppBrowserSession, getInAppBrowserLaunchLabel } = await import("../../window-app/in-app-browser.mjs");
+    browserSession = await attachInAppBrowserSession("chatgpt");
+    if (debug) {
+      console.log(`[chatgpt-proxy] in-app browser (${getInAppBrowserLaunchLabel()})`);
+    }
+
+    const ctx = browserSession.context;
+    const pg = browserSession.page;
+
     if (authState.data?.cookies?.length) {
       try {
         await replaceCookiesInContext(ctx, authState.data.cookies, pg);
-        if (debug) console.log(`[chatgpt-proxy] applied ${authState.data.cookies.length} cookies from auth.json (patchright, replaced)`);
+        if (debug) console.log(`[chatgpt-proxy] applied ${authState.data.cookies.length} cookies from auth.json (internal)`);
       } catch (e) {
         if (debug) console.error(`[chatgpt-proxy] failed to apply cookies (continuing): ${e.message}`);
       }
     }
 
-    const pg = ctx.pages()[0] || (await ctx.newPage());
     return { ctx, pg };
   }
 
@@ -246,16 +316,20 @@ async function createProxy({ debug, adoptedSession = null }) {
     await pruneBrowserCookiesIfNeeded({ force: true });
   }
 
-  async function navigateHome(pg, { recovered = false } = {}) {
+  async function navigateHome(pg, { recovered = false, waitForChallenge = true } = {}) {
     await pruneBrowserCookiesIfNeeded();
     try {
       await pg.goto(`${CHATGPT_BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
       await pg.waitForTimeout(READY_DELAY_MS);
+      const state = await detectPageState();
+      if (state.challenge && waitForChallenge) {
+        await waitThroughCloudflareChallenge();
+      }
     } catch (error) {
       if (!recovered && isOversizedHeaderError(error)) {
         if (debug) console.log("[chatgpt-proxy] HTTP 431 on navigate — pruning cookies via CDP");
         await recoverFromOversizedCookies();
-        return navigateHome(pg, { recovered: true });
+        return navigateHome(pg, { recovered: true, waitForChallenge });
       }
       throw error;
     }
@@ -274,16 +348,21 @@ async function createProxy({ debug, adoptedSession = null }) {
     try {
       await pruneBrowserCookiesIfNeeded();
       if (!/chatgpt\.com/.test(page.url())) {
-        await navigateHome(page);
+        // На первом открытии не ждём Cloudflare: страницу с checkbox нужно сразу
+        // показать пользователю во внутренней панели.
+        await navigateHome(page, { waitForChallenge: false });
       } else {
         await page.waitForTimeout(READY_DELAY_MS);
       }
     } catch (error) {
-      if (browserSession?.close) {
+      if (embedUi) {
+        const { closeInAppBrowser } = await import("../../window-app/in-app-browser.mjs");
+        await closeInAppBrowser().catch(() => {});
+      } else if (browserSession?.close) {
         try { await browserSession.close(); } catch {}
         browserSession = null;
       } else {
-        try { await context.close(); } catch {}
+        try { await context?.close(); } catch {}
       }
       if (isCloudflareBlockError(error)) {
         throw new Error("ChatGPT: доступ к chatgpt.com заблокирован (Cloudflare). Обнови вход. authentication");
@@ -295,6 +374,10 @@ async function createProxy({ debug, adoptedSession = null }) {
   if (debug) console.log("[chatgpt-proxy] page loaded and ready");
 
   const close = async () => {
+    if (authPollTimer) {
+      clearTimeout(authPollTimer);
+      authPollTimer = null;
+    }
     if (browserSession?.close) {
       try { await browserSession.close(); } catch {}
       browserSession = null;
@@ -305,23 +388,11 @@ async function createProxy({ debug, adoptedSession = null }) {
   process.once("exit", () => { close(); });
 
   async function detectPageState() {
-    try {
-      return await page.evaluate(() => {
-        const title = String(document.title || "").toLowerCase();
-        const bodyText = String(document.body?.innerText || "").toLowerCase();
-        const hasComposer = Boolean(
-          document.querySelector("#prompt-textarea")
-            || document.querySelector('div[contenteditable="true"]')
-            || document.querySelector("textarea"),
-        );
-        const challenge = /just a moment|checking your browser|verify you are human|подтвердите.*человек|один момент|идет проверка|cloudflare/.test(
-          `${title} ${bodyText}`,
-        );
-        return { hasComposer, challenge, url: location.href };
-      });
-    } catch {
-      return { hasComposer: false, challenge: false, url: page.url() };
-    }
+    return detectCloudflareChallenge(page);
+  }
+
+  async function waitThroughCloudflareChallenge({ maxMs = CLOUDFLARE_WAIT_MS } = {}) {
+    return waitForCloudflareClearance(page, { maxMs, debug });
   }
 
   // Проверяет залогиненность через /api/auth/session (наличие accessToken).
@@ -367,9 +438,13 @@ async function createProxy({ debug, adoptedSession = null }) {
 
       const state = await detectPageState();
       if (state.challenge) {
-        throw new Error(
-          "ChatGPT: Cloudflare challenge в фоновом окне. Открой окно авторизации заново (кнопка входа) и пройди проверку — сессия обновится. authentication",
-        );
+        if (!(await waitThroughCloudflareChallenge())) {
+          throw new Error(
+            "ChatGPT: Cloudflare не пройден. Откройте 🧠 → Браузер → ChatGPT, пройдите проверку и нажмите «Синхронизировать». authentication",
+          );
+        }
+        const afterChallenge = await findComposerLocator();
+        if (afterChallenge) return afterChallenge;
       }
 
       // Не залогинены — даём SPA несколько секунд поднять сессию после навигации.
@@ -397,7 +472,20 @@ async function createProxy({ debug, adoptedSession = null }) {
     );
   }
 
-  async function waitForGenerationToFinish(beforeAssistantCount) {
+  async function readStreamingAssistantText() {
+    const dom = await page
+      .evaluate(() => {
+        const nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
+        const last = nodes[nodes.length - 1];
+        if (!last) return "";
+        const md = last.querySelector(".markdown") || last;
+        return (md.innerText || "").trim();
+      })
+      .catch(() => "");
+    return normalizeChatGPTAssistantText(dom);
+  }
+
+  async function waitForGenerationToFinish(beforeAssistantCount, onText = null) {
     // Ждём появления нового ответа ассистента или кнопки "стоп".
     await Promise.race([
       page
@@ -411,12 +499,49 @@ async function createProxy({ debug, adoptedSession = null }) {
         )
         .catch(() => {}),
     ]);
-    // Ждём завершения генерации: кнопка "стоп" исчезает.
-    await page
-      .waitForSelector('[data-testid="stop-button"]', { state: "detached", timeout: GENERATION_TIMEOUT_MS })
-      .catch(() => {});
-    // Небольшая пауза, чтобы DOM/история успели зафиксироваться.
-    await page.waitForTimeout(900);
+
+    if (!onText) {
+      await page
+        .waitForSelector('[data-testid="stop-button"]', { state: "detached", timeout: GENERATION_TIMEOUT_MS })
+        .catch(() => {});
+      await page.waitForTimeout(900);
+      return;
+    }
+
+    let lastText = "";
+    let sawGeneration = false;
+    const deadline = Date.now() + GENERATION_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      const stopCount = await page.locator('[data-testid="stop-button"]').count().catch(() => 0);
+      const assistantCount = await page
+        .locator('[data-message-author-role="assistant"]')
+        .count()
+        .catch(() => 0);
+
+      if (stopCount > 0 || assistantCount > beforeAssistantCount) {
+        sawGeneration = true;
+        const text = await readStreamingAssistantText();
+        if (text && text !== lastText) {
+          onText(text);
+          lastText = text;
+        }
+      }
+
+      if (sawGeneration && stopCount === 0) {
+        await page.waitForTimeout(350);
+        const text = await readStreamingAssistantText();
+        if (text && text !== lastText) {
+          onText(text);
+          lastText = text;
+        }
+        const stopAgain = await page.locator('[data-testid="stop-button"]').count().catch(() => 0);
+        if (stopAgain === 0) break;
+      }
+
+      await page.waitForTimeout(280);
+    }
+    await page.waitForTimeout(400);
   }
 
   async function extractAssistantAnswer(conversationId) {
@@ -459,7 +584,9 @@ async function createProxy({ debug, adoptedSession = null }) {
           { convId: conversationId, token: accessToken },
         )
         .catch(() => null);
-      if (clean?.text) return clean;
+      if (clean?.text) {
+        return { text: normalizeChatGPTAssistantText(clean.text), id: clean.id };
+      }
     }
 
     // 2) Фолбэк: текст из DOM (innerText последнего ответа ассистента).
@@ -472,7 +599,7 @@ async function createProxy({ debug, adoptedSession = null }) {
         return { text: (md.innerText || "").trim(), id: last.getAttribute("data-message-id") || null };
       })
       .catch(() => ({ text: "", id: null }));
-    return dom;
+    return { text: normalizeChatGPTAssistantText(dom.text), id: dom.id };
   }
 
   // Вытаскивает сгенерированные ChatGPT картинки из последнего ответа и отдаёт
@@ -535,9 +662,10 @@ async function createProxy({ debug, adoptedSession = null }) {
     return results;
   }
 
-  async function gotoHome() {
+  async function gotoHome({ waitForChallenge } = {}) {
+    const wait = waitForChallenge ?? !embedUi;
     try {
-      await navigateHome(page);
+      await navigateHome(page, { waitForChallenge: wait });
     } catch (error) {
       if (isOversizedHeaderError(error)) {
         throw new Error("ChatGPT: слишком много cookies в браузере (HTTP 431). Нажми «Войти» заново. authentication");
@@ -722,11 +850,15 @@ async function createProxy({ debug, adoptedSession = null }) {
       }
     }
 
-    await waitForGenerationToFinish(beforeAssistantCount);
+    await waitForGenerationToFinish(beforeAssistantCount, onText);
 
     const resolvedConversationId =
       /\/c\/([0-9a-fA-F-]+)/.exec(page.url())?.[1] || conversationId || null;
     const answer = await extractAssistantAnswer(resolvedConversationId);
+    const domText = await readStreamingAssistantText();
+    if (domText.length > (answer.text || "").length) {
+      answer.text = domText;
+    }
     // ChatGPT мог сгенерировать картинку (DALL·E) — переносим её к нам.
     const generatedImages = await extractAssistantImages();
 
@@ -734,13 +866,11 @@ async function createProxy({ debug, adoptedSession = null }) {
       const state = await detectPageState();
       if (state.challenge) {
         throw new Error(
-          "ChatGPT: Cloudflare challenge помешал получить ответ. Открой окно авторизации заново. authentication",
+          "ChatGPT: Cloudflare помешал получить ответ. 🧠 → Браузер → пройдите проверку → «Синхронизировать». authentication",
         );
       }
       throw new Error("ChatGPT: ответ получить не удалось (пустой текст). Повтори запрос.");
     }
-
-    if (onText && answer.text) onText(answer.text);
 
     // Только обновляем accessToken — не тащим весь cookie-jar после каждого сообщения.
     try {
@@ -793,19 +923,77 @@ async function createProxy({ debug, adoptedSession = null }) {
     }
     try {
       await getComposer();
+      await syncAuthFromBrowser();
       return true;
     } catch (firstError) {
       if (debug) console.log(`[chatgpt-proxy] ensureReady: composer missing (${firstError.message}); reloading once`);
       try { await gotoHome(); } catch {}
       await getComposer();
+      await syncAuthFromBrowser();
       return true;
     }
   }
+
+  function startAuthAutoSave() {
+    if (authWatchersAttached) return;
+    authWatchersAttached = true;
+
+    const tryPersist = async () => {
+      const beforeUsable = isChatGPTAuthUsable(authState.data);
+      const saved = await syncAuthFromBrowser();
+      if (saved && isChatGPTAuthUsable(saved) && !beforeUsable && debug) {
+        console.log("[chatgpt-proxy] session auto-saved after login");
+      }
+      return saved;
+    };
+
+    context.on("response", async (response) => {
+      try {
+        if (!response.url().includes("/api/auth/session") || response.status() !== 200) return;
+        await tryPersist();
+      } catch {}
+    });
+
+    page.on("load", () => {
+      setTimeout(() => { tryPersist().catch(() => {}); }, 1500);
+    });
+
+    const poll = async () => {
+      if (!context || page.isClosed()) return;
+      if (!isChatGPTAuthUsable(authState.data)) {
+        await tryPersist().catch(() => {});
+      }
+
+      let isChallenged = false;
+      try {
+        const state = await detectPageState();
+        if (state.challenge) {
+          isChallenged = true;
+          // В embed-режиме Cloudflare проходит пользователь кликом в панели — не автокликаем.
+          if (!embedUi) {
+            await trySolveTurnstileCheckbox(page, { debug });
+          }
+        }
+      } catch (err) {
+        if (debug) console.log("[chatgpt-proxy] Turnstile background poll check failed:", err.message);
+      }
+
+      const nextDelay = isChallenged ? 2000 : (isChatGPTAuthUsable(authState.data) ? 30_000 : 2500);
+      authPollTimer = setTimeout(poll, nextDelay);
+    };
+    poll();
+  }
+
+  startAuthAutoSave();
 
   return {
     sendChat,
     ensureReady,
     syncAuth: syncAuthFromBrowser,
+    getPageState: detectPageState,
     close,
+    getPage: () => page,
+    getContext: () => context,
+    navigateHome: gotoHome,
   };
 }

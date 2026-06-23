@@ -248,6 +248,20 @@ export const STYLES = `
       border-color: rgba(255, 119, 109, 0.2);
       background: rgba(255, 119, 109, 0.08);
     }
+    .msg.streaming .streamingText::after {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 1em;
+      margin-left: 3px;
+      vertical-align: -2px;
+      background: currentColor;
+      opacity: 0.65;
+      animation: streamingCaret 900ms steps(1) infinite;
+    }
+    @keyframes streamingCaret {
+      50% { opacity: 0; }
+    }
     .main {
       display: grid;
       grid-template-rows: auto minmax(120px, 1fr) 6px var(--composer-height, auto);
@@ -323,6 +337,37 @@ export const STYLES = `
       padding: 20px 10px;
     }
     .settingsOverlay.hidden { display: none; }
+    .confirmOverlay {
+      align-items: center;
+    }
+    .confirmPanel {
+      width: min(420px, 92vw);
+    }
+    .confirmBody {
+      padding: 18px 20px 20px;
+    }
+    .confirmBody p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .confirmTarget {
+      margin-bottom: 18px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .confirmActions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
     .settingsPanel {
       background: #14171e;
       color: var(--text);
@@ -657,6 +702,16 @@ export const STYLES = `
     }
     .primaryBtn:active {
       transform: translateY(0);
+    }
+    .dangerBtn {
+      border-color: rgba(255, 119, 109, 0.4);
+      background: rgba(255, 119, 109, 0.14);
+      color: var(--danger);
+      font-weight: 700;
+    }
+    .dangerBtn:hover {
+      border-color: var(--danger);
+      background: rgba(255, 119, 109, 0.22);
     }
     .formError {
       margin-top: 10px;

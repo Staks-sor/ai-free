@@ -168,13 +168,13 @@ export class QwenChatClient {
             output_schema: "phase",
             research_mode: "normal",
             auto_thinking: Boolean(thinking),
-            thinking_mode: thinking ? "Auto" : "Off",
-            thinking_format: "summary",
             auto_search: Boolean(search),
+            ...(thinking
+              ? { thinking_mode: "Auto", thinking_format: "summary" }
+              : {}),
           },
           extra: { meta: { subChatType: "t2t" } },
           sub_chat_type: "t2t",
-          parent_id: parentId,
         },
       ],
       timestamp,

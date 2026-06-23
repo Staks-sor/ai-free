@@ -13,7 +13,7 @@ import { getProviderIds } from "../providers/model-catalog.mjs";
 export const COMMAND_CATALOG = {
   node:    { description: "Запуск JS-файлов через Node",                       risk: "low",    enabledByDefault: true },
   npm:     { description: "npm install/ci/run/test и скрипты (publish/login заблокированы)", risk: "low",    enabledByDefault: true },
-  python3: { description: "Запуск Python-файлов",                              risk: "low",    enabledByDefault: true },
+  python3: { description: "Python на macOS, Linux, Windows и из .venv проекта", risk: "low", enabledByDefault: true },
   python:  { description: "Алиас для python3",                                 risk: "low",    enabledByDefault: true },
   ls:      { description: "Листинг файлов и папок",                            risk: "low",    enabledByDefault: true },
   cat:     { description: "Печать содержимого файла",                          risk: "low",    enabledByDefault: true },

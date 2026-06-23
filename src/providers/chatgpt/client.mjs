@@ -5,12 +5,13 @@
 import { getChatGPTBrowserProxy, resetChatGPTBrowserProxy } from "./browser-proxy.mjs";
 
 export class ChatGPTChatClient {
-  constructor({ accessToken, cookies, cookieHeader, userAgent, debug = false }) {
+  constructor({ accessToken, cookies, cookieHeader, userAgent, debug = false, proxyFactory = getChatGPTBrowserProxy }) {
     this.accessToken = accessToken;
     this.cookies = cookies || [];
     this.cookieHeader = cookieHeader || "";
     this.userAgent = userAgent || "";
     this.debug = debug;
+    this.proxyFactory = proxyFactory;
   }
 
   setAuth({ accessToken, cookies, cookieHeader }) {
@@ -23,18 +24,14 @@ export class ChatGPTChatClient {
   // а цепочка контекста ведётся самим ChatGPT через conversationId.
   // images: [{ name, mimeType, dataBase64 }] — прикрепляются в веб-композер ChatGPT.
   async complete({ prompt, onText = null, conversationId = null, images = [] }) {
-    if (!this.accessToken) {
-      throw new Error("ChatGPT access token is missing. Войди в ChatGPT заново через кнопку авторизации.");
-    }
-
     try {
-      const proxy = await getChatGPTBrowserProxy({ debug: this.debug });
+      const proxy = await this.proxyFactory({ debug: this.debug });
       return await proxy.sendChat({ prompt, conversationId, onText, images });
     } catch (error) {
       if (!isChatGPTTransportError(error)) throw error;
       if (this.debug) console.log(`[chatgpt-client] browser transport reset: ${error.message}`);
       resetChatGPTBrowserProxy();
-      const proxy = await getChatGPTBrowserProxy({ debug: this.debug });
+      const proxy = await this.proxyFactory({ debug: this.debug });
       return proxy.sendChat({ prompt, conversationId, onText, images });
     }
   }

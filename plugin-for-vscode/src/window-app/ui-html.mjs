@@ -102,6 +102,22 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           </form>
         </div>
       </div>
+      <div id="deleteChatOverlay" class="settingsOverlay confirmOverlay hidden" aria-hidden="true">
+        <div class="settingsPanel confirmPanel" role="dialog" aria-modal="true" aria-labelledby="deleteChatTitle">
+          <div class="settingsHead">
+            <h2 id="deleteChatTitle">${t("chat.delete")}</h2>
+            <button id="deleteChatClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
+          </div>
+          <div class="confirmBody">
+            <p>${t("chat.deleteConfirm")}</p>
+            <div id="deleteChatName" class="confirmTarget"></div>
+            <div class="confirmActions">
+              <button id="deleteChatCancel" class="iconBtn" type="button">${t("newChat.cancel")}</button>
+              <button id="deleteChatConfirm" class="iconBtn dangerBtn" type="button">${t("chat.delete")}</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div id="chatList" class="chatList"></div>
     </aside>
       <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
@@ -205,11 +221,21 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     let appState = { conversations: [], activeConversationId: null, workspaceRoot: "" };
     let activeConversation = null;
     let sending = false;
+    const typewriterTimers = new Set();
+    const progressiveTextState = new Map();
 
     const chatList = document.getElementById("chatList");
+    const deleteChatOverlay = document.getElementById("deleteChatOverlay");
+    const deleteChatName = document.getElementById("deleteChatName");
+    const deleteChatConfirm = document.getElementById("deleteChatConfirm");
+    const deleteChatCancel = document.getElementById("deleteChatCancel");
+    const deleteChatClose = document.getElementById("deleteChatClose");
+    let deleteChatResolver = null;
     const appShell = document.querySelector(".app");
     const sidebarResizer = document.getElementById("sidebarResizer");
     const messages = document.getElementById("messages");
+    let chatAutoFollow = true;
+    let renderedConversationId = null;
     const activeTitle = document.getElementById("activeTitle");
     const workspace = document.getElementById("workspace");
     const statusEl = document.getElementById("status");
@@ -228,6 +254,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       { id: "contrast", label: t("theme.contrast"), icon: "◑" },
     ];
 
+    function isMessagesNearBottom() {
+      return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 80;
+    }
+
+    function scrollMessagesToBottomIfFollowing() {
+      if (!chatAutoFollow) return;
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    messages.addEventListener("scroll", () => {
+      chatAutoFollow = isMessagesNearBottom();
+    }, { passive: true });
+
     setupTheme();
     applySavedSidebarWidth();
     setupSidebarResize();
@@ -235,6 +274,38 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     setupComposerResize();
 
     document.getElementById("refreshBtn").addEventListener("click", loadState);
+
+    function closeDeleteChatModal(confirmed = false) {
+      deleteChatOverlay.classList.add("hidden");
+      deleteChatOverlay.setAttribute("aria-hidden", "true");
+      const resolve = deleteChatResolver;
+      deleteChatResolver = null;
+      resolve?.(confirmed);
+    }
+
+    function confirmChatDeletion(conversation) {
+      if (deleteChatResolver) closeDeleteChatModal(false);
+      deleteChatName.textContent = conversation.title;
+      deleteChatOverlay.classList.remove("hidden");
+      deleteChatOverlay.setAttribute("aria-hidden", "false");
+      deleteChatConfirm.focus();
+      return new Promise((resolve) => {
+        deleteChatResolver = resolve;
+      });
+    }
+
+    deleteChatConfirm.addEventListener("click", () => closeDeleteChatModal(true));
+    deleteChatCancel.addEventListener("click", () => closeDeleteChatModal(false));
+    deleteChatClose.addEventListener("click", () => closeDeleteChatModal(false));
+    deleteChatOverlay.addEventListener("click", (event) => {
+      if (event.target === deleteChatOverlay) closeDeleteChatModal(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !deleteChatOverlay.classList.contains("hidden")) {
+        closeDeleteChatModal(false);
+      }
+    });
+
     // ---- New chat modal ----
     const newChatOverlay = document.getElementById("newChatOverlay");
     const openNewChatBtn = document.getElementById("openNewChat");
@@ -693,53 +764,63 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       });
     }
 
-    fileInput.addEventListener("change", async (event) => {
-      for (const file of event.target.files) {
-        const ext = (file.name.split(".").pop() || "").toLowerCase();
+    function clipboardImageName(file, index) {
+      if (file.name && file.name.trim()) return file.name;
+      const subtype = String(file.type || "image/png").split("/")[1]?.split("+")[0] || "png";
+      const ext = subtype === "jpeg" ? "jpg" : subtype;
+      return "clipboard-image-" + Date.now() + (index ? "-" + (index + 1) : "") + "." + ext;
+    }
+
+    async function addAttachmentFiles(files, { fromClipboard = false } = {}) {
+      let added = 0;
+      for (const [index, file] of Array.from(files || []).entries()) {
+        const fileName = fromClipboard ? clipboardImageName(file, index) : file.name;
+        const ext = (fileName.split(".").pop() || "").toLowerCase();
         const visionImageExts = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
         const isImage = (file.type.startsWith("image/") && file.type !== "image/svg+xml")
           || visionImageExts.includes(ext);
 
         if (file.type === "image/svg+xml" || ext === "svg") {
-          alert(t("file.svgUnsupported", { name: file.name }));
+          alert(t("file.svgUnsupported", { name: fileName }));
           continue;
         }
 
         if (isImage) {
           // Картинки — заливаем на DeepSeek. Рекомендуем ≤4 МБ (большие PNG часто дают CONTENT_EMPTY).
           if (file.size > 10 * 1024 * 1024) {
-            alert(t("file.imageTooLarge", { name: file.name, mb: Math.round(file.size/1024/1024) }));
+            alert(t("file.imageTooLarge", { name: fileName, mb: Math.round(file.size/1024/1024) }));
             continue;
           }
           if (file.size > 4 * 1024 * 1024) {
             const ok = confirm(
-              t("file.largeImageConfirm", { name: file.name, mb: Math.round(file.size / 1024 / 1024) }),
+              t("file.largeImageConfirm", { name: fileName, mb: Math.round(file.size / 1024 / 1024) }),
             );
             if (!ok) continue;
           }
           try {
             const dataBase64 = await fileToBase64(file);
             attachments.push({
-              name: file.name,
+              name: fileName,
               size: file.size,
               kind: "image",
               mimeType: file.type || "image/png",
               dataBase64,
             });
+            added += 1;
           } catch (err) {
-            alert(t("file.readFailed", { name: file.name, message: err.message }));
+            alert(t("file.readFailed", { name: fileName, message: err.message }));
           }
           continue;
         }
 
         if (BINARY_EXTENSIONS.has(ext)) {
-          alert(t("file.binaryUnsupported", { name: file.name, ext }));
+          alert(t("file.binaryUnsupported", { name: fileName, ext }));
           continue;
         }
 
         // Текстовый файл — читаем как UTF-8 и инлайним в промпт.
         if (file.size > MAX_FILE_BYTES) {
-          alert(t("file.textTooLarge", { name: file.name, kb: Math.round(file.size/1024), limitKb: MAX_FILE_BYTES/1024 }));
+          alert(t("file.textTooLarge", { name: fileName, kb: Math.round(file.size/1024), limitKb: MAX_FILE_BYTES/1024 }));
           continue;
         }
         try {
@@ -752,16 +833,33 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             if (code < 32 && code !== 9 && code !== 10 && code !== 13) nonPrintable += 1;
           }
           if (sample.length > 0 && nonPrintable / sample.length > 0.1) {
-            alert(t("file.looksBinary", { name: file.name }));
+            alert(t("file.looksBinary", { name: fileName }));
             continue;
           }
-          attachments.push({ name: file.name, size: file.size, kind: "text", content });
+          attachments.push({ name: fileName, size: file.size, kind: "text", content });
+          added += 1;
         } catch (err) {
-          alert(t("file.readFailed", { name: file.name, message: err.message }));
+          alert(t("file.readFailed", { name: fileName, message: err.message }));
         }
       }
+      if (added) renderAttachments();
+      return added;
+    }
+
+    fileInput.addEventListener("change", async (event) => {
+      await addAttachmentFiles(event.target.files);
       fileInput.value = "";
-      renderAttachments();
+    });
+
+    messageInput.addEventListener("paste", async (event) => {
+      const items = Array.from(event.clipboardData?.items || []);
+      const imageFiles = items
+        .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      if (!imageFiles.length) return;
+      event.preventDefault();
+      await addAttachmentFiles(imageFiles, { fromClipboard: true });
     });
 
     function renderAttachments() {
@@ -1221,7 +1319,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         try {
           const data = await api("/api/conversations/" + activeConversation.id);
           activeConversation = data.conversation;
-          renderConversation(activeConversation);
+          renderConversation(activeConversation, { animateLastAssistant: true });
           setStatus("");
         } catch {}
       }
@@ -1233,12 +1331,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       chatList.innerHTML = "";
       const running = new Set(appState.runningTaskIds || []);
       for (const conversation of appState.conversations) {
-        const button = document.createElement("button");
+        const button = document.createElement("div");
         const isRunning = running.has(conversation.id);
         button.className =
           "chatItem"
           + (conversation.id === appState.activeConversationId ? " active" : "")
           + (isRunning ? " running" : "");
+        button.tabIndex = 0;
+        button.setAttribute("role", "button");
+        button.setAttribute("aria-label", conversation.title);
         button.innerHTML =
           '<div class="chatTitle"></div><div class="chatFolder"></div><div class="chatMeta"></div><button class="chatDelete" type="button" title="' + t("chat.delete") + '">×</button>';
         // Заголовок + спиннер (если задача в работе) + бейдж провайдера.
@@ -1273,20 +1374,30 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         button.querySelector(".chatDelete").addEventListener("click", async (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!confirm(t("chat.deleteConfirm"))) return;
-          await api("/api/conversations/" + conversation.id, { method: "DELETE" });
-          if (activeConversation && activeConversation.id === conversation.id) {
-            activeConversation = null;
+          if (!await confirmChatDeletion(conversation)) return;
+          try {
+            await api("/api/conversations/" + conversation.id, { method: "DELETE" });
+            if (activeConversation && activeConversation.id === conversation.id) {
+              activeConversation = null;
+            }
+            await loadState();
+            if (!appState.activeConversationId) renderNoConversation();
+          } catch (error) {
+            setStatus(t("app.error", { message: error.message }));
           }
-          await loadState();
-          if (!appState.activeConversationId) renderNoConversation();
         });
-        button.addEventListener("click", async () => {
+        const openConversation = async () => {
           const data = await api("/api/conversations/" + conversation.id);
           appState.activeConversationId = conversation.id;
           activeConversation = data.conversation;
           renderList();
           renderConversation(activeConversation);
+        };
+        button.addEventListener("click", openConversation);
+        button.addEventListener("keydown", async (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          await openConversation();
         });
         chatList.appendChild(button);
       }
@@ -1358,7 +1469,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       pipelinePanel.setAttribute("aria-hidden", "true");
     });
 
-    function renderConversation(conversation) {
+    function renderConversation(conversation, options = {}) {
+      stopTypewriters();
+      const conversationChanged = renderedConversationId !== conversation.id;
+      const previousScrollTop = messages.scrollTop;
+      const shouldFollow = conversationChanged || options.forceScrollBottom === true || chatAutoFollow;
+      renderedConversationId = conversation.id;
+      chatAutoFollow = shouldFollow;
       activeTitle.textContent = conversation.title;
       workspace.textContent = conversation.workspace || appState.workspaceRoot;
       if (appState.stateFile) workspace.title = t("chat.history", { file: appState.stateFile });
@@ -1455,9 +1572,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         return;
       }
 
-      for (const message of conversation.messages) {
+      const animateIndex = options.animateLastAssistant === true
+        ? findLastTextAssistantIndex(conversation.messages)
+        : -1;
+
+      for (const [index, message] of conversation.messages.entries()) {
         const row = document.createElement("article");
-        row.className = "msg " + message.role;
+        row.className = "msg " + message.role + (message.streaming ? " streaming" : "");
         const role = document.createElement("div");
         role.className = "role";
         // Подпись assistant'а — провайдер-специфичная.
@@ -1467,13 +1588,81 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         role.textContent = message.role === "user" ? t("chat.you") : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
-        bubble.textContent = message.content;
+        const textEl = document.createElement("div");
+        const progressiveKey = [
+          conversation.id,
+          message.createdAt || index,
+        ].join(":");
+        if (message.streaming) {
+          textEl.className = "streamingText";
+          typeProgressiveText(textEl, message.content || "…", progressiveKey);
+        } else if (index === animateIndex) {
+          progressiveTextState.delete(progressiveKey);
+          typeText(textEl, message.content);
+        } else {
+          textEl.textContent = message.content;
+        }
+        bubble.appendChild(textEl);
         row.append(role, bubble);
         messages.appendChild(row);
       }
       renderInstallRequest(conversation);
       renderQuestionRequest(conversation);
-      messages.scrollTop = messages.scrollHeight;
+      if (shouldFollow) {
+        scrollMessagesToBottomIfFollowing();
+      } else {
+        messages.scrollTop = previousScrollTop;
+      }
+    }
+
+    function findLastTextAssistantIndex(items) {
+      if (!Array.isArray(items)) return -1;
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        if (items[i]?.role === "assistant" && String(items[i]?.content || "").trim()) return i;
+      }
+      return -1;
+    }
+
+    function stopTypewriters() {
+      for (const timer of typewriterTimers) clearTimeout(timer);
+      typewriterTimers.clear();
+    }
+
+    function runTypewriter(target, full, startOffset, onVisible) {
+      let offset = startOffset;
+      const chunkSize = full.length > 5000 ? 32 : full.length > 1800 ? 18 : 8;
+      const delayMs = full.length > 5000 ? 4 : 9;
+      const tick = () => {
+        offset = Math.min(full.length, offset + chunkSize);
+        const visible = full.slice(0, offset);
+        onVisible?.(visible);
+        target.textContent = visible;
+        scrollMessagesToBottomIfFollowing();
+        if (offset >= full.length) return;
+        const timer = setTimeout(() => {
+          typewriterTimers.delete(timer);
+          tick();
+        }, delayMs);
+        typewriterTimers.add(timer);
+      };
+      tick();
+    }
+
+    function typeText(target, text) {
+      const full = String(text || "");
+      if (!full) return;
+      runTypewriter(target, full, 0);
+    }
+
+    function typeProgressiveText(target, text, key) {
+      const full = String(text || "");
+      if (!full) return;
+      const previous = String(progressiveTextState.get(key) || "");
+      let commonLength = 0;
+      const maxCommon = Math.min(previous.length, full.length);
+      while (commonLength < maxCommon && previous[commonLength] === full[commonLength]) commonLength += 1;
+      target.textContent = full.slice(0, commonLength);
+      runTypewriter(target, full, commonLength, (visible) => progressiveTextState.set(key, visible));
     }
 
     async function updatePipelineEdges(edges) {

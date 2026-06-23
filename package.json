@@ -1,15 +1,16 @@
 {
   "name": "ai-free",
-  "version": "0.2.20",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "bin": {
     "ai-free": "./bin/deepseek.mjs",
     "deepseek": "./bin/deepseek.mjs",
-    "deepseek-cookie-cli": "./bin/deepseek.mjs"
+    "deepseek-cookie-cli": "./bin/deepseek.mjs",
+    "ai-free-browser-mcp": "./bin/ai-free-browser-mcp.mjs"
   },
   "scripts": {
-    "postinstall": "playwright install chromium",
+    "postinstall": "patchright install chromium && playwright install chromium",
     "start": "node ./bin/deepseek.mjs --window",
     "window": "node ./bin/deepseek.mjs --window",
     "server": "node ./bin/deepseek.mjs --no-window",

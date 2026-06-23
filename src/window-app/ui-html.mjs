@@ -24,6 +24,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 <body>
   <div class="app">
     <aside class="sidebar">
+      <nav class="sidebarMenu" aria-label="${t("sidebar.menu")}">
+        <button type="button" id="sidebarMenuPlugins" class="sidebarMenuBtn">${t("sidebar.plugins")}</button>
+        <button type="button" id="sidebarMenuTelegram" class="sidebarMenuBtn">${t("sidebar.telegram")}</button>
+      </nav>
       <div class="sideHead">
         <div class="brand">${t("app.workspace")}</div>
         <button id="refreshBtn" class="iconBtn" title="${t("app.refresh")}">↻</button>
@@ -102,6 +106,22 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           </form>
         </div>
       </div>
+      <div id="deleteChatOverlay" class="settingsOverlay confirmOverlay hidden" aria-hidden="true">
+        <div class="settingsPanel confirmPanel" role="dialog" aria-modal="true" aria-labelledby="deleteChatTitle">
+          <div class="settingsHead">
+            <h2 id="deleteChatTitle">${t("chat.delete")}</h2>
+            <button id="deleteChatClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
+          </div>
+          <div class="confirmBody">
+            <p>${t("chat.deleteConfirm")}</p>
+            <div id="deleteChatName" class="confirmTarget"></div>
+            <div class="confirmActions">
+              <button id="deleteChatCancel" class="iconBtn" type="button">${t("newChat.cancel")}</button>
+              <button id="deleteChatConfirm" class="iconBtn dangerBtn" type="button">${t("chat.delete")}</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div id="chatList" class="chatList"></div>
     </aside>
       <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
@@ -115,9 +135,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           <span id="activeMode" class="modeBadge hidden"></span>
           <select id="modelPicker" class="modelPicker hidden" title="${t("topbar.model")}"></select>
           <select id="rolePicker" class="rolePicker hidden" title="${t("topbar.role")}"></select>
-          <button id="coderToggle" class="coderToggle hidden" type="button" title="${t("topbar.coderTitle")}">🛠 Coder</button>
-          <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="${t("topbar.hardwareTitle")}">ESP</button>
-          <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">${t("topbar.pipeline")}</button>
+          <button id="agentDrawerBtn" class="iconBtn agentDrawerBtn" type="button" title="${t("agentDrawer.title")}">🧠</button>
           <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="${t("topbar.flowTitle")}">${t("topbar.flow")}</button>
         </div>
         <div class="topbarActions">
@@ -153,6 +171,48 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         </div>
         <div id="pipelineBody" class="pipelineBody"></div>
       </div>
+      <div id="agentDrawerBackdrop" class="agentDrawerBackdrop" aria-hidden="true"></div>
+      <aside id="agentDrawer" class="agentDrawer" aria-hidden="true">
+        <div id="agentDrawerResize" class="agentDrawerResize" role="separator" aria-orientation="vertical" aria-label="Изменить ширину панели" title="Потяните, чтобы изменить ширину"></div>
+        <div class="agentDrawerHead">
+          <div>
+            <div class="agentDrawerTitle">${t("agentDrawer.title")}</div>
+            <div class="agentDrawerSub">${t("agentDrawer.sub")}</div>
+          </div>
+          <button id="agentDrawerClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
+        </div>
+        <div class="agentDrawerTabs">
+          <button type="button" class="agentDrawerTab active" data-tab="controls">${t("agentDrawer.tabAgent")}</button>
+          <button type="button" class="agentDrawerTab" data-tab="browser">${t("agentDrawer.tabBrowser")}</button>
+        </div>
+        <div class="agentDrawerBody">
+          <div class="agentDrawerPanel active" data-panel="controls">
+            <div id="agentDrawerControls" class="agentDrawerControls">
+              <div class="agentDrawerSection">
+                <h4>${t("agentDrawer.modes")}</h4>
+                <div class="agentDrawerRow">
+                  <button id="coderToggle" class="coderToggle hidden" type="button" title="${t("topbar.coderTitle")}">🛠 Coder</button>
+                  <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="${t("topbar.hardwareTitle")}">ESP</button>
+                  <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">${t("topbar.pipeline")}</button>
+                </div>
+              </div>
+              <div class="agentDrawerSection">
+                <h4>${t("agentDrawer.memorySkills")}</h4>
+                <div class="agentDrawerRow">
+                  <button id="memoryToggle" class="coderToggle memoryToggle hidden" type="button" title="${t("topbar.memoryTitle")}">${t("topbar.memory")}</button>
+                  <button id="autoSkillToggle" class="coderToggle autoSkillToggle hidden" type="button" title="${t("topbar.autoSkillTitle")}">${t("topbar.autoSkill")}</button>
+                </div>
+                <select id="skillPicker" class="skillPicker hidden" title="${t("topbar.skillTitle")}"></select>
+                <div id="agentDrawerMemoryList" class="agentMiniList"></div>
+              </div>
+              <div class="agentDrawerHint">${t("agentDrawer.hint")}</div>
+            </div>
+          </div>
+          <div class="agentDrawerPanel" data-panel="browser">
+            <iframe id="agentBrowserFrame" class="agentBrowserFrame" tabindex="-1" title="${t("agentDrawer.tabBrowser")}"></iframe>
+          </div>
+        </div>
+      </aside>
       <section id="messages" class="messages">
         <div class="empty">${t("app.createChatHint")}</div>
       </section>
@@ -219,11 +279,20 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     let activeConversation = null;
     let sending = false;
     const typewriterTimers = new Set();
+    const progressiveTextState = new Map();
 
     const chatList = document.getElementById("chatList");
+    const deleteChatOverlay = document.getElementById("deleteChatOverlay");
+    const deleteChatName = document.getElementById("deleteChatName");
+    const deleteChatConfirm = document.getElementById("deleteChatConfirm");
+    const deleteChatCancel = document.getElementById("deleteChatCancel");
+    const deleteChatClose = document.getElementById("deleteChatClose");
+    let deleteChatResolver = null;
     const appShell = document.querySelector(".app");
     const sidebarResizer = document.getElementById("sidebarResizer");
     const messages = document.getElementById("messages");
+    let chatAutoFollow = true;
+    let renderedConversationId = null;
     const activeTitle = document.getElementById("activeTitle");
     const workspace = document.getElementById("workspace");
     const statusEl = document.getElementById("status");
@@ -244,6 +313,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       { id: "contrast", label: t("theme.contrast"), icon: "◑" },
     ];
 
+    function isMessagesNearBottom() {
+      return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 80;
+    }
+
+    function scrollMessagesToBottomIfFollowing() {
+      if (!chatAutoFollow) return;
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    messages.addEventListener("scroll", () => {
+      chatAutoFollow = isMessagesNearBottom();
+    }, { passive: true });
+
     setupTheme();
     applySavedSidebarWidth();
     setupSidebarResize();
@@ -251,6 +333,38 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     setupComposerResize();
 
     document.getElementById("refreshBtn").addEventListener("click", loadState);
+
+    function closeDeleteChatModal(confirmed = false) {
+      deleteChatOverlay.classList.add("hidden");
+      deleteChatOverlay.setAttribute("aria-hidden", "true");
+      const resolve = deleteChatResolver;
+      deleteChatResolver = null;
+      resolve?.(confirmed);
+    }
+
+    function confirmChatDeletion(conversation) {
+      if (deleteChatResolver) closeDeleteChatModal(false);
+      deleteChatName.textContent = conversation.title;
+      deleteChatOverlay.classList.remove("hidden");
+      deleteChatOverlay.setAttribute("aria-hidden", "false");
+      deleteChatConfirm.focus();
+      return new Promise((resolve) => {
+        deleteChatResolver = resolve;
+      });
+    }
+
+    deleteChatConfirm.addEventListener("click", () => closeDeleteChatModal(true));
+    deleteChatCancel.addEventListener("click", () => closeDeleteChatModal(false));
+    deleteChatClose.addEventListener("click", () => closeDeleteChatModal(false));
+    deleteChatOverlay.addEventListener("click", (event) => {
+      if (event.target === deleteChatOverlay) closeDeleteChatModal(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !deleteChatOverlay.classList.contains("hidden")) {
+        closeDeleteChatModal(false);
+      }
+    });
+
     // ---- New chat modal ----
     const newChatOverlay = document.getElementById("newChatOverlay");
     const openNewChatBtn = document.getElementById("openNewChat");
@@ -718,53 +832,63 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       });
     }
 
-    fileInput.addEventListener("change", async (event) => {
-      for (const file of event.target.files) {
-        const ext = (file.name.split(".").pop() || "").toLowerCase();
+    function clipboardImageName(file, index) {
+      if (file.name && file.name.trim()) return file.name;
+      const subtype = String(file.type || "image/png").split("/")[1]?.split("+")[0] || "png";
+      const ext = subtype === "jpeg" ? "jpg" : subtype;
+      return "clipboard-image-" + Date.now() + (index ? "-" + (index + 1) : "") + "." + ext;
+    }
+
+    async function addAttachmentFiles(files, { fromClipboard = false } = {}) {
+      let added = 0;
+      for (const [index, file] of Array.from(files || []).entries()) {
+        const fileName = fromClipboard ? clipboardImageName(file, index) : file.name;
+        const ext = (fileName.split(".").pop() || "").toLowerCase();
         const visionImageExts = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
         const isImage = (file.type.startsWith("image/") && file.type !== "image/svg+xml")
           || visionImageExts.includes(ext);
 
         if (file.type === "image/svg+xml" || ext === "svg") {
-          alert(t("file.svgUnsupported", { name: file.name }));
+          alert(t("file.svgUnsupported", { name: fileName }));
           continue;
         }
 
         if (isImage) {
           // Картинки — заливаем на DeepSeek. Рекомендуем ≤4 МБ (большие PNG часто дают CONTENT_EMPTY).
           if (file.size > 10 * 1024 * 1024) {
-            alert(t("file.imageTooLarge", { name: file.name, mb: Math.round(file.size/1024/1024) }));
+            alert(t("file.imageTooLarge", { name: fileName, mb: Math.round(file.size/1024/1024) }));
             continue;
           }
           if (file.size > 4 * 1024 * 1024) {
             const ok = confirm(
-              t("file.largeImageConfirm", { name: file.name, mb: Math.round(file.size / 1024 / 1024) }),
+              t("file.largeImageConfirm", { name: fileName, mb: Math.round(file.size / 1024 / 1024) }),
             );
             if (!ok) continue;
           }
           try {
             const dataBase64 = await fileToBase64(file);
             attachments.push({
-              name: file.name,
+              name: fileName,
               size: file.size,
               kind: "image",
               mimeType: file.type || "image/png",
               dataBase64,
             });
+            added += 1;
           } catch (err) {
-            alert(t("file.readFailed", { name: file.name, message: err.message }));
+            alert(t("file.readFailed", { name: fileName, message: err.message }));
           }
           continue;
         }
 
         if (BINARY_EXTENSIONS.has(ext)) {
-          alert(t("file.binaryUnsupported", { name: file.name, ext }));
+          alert(t("file.binaryUnsupported", { name: fileName, ext }));
           continue;
         }
 
         // Текстовый файл — читаем как UTF-8 и инлайним в промпт.
         if (file.size > MAX_FILE_BYTES) {
-          alert(t("file.textTooLarge", { name: file.name, kb: Math.round(file.size/1024), limitKb: MAX_FILE_BYTES/1024 }));
+          alert(t("file.textTooLarge", { name: fileName, kb: Math.round(file.size/1024), limitKb: MAX_FILE_BYTES/1024 }));
           continue;
         }
         try {
@@ -777,16 +901,33 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             if (code < 32 && code !== 9 && code !== 10 && code !== 13) nonPrintable += 1;
           }
           if (sample.length > 0 && nonPrintable / sample.length > 0.1) {
-            alert(t("file.looksBinary", { name: file.name }));
+            alert(t("file.looksBinary", { name: fileName }));
             continue;
           }
-          attachments.push({ name: file.name, size: file.size, kind: "text", content });
+          attachments.push({ name: fileName, size: file.size, kind: "text", content });
+          added += 1;
         } catch (err) {
-          alert(t("file.readFailed", { name: file.name, message: err.message }));
+          alert(t("file.readFailed", { name: fileName, message: err.message }));
         }
       }
+      if (added) renderAttachments();
+      return added;
+    }
+
+    fileInput.addEventListener("change", async (event) => {
+      await addAttachmentFiles(event.target.files);
       fileInput.value = "";
-      renderAttachments();
+    });
+
+    messageInput.addEventListener("paste", async (event) => {
+      const items = Array.from(event.clipboardData?.items || []);
+      const imageFiles = items
+        .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      if (!imageFiles.length) return;
+      event.preventDefault();
+      await addAttachmentFiles(imageFiles, { fromClipboard: true });
     });
 
     function renderAttachments() {
@@ -908,13 +1049,33 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const info = PROVIDER_INFO[id];
       if (!info) return;
       const label = info.label;
+      const confirmKey = id === "chatgpt" ? "provider.chatgptConnectConfirm" : "provider.connectConfirm";
       if (!confirm(
-        t("provider.connectConfirm", { label }),
+        t(confirmKey, { label }),
       )) return;
       try {
         const r = await fetch("/api/providers/" + id + "/login", { method: "POST" });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+        if (j.embedLogin && id === "chatgpt") {
+          setAgentDrawerTab("browser");
+          openAgentDrawer();
+          alert(t("provider.chatgptEmbedLogin"));
+          for (let attempt = 0; attempt < 120; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            await refreshAvailableProviders();
+            if (availableProviders.includes(id)) {
+              newChatSelectedProvider = id;
+              localStorage.setItem(PROVIDER_PICK_KEY, id);
+              renderProviderPicker();
+              renderModePickerForProvider();
+              alert(t("provider.connectedAlert", { label }));
+              return;
+            }
+          }
+          alert(t("provider.chatgptEmbedLoginTimeout", { label }));
+          return;
+        }
         await refreshAvailableProviders();
         if (availableProviders.includes(id)) {
           newChatSelectedProvider = id;
@@ -1110,17 +1271,24 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           }
         }
 
-        setStatus(t("composer.thinkingStatus"));
+        setStatus(t("composer.writingStatus"));
         const sentConvId = activeConversation.id;
+        const messageBody = {
+          content: contentForApi,
+          thinking: thinkingActive,
+          search: sendProvider === "chatgpt" ? false : searchActive,
+          refFileIds,
+          images: inlineImages,
+        };
+
+        if (sendProvider === "qwen" || sendProvider === "chatgpt" || sendProvider === "deepseek") {
+          await postStreamingMessage(sentConvId, messageBody, sendProvider);
+          return;
+        }
+
         const data = await api("/api/conversations/" + sentConvId + "/messages", {
           method: "POST",
-          body: {
-            content: contentForApi,
-            thinking: thinkingActive,
-            search: searchActive,
-            refFileIds,
-            images: inlineImages,
-          },
+          body: messageBody,
         });
 
         // Если сервер вернул running:true — это /code в фоне. Отпускаем UI,
@@ -1132,6 +1300,16 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           setStatus(t("composer.backgroundTask"));
           ensurePolling();
           return; // sending снимет в finally, polling завершит UI
+        }
+
+        if (data.needsChatGPTLogin) {
+          activeConversation = data.conversation;
+          renderConversation(activeConversation);
+          setAgentDrawerTab("browser");
+          ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
+          notifyBrowserTab("chatgpt", { force: true });
+          setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
+          return;
         }
 
         activeConversation = data.conversation;
@@ -1198,6 +1376,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       if ((appState.runningTaskIds || []).length > 0) ensurePolling();
       if (activeConversation?.pendingInstallRequest?.status === "running") ensureInstallPolling();
       if (!pipelinePanel.classList.contains("hidden")) renderPipelinePanel();
+      if (agentBrowserFrame.dataset.loaded === "1") {
+        notifyBrowserWorkspace(activeConversation?.workspace || appState.workspaceRoot);
+      }
     }
 
     // Polling для отслеживания фоновых /code-задач. Один setInterval на всю сессию,
@@ -1234,6 +1415,17 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         if (status !== "running") stopInstallPolling();
       } catch {}
     }
+    function formatAgentMetaStatus(meta) {
+      if (!meta) return "";
+      const parts = [];
+      if (meta.memoryUsed > 0) parts.push(t("agent.memoryUsed", { count: meta.memoryUsed }));
+      if (meta.graphUsed > 0) parts.push(t("agent.graphUsed", { count: meta.graphUsed }));
+      if (meta.memoryPending) parts.push(t("agent.memoryPending"));
+      else if (meta.memorySaved > 0) parts.push(t("agent.memorySaved", { count: meta.memorySaved }));
+      if (meta.skillId) parts.push(t("agent.skillUsed", { skill: meta.skillId }));
+      return parts.join(" · ");
+    }
+
     async function pollTick() {
       let nextState;
       try {
@@ -1263,8 +1455,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         try {
           const data = await api("/api/conversations/" + activeConversation.id);
           activeConversation = data.conversation;
-          renderConversation(activeConversation);
-          setStatus("");
+          renderConversation(activeConversation, { animateLastAssistant: true });
+          setStatus(formatAgentMetaStatus(activeConversation.lastAgentMeta));
         } catch {}
       }
 
@@ -1275,14 +1467,17 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       chatList.innerHTML = "";
       const running = new Set(appState.runningTaskIds || []);
       for (const conversation of appState.conversations) {
-        const button = document.createElement("button");
+        const button = document.createElement("div");
         const isRunning = running.has(conversation.id);
         button.className =
           "chatItem"
           + (conversation.id === appState.activeConversationId ? " active" : "")
           + (isRunning ? " running" : "");
+        button.tabIndex = 0;
+        button.setAttribute("role", "button");
+        button.setAttribute("aria-label", conversation.title);
         button.innerHTML =
-          '<div class="chatTitle"></div><div class="chatFolder"></div><div class="chatMeta"></div><button class="chatDelete" type="button" title="' + t("chat.delete") + '">×</button>';
+          '<div class="chatTitle"></div><div class="chatSubline"><span class="chatFolder"></span><span class="chatMeta"></span></div><button class="chatDelete" type="button" title="' + t("chat.delete") + '">×</button>';
         // Заголовок + спиннер (если задача в работе) + бейдж провайдера.
         const titleEl = button.querySelector(".chatTitle");
         if (isRunning) {
@@ -1315,20 +1510,30 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         button.querySelector(".chatDelete").addEventListener("click", async (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!confirm(t("chat.deleteConfirm"))) return;
-          await api("/api/conversations/" + conversation.id, { method: "DELETE" });
-          if (activeConversation && activeConversation.id === conversation.id) {
-            activeConversation = null;
+          if (!await confirmChatDeletion(conversation)) return;
+          try {
+            await api("/api/conversations/" + conversation.id, { method: "DELETE" });
+            if (activeConversation && activeConversation.id === conversation.id) {
+              activeConversation = null;
+            }
+            await loadState();
+            if (!appState.activeConversationId) renderNoConversation();
+          } catch (error) {
+            setStatus(t("app.error", { message: error.message }));
           }
-          await loadState();
-          if (!appState.activeConversationId) renderNoConversation();
         });
-        button.addEventListener("click", async () => {
+        const openConversation = async () => {
           const data = await api("/api/conversations/" + conversation.id);
           appState.activeConversationId = conversation.id;
           activeConversation = data.conversation;
           renderList();
           renderConversation(activeConversation);
+        };
+        button.addEventListener("click", openConversation);
+        button.addEventListener("keydown", async (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          await openConversation();
         });
         chatList.appendChild(button);
       }
@@ -1340,6 +1545,38 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const coderToggleEl = document.getElementById("coderToggle");
     const hardwareToggleEl = document.getElementById("hardwareToggle");
     const pipelineToggleEl = document.getElementById("pipelineToggle");
+    const memoryToggleEl = document.getElementById("memoryToggle");
+    const autoSkillToggleEl = document.getElementById("autoSkillToggle");
+    const skillPickerEl = document.getElementById("skillPicker");
+    let installedSkills = [];
+
+    async function ensureInstalledSkills() {
+      if (installedSkills.length) return installedSkills;
+      try {
+        const data = await api("/api/skills");
+        installedSkills = Array.isArray(data.skills) ? data.skills : [];
+      } catch {
+        installedSkills = [];
+      }
+      return installedSkills;
+    }
+
+    function renderSkillPicker(conversation) {
+      const current = conversation.skillId || "";
+      skillPickerEl.innerHTML = "";
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = t("topbar.skillNone");
+      if (!current) none.selected = true;
+      skillPickerEl.appendChild(none);
+      for (const skill of installedSkills) {
+        const opt = document.createElement("option");
+        opt.value = skill.id;
+        opt.textContent = skill.name || skill.id;
+        if (skill.id === current) opt.selected = true;
+        skillPickerEl.appendChild(opt);
+      }
+    }
 
     function renderNoConversation() {
       activeTitle.textContent = t("app.noChat");
@@ -1350,6 +1587,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       coderToggleEl.classList.add("hidden");
       hardwareToggleEl.classList.add("hidden");
       pipelineToggleEl.classList.add("hidden");
+      memoryToggleEl.classList.add("hidden");
+      autoSkillToggleEl.classList.add("hidden");
+      skillPickerEl.classList.add("hidden");
+      if (agentDrawerControls) agentDrawerControls.classList.add("disabled");
+      if (agentDrawerMemoryList) agentDrawerMemoryList.innerHTML = "";
       messages.innerHTML = '<div class="empty">' + t("app.createChatHint") + '</div>';
       setComposerEnabled(false);
     }
@@ -1390,6 +1632,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const next = !(activeConversation && activeConversation.pipelineMode === true);
       patchActiveConversation({ pipelineMode: next }).catch((e) => setStatus(e.message, true));
     });
+    memoryToggleEl.addEventListener("click", () => {
+      const next = !(activeConversation && activeConversation.memoryEnabled !== false);
+      patchActiveConversation({ memoryEnabled: next }).catch((e) => setStatus(e.message, true));
+      if (activeConversation) setTimeout(() => refreshAgentDrawerMemory(activeConversation), 300);
+    });
+    autoSkillToggleEl.addEventListener("click", () => {
+      const next = !(activeConversation && activeConversation.autoSkill !== false);
+      patchActiveConversation({ autoSkill: next }).catch((e) => setStatus(e.message, true));
+    });
+    skillPickerEl.addEventListener("change", () => {
+      const skillId = skillPickerEl.value || null;
+      patchActiveConversation({ skillId }).catch((e) => setStatus(e.message, true));
+    });
     pipelinePanelBtn.addEventListener("click", () => {
       pipelinePanel.classList.remove("hidden");
       pipelinePanel.setAttribute("aria-hidden", "false");
@@ -1400,8 +1655,241 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       pipelinePanel.setAttribute("aria-hidden", "true");
     });
 
+    const AGENT_DRAWER_KEY = "deepseek.agentDrawerOpen";
+    const AGENT_DRAWER_WIDTH_BROWSER_KEY = "deepseek.agentDrawerWidth.browser";
+    const AGENT_DRAWER_WIDTH_CONTROLS_KEY = "deepseek.agentDrawerWidth.controls";
+    const agentDrawerBtn = document.getElementById("agentDrawerBtn");
+    const agentDrawer = document.getElementById("agentDrawer");
+    const agentDrawerBackdrop = document.getElementById("agentDrawerBackdrop");
+    const agentDrawerClose = document.getElementById("agentDrawerClose");
+    const agentDrawerResize = document.getElementById("agentDrawerResize");
+    const agentDrawerControls = document.getElementById("agentDrawerControls");
+    const agentDrawerMemoryList = document.getElementById("agentDrawerMemoryList");
+    const agentBrowserFrame = document.getElementById("agentBrowserFrame");
+    const agentDrawerTabs = agentDrawer.querySelectorAll(".agentDrawerTab");
+    const agentDrawerPanels = agentDrawer.querySelectorAll(".agentDrawerPanel");
+
+    function syncAgentBrowserDrawerLayout() {
+      const browserTab = agentDrawer.querySelector('[data-panel="browser"]')?.classList.contains("active");
+      const open = agentDrawer.classList.contains("open");
+      document.body.classList.toggle("agentBrowserDrawerOpen", open && browserTab);
+      if (open) applyAgentDrawerWidth(isAgentDrawerBrowserMode());
+      if (agentDrawerResize) agentDrawerResize.classList.toggle("visible", open);
+    }
+
+    function isAgentDrawerBrowserMode() {
+      return agentDrawer.classList.contains("browserOpen");
+    }
+
+    function defaultAgentDrawerWidth(browserMode) {
+      return browserMode ? 640 : 480;
+    }
+
+    function clampAgentDrawerWidth(px, browserMode) {
+      const min = browserMode ? 380 : 300;
+      const max = Math.min(window.innerWidth * 0.92, browserMode ? 1280 : 760);
+      return Math.max(min, Math.min(max, Math.round(px)));
+    }
+
+    function applyAgentDrawerWidth(browserMode) {
+      const key = browserMode ? AGENT_DRAWER_WIDTH_BROWSER_KEY : AGENT_DRAWER_WIDTH_CONTROLS_KEY;
+      const saved = Number(localStorage.getItem(key));
+      const width = clampAgentDrawerWidth(
+        Number.isFinite(saved) && saved > 0 ? saved : defaultAgentDrawerWidth(browserMode),
+        browserMode,
+      );
+      document.documentElement.style.setProperty("--agent-drawer-width", width + "px");
+      return width;
+    }
+
+    let agentDrawerResizeDrag = null;
+    function notifyAgentBrowserViewportSync() {
+      try {
+        agentBrowserFrame.contentWindow?.postMessage({ type: "syncLiveViewport" }, "*");
+      } catch {}
+    }
+    if (agentDrawerResize) {
+      agentDrawerResize.addEventListener("pointerdown", (event) => {
+        if (!agentDrawer.classList.contains("open")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const browserMode = isAgentDrawerBrowserMode();
+        const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--agent-drawer-width"), 10)
+          || defaultAgentDrawerWidth(browserMode);
+        agentDrawerResizeDrag = {
+          startX: event.clientX,
+          startW: current,
+          browserMode,
+        };
+        agentDrawerResize.classList.add("dragging");
+        document.body.classList.add("agentDrawerResizing");
+        agentDrawerResize.setPointerCapture(event.pointerId);
+      });
+      agentDrawerResize.addEventListener("pointermove", (event) => {
+        if (!agentDrawerResizeDrag) return;
+        const delta = agentDrawerResizeDrag.startX - event.clientX;
+        const width = clampAgentDrawerWidth(
+          agentDrawerResizeDrag.startW + delta,
+          agentDrawerResizeDrag.browserMode,
+        );
+        document.documentElement.style.setProperty("--agent-drawer-width", width + "px");
+      });
+      const finishDrawerResize = (event) => {
+        if (!agentDrawerResizeDrag) return;
+        const key = agentDrawerResizeDrag.browserMode
+          ? AGENT_DRAWER_WIDTH_BROWSER_KEY
+          : AGENT_DRAWER_WIDTH_CONTROLS_KEY;
+        const width = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--agent-drawer-width"), 10);
+        if (Number.isFinite(width) && width > 0) localStorage.setItem(key, String(width));
+        agentDrawerResizeDrag = null;
+        agentDrawerResize?.classList.remove("dragging");
+        document.body.classList.remove("agentDrawerResizing");
+        try { agentDrawerResize.releasePointerCapture(event.pointerId); } catch {}
+        notifyAgentBrowserViewportSync();
+      };
+      agentDrawerResize.addEventListener("pointerup", finishDrawerResize);
+      agentDrawerResize.addEventListener("pointercancel", finishDrawerResize);
+    }
+    window.addEventListener("resize", () => {
+      if (!agentDrawer.classList.contains("open")) return;
+      applyAgentDrawerWidth(isAgentDrawerBrowserMode());
+      notifyAgentBrowserViewportSync();
+    });
+
+    function setAgentDrawerTab(tabId) {
+      for (const tab of agentDrawerTabs) {
+        tab.classList.toggle("active", tab.dataset.tab === tabId);
+      }
+      for (const panel of agentDrawerPanels) {
+        panel.classList.toggle("active", panel.dataset.panel === tabId);
+      }
+      agentDrawer.classList.toggle("browserOpen", tabId === "browser");
+      syncAgentBrowserDrawerLayout();
+      if (tabId === "browser") {
+        ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
+      }
+    }
+
+    function openAgentDrawer() {
+      agentDrawer.classList.add("open");
+      agentDrawer.setAttribute("aria-hidden", "false");
+      agentDrawerBackdrop.classList.add("open");
+      agentDrawerBackdrop.setAttribute("aria-hidden", "false");
+      agentDrawerBtn.classList.add("active");
+      localStorage.setItem(AGENT_DRAWER_KEY, "1");
+      syncAgentBrowserDrawerLayout();
+      if (activeConversation) {
+        refreshAgentDrawerMemory(activeConversation);
+        const activeTab = agentDrawer.querySelector(".agentDrawerTab.active")?.dataset?.tab;
+        if (activeTab === "browser") {
+          ensureAgentBrowserLoaded(activeConversation.workspace || appState.workspaceRoot);
+        }
+      }
+    }
+
+    function closeAgentDrawer() {
+      agentDrawer.classList.remove("open");
+      agentDrawer.setAttribute("aria-hidden", "true");
+      agentDrawerBackdrop.classList.remove("open");
+      agentDrawerBackdrop.setAttribute("aria-hidden", "true");
+      agentDrawerBtn.classList.remove("active");
+      localStorage.setItem(AGENT_DRAWER_KEY, "0");
+      syncAgentBrowserDrawerLayout();
+    }
+
+    function browserEmbedUrl(workspaceRoot) {
+      const ws = workspaceRoot || appState.workspaceRoot || "";
+      const q = new URLSearchParams();
+      if (ws) q.set("root", ws);
+      return "/embed/browser?" + q.toString();
+    }
+
+    function notifyBrowserWorkspace(workspaceRoot) {
+      const root = workspaceRoot || appState.workspaceRoot || "";
+      try {
+        agentBrowserFrame.contentWindow?.postMessage({ type: "setWorkspaceRoot", root }, "*");
+      } catch {}
+    }
+
+    function notifyBrowserTab(tab, { force = false } = {}) {
+      try {
+        agentBrowserFrame.contentWindow?.postMessage({ type: "focusBrowserTab", tab, force }, "*");
+      } catch {}
+    }
+
+    function ensureAgentBrowserLoaded(workspaceRoot) {
+      const ws = workspaceRoot || appState.workspaceRoot || "";
+      if (agentBrowserFrame.dataset.loaded === "1") {
+        notifyBrowserWorkspace(ws);
+        return;
+      }
+      if (agentBrowserFrame.dataset.loading !== "1") {
+        agentBrowserFrame.dataset.loading = "1";
+        agentBrowserFrame.addEventListener("load", () => {
+          agentBrowserFrame.dataset.loaded = "1";
+          delete agentBrowserFrame.dataset.loading;
+          notifyBrowserWorkspace(ws);
+          if (document.activeElement === agentBrowserFrame && messageInput && !messageInput.disabled) {
+            messageInput.focus();
+          }
+        }, { once: true });
+        agentBrowserFrame.src = browserEmbedUrl(ws);
+      } else {
+        notifyBrowserWorkspace(ws);
+      }
+    }
+
+    function updateAgentBrowserWorkspace(conversation) {
+      const ws = conversation?.workspace || appState.workspaceRoot || "";
+      notifyBrowserWorkspace(ws);
+    }
+
+    async function refreshAgentDrawerMemory(conversation) {
+      if (!agentDrawerMemoryList) return;
+      agentDrawerMemoryList.textContent = t("app.loading");
+      try {
+        const ws = conversation?.workspace || appState.workspaceRoot || "";
+        const query = ws ? ("?workspace=" + encodeURIComponent(ws)) : "";
+        const data = await api("/api/memory" + query);
+        const items = Array.isArray(data.items) ? data.items.slice(0, 5) : [];
+        agentDrawerMemoryList.innerHTML = "";
+        if (!items.length) {
+          agentDrawerMemoryList.textContent = t("settings.memoryEmpty");
+          return;
+        }
+        for (const item of items) {
+          const row = document.createElement("div");
+          row.className = "agentMiniItem";
+          row.textContent = "[" + item.type + "] " + String(item.content || "").slice(0, 100);
+          agentDrawerMemoryList.appendChild(row);
+        }
+      } catch (err) {
+        agentDrawerMemoryList.textContent = t("settings.loadFailed", { message: err.message });
+      }
+    }
+
+    agentDrawerBtn.addEventListener("click", () => {
+      if (agentDrawer.classList.contains("open")) closeAgentDrawer();
+      else openAgentDrawer();
+    });
+    agentDrawerClose.addEventListener("click", closeAgentDrawer);
+    agentDrawerBackdrop.addEventListener("click", () => {
+      const browserTab = agentDrawer.querySelector('[data-panel="browser"]')?.classList.contains("active");
+      if (browserTab) return;
+      closeAgentDrawer();
+    });
+    for (const tab of agentDrawerTabs) {
+      tab.addEventListener("click", () => setAgentDrawerTab(tab.dataset.tab));
+    }
+    if (localStorage.getItem(AGENT_DRAWER_KEY) === "1") openAgentDrawer();
+
     function renderConversation(conversation, options = {}) {
       stopTypewriters();
+      const conversationChanged = renderedConversationId !== conversation.id;
+      const previousScrollTop = messages.scrollTop;
+      const shouldFollow = conversationChanged || options.forceScrollBottom === true || chatAutoFollow;
+      renderedConversationId = conversation.id;
+      chatAutoFollow = shouldFollow;
       activeTitle.textContent = conversation.title;
       workspace.textContent = conversation.workspace || appState.workspaceRoot;
       if (appState.stateFile) workspace.title = t("chat.history", { file: appState.stateFile });
@@ -1443,9 +1931,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
       rolePickerEl.classList.remove("hidden");
 
-      // Coder toggle — переключает coderMode для текущего чата.
-      // Когда включён, каждое сообщение проходит через runCodeTask (без /code префикса).
+      // Coder/ESP работают для всех провайдеров через общий agent runtime.
       coderToggleEl.classList.remove("hidden");
+      hardwareToggleEl.classList.remove("hidden");
+      if (prov === "chatgpt") {
+        toggleSearch.classList.add("hidden");
+      } else {
+        toggleSearch.classList.remove("hidden");
+      }
       if (conversation.coderMode === true) {
         coderToggleEl.classList.add("active");
         coderToggleEl.textContent = t("topbar.coderOn");
@@ -1453,7 +1946,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         coderToggleEl.classList.remove("active");
         coderToggleEl.textContent = t("topbar.coder");
       }
-      hardwareToggleEl.classList.remove("hidden");
       if (conversation.hardwareMode === true) {
         hardwareToggleEl.classList.add("active");
         hardwareToggleEl.textContent = t("topbar.hardwareOn");
@@ -1470,7 +1962,38 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         pipelineToggleEl.textContent = t("topbar.pipeline");
       }
 
-      // Синхронизация и блокировка "Глубокого мышления" для моделей-рассуждалок (DeepSeek R1 / QwQ)
+      memoryToggleEl.classList.remove("hidden");
+      if (conversation.memoryEnabled !== false) {
+        memoryToggleEl.classList.add("active");
+        memoryToggleEl.textContent = t("topbar.memoryOn");
+      } else {
+        memoryToggleEl.classList.remove("active");
+        memoryToggleEl.textContent = t("topbar.memory");
+      }
+
+      autoSkillToggleEl.classList.remove("hidden");
+      if (conversation.autoSkill !== false) {
+        autoSkillToggleEl.classList.add("active");
+        autoSkillToggleEl.textContent = t("topbar.autoSkillOn");
+      } else {
+        autoSkillToggleEl.classList.remove("active");
+        autoSkillToggleEl.textContent = t("topbar.autoSkill");
+      }
+
+      ensureInstalledSkills().then(() => {
+        renderSkillPicker(conversation);
+        skillPickerEl.classList.remove("hidden");
+      }).catch(() => {
+        skillPickerEl.classList.add("hidden");
+      });
+
+      if (agentDrawerControls) agentDrawerControls.classList.remove("disabled");
+      refreshAgentDrawerMemory(conversation);
+      if (agentDrawer.querySelector('[data-panel="browser"]').classList.contains("active")) {
+        updateAgentBrowserWorkspace(conversation);
+      }
+
+      // Синхронизация и блокировка "Глубокого мышления"
       const currentModel = conversation.model || info.defaultModel || (info.models && info.models[0]?.id);
       const isReasoningModel = findModelInfo(prov, currentModel)?.reasoning === true;
       if (isReasoningModel) {
@@ -1504,7 +2027,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       for (const [index, message] of conversation.messages.entries()) {
         const row = document.createElement("article");
-        row.className = "msg " + message.role;
+        row.className = "msg " + message.role + (message.streaming ? " streaming" : "");
         const role = document.createElement("div");
         role.className = "role";
         // Подпись assistant'а — провайдер-специфичная.
@@ -1516,10 +2039,23 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         bubble.className = "bubble";
         if (message.content) {
           const textEl = document.createElement("div");
-          if (index === animateIndex) {
+          if (message.streaming) {
+            textEl.className = "streamingText";
+            const progressiveKey = [
+              conversation.id,
+              message.createdAt || index,
+            ].join(":");
+            typeProgressiveText(textEl, message.content || "…", progressiveKey, () => {
+              scrollMessagesToBottomIfFollowing();
+            });
+          } else if (index === animateIndex) {
+            progressiveTextState.delete([
+              conversation.id,
+              message.createdAt || index,
+            ].join(":"));
             textEl.textContent = "";
             typeText(textEl, message.content, () => {
-              messages.scrollTop = messages.scrollHeight;
+              scrollMessagesToBottomIfFollowing();
             });
           } else {
             textEl.textContent = message.content;
@@ -1544,7 +2080,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderInstallRequest(conversation);
       renderQuestionRequest(conversation);
       renderPermissionRequest(conversation);
-      messages.scrollTop = messages.scrollHeight;
+      if (shouldFollow) {
+        scrollMessagesToBottomIfFollowing();
+      } else {
+        messages.scrollTop = previousScrollTop;
+      }
     }
 
     function findLastTextAssistantIndex(items) {
@@ -1574,6 +2114,42 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const tick = () => {
         offset = Math.min(full.length, offset + chunkSize);
         target.textContent = full.slice(0, offset);
+        onStep?.();
+        if (offset >= full.length) return;
+        const timer = setTimeout(() => {
+          typewriterTimers.delete(timer);
+          tick();
+        }, delayMs);
+        typewriterTimers.add(timer);
+      };
+      tick();
+    }
+
+    function typeProgressiveText(target, text, key, onStep) {
+      const full = String(text || "");
+      if (!full) return;
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        progressiveTextState.set(key, full);
+        target.textContent = full;
+        return;
+      }
+
+      const previous = String(progressiveTextState.get(key) || "");
+      let commonLength = 0;
+      const maxCommon = Math.min(previous.length, full.length);
+      while (commonLength < maxCommon && previous[commonLength] === full[commonLength]) {
+        commonLength += 1;
+      }
+      let offset = previous === full ? full.length : commonLength;
+      target.textContent = full.slice(0, offset);
+
+      const chunkSize = full.length > 5000 ? 32 : full.length > 1800 ? 18 : 8;
+      const delayMs = full.length > 5000 ? 4 : 9;
+      const tick = () => {
+        offset = Math.min(full.length, offset + chunkSize);
+        const visible = full.slice(0, offset);
+        progressiveTextState.set(key, visible);
+        target.textContent = visible;
         onStep?.();
         if (offset >= full.length) return;
         const timer = setTimeout(() => {
@@ -1833,6 +2409,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         messageInput.placeholder = t("composer.chooseChat");
         return;
       }
+      if (activeConversation.coderMode === true) {
+        messageInput.placeholder = t("composer.coderActive");
+        return;
+      }
       const provider = activeConversation.provider || "deepseek";
       const label = ((PROVIDER_INFO[provider] || {}).label) || ({ deepseek: "DeepSeek", qwen: "Qwen" })[provider] || "AI";
       messageInput.placeholder = t("composer.message", { label });
@@ -1922,6 +2502,106 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return data;
     }
 
+    function updateStreamingAssistantBubble(content) {
+      const items = messages.querySelectorAll(".msg.assistant.streaming");
+      const last = items[items.length - 1];
+      if (!last) return;
+      const textEl = last.querySelector(".bubble .streamingText, .bubble > div");
+      if (textEl) textEl.textContent = content || "…";
+      scrollMessagesToBottomIfFollowing();
+    }
+
+    async function postStreamingMessage(convId, body, provider) {
+      activeConversation.messages.push({
+        role: "assistant",
+        content: "",
+        streaming: true,
+        createdAt: new Date().toISOString(),
+      });
+      renderConversation(activeConversation);
+      setStatus(t("composer.writingStatus"));
+
+      const res = await fetch("/api/conversations/" + convId + "/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("ndjson")) {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || t("app.requestFailed"));
+        if (data.running) {
+          activeConversation = data.conversation;
+          await loadState(activeConversation.id);
+          renderConversation(activeConversation);
+          setStatus(t("composer.backgroundTask"));
+          ensurePolling();
+          return;
+        }
+        if (data.needsChatGPTLogin) {
+          activeConversation = data.conversation;
+          renderConversation(activeConversation);
+          setAgentDrawerTab("browser");
+          ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
+          notifyBrowserTab("chatgpt", { force: true });
+          setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
+          return;
+        }
+        activeConversation = data.conversation;
+        await loadState(activeConversation.id);
+        renderConversation(activeConversation, { animateLastAssistant: true });
+        setStatus("");
+        return;
+      }
+
+      const reader = res.body?.getReader?.();
+      if (!reader) throw new Error(t("app.requestFailed"));
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamDone = false;
+      let needsChatGPTLogin = false;
+
+      while (!streamDone) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let lineBreak;
+        while ((lineBreak = buffer.indexOf("\\n")) >= 0) {
+          const line = buffer.slice(0, lineBreak).trim();
+          buffer = buffer.slice(lineBreak + 1);
+          if (!line) continue;
+          let event;
+          try { event = JSON.parse(line); } catch { continue; }
+          if (event.type === "start") {
+            activeConversation = event.conversation;
+            renderConversation(activeConversation);
+          } else if (event.type === "delta") {
+            updateStreamingAssistantBubble(event.content);
+            setStatus(t("composer.writingStatus"));
+          } else if (event.type === "done") {
+            activeConversation = event.conversation;
+            streamDone = true;
+          } else if (event.type === "error") {
+            activeConversation = event.conversation;
+            needsChatGPTLogin = Boolean(event.needsChatGPTLogin);
+            streamDone = true;
+          }
+        }
+      }
+
+      await loadState(activeConversation?.id || convId);
+      renderConversation(activeConversation);
+      if (needsChatGPTLogin && provider === "chatgpt") {
+        setAgentDrawerTab("browser");
+        ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
+        notifyBrowserTab("chatgpt", { force: true });
+        setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
+      } else {
+        setStatus("");
+      }
+    }
+
     // ---- Heartbeat: закрываем окно при graceful shutdown или когда CLI мёртв (Ctrl+C в терминале).
     let heartbeatFailures = 0;
     let shutdownStarted = false;
@@ -2003,13 +2683,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       if (e.key === "Escape" && !settingsOverlay.classList.contains("hidden")) closeSettings();
     });
 
-    async function openSettings() {
+    async function openSettings(initialTab) {
       settingsOverlay.classList.remove("hidden");
       settingsOverlay.setAttribute("aria-hidden", "false");
       settingsBody.textContent = t("app.loading");
       try {
         const data = await api("/api/settings");
-        renderSettings(data);
+        renderSettings(data, initialTab);
       } catch (err) {
         settingsBody.textContent = t("settings.loadFailed", { message: err.message });
       }
@@ -2019,7 +2699,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui }) {
+    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui, telegram }, initialTab) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
@@ -2037,6 +2717,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       content.className = "settingsTabContent";
       const tabs = [
         { id: "language", label: t("settings.tabLanguage") },
+        { id: "agent", label: t("settings.tabAgent") },
+        { id: "telegram", label: t("settings.tabTelegram") },
         { id: "update", label: t("settings.tabUpdate") },
         { id: "api", label: t("settings.tabApi") },
         { id: "permissions", label: t("settings.tabPermissions") },
@@ -2063,6 +2745,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsBody.appendChild(shell);
 
       renderUiSettings(panels.language, ui, allowedCommands || []);
+      renderAgentSettings(panels.agent, ui);
+      renderTelegramSettings(panels.telegram, telegram || {});
       renderUpdateSettings(panels.update);
       renderOpenAISettings(panels.api, openAICompat);
       renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
@@ -2104,8 +2788,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
         panels.permissions.appendChild(groupEl);
       }
-      selectSettingsTab("language");
+      selectSettingsTab(initialTab || "language");
     }
+
+    document.getElementById("sidebarMenuPlugins").addEventListener("click", () => {
+      openSettings("agent");
+    });
+    document.getElementById("sidebarMenuTelegram").addEventListener("click", () => {
+      openSettings("telegram");
+    });
 
     function selectSettingsTab(tabId) {
       const tabs = settingsBody.querySelectorAll(".settingsTab");
@@ -2182,6 +2873,343 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       target.appendChild(groupEl);
       renderVoiceSettings(target);
+    }
+
+    async function renderAgentSettings(target, ui) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup";
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.agentTitle");
+      groupEl.appendChild(heading);
+
+      const memoryRow = document.createElement("label");
+      memoryRow.className = "settingsItem checkboxRow";
+      const memoryCb = document.createElement("input");
+      memoryCb.type = "checkbox";
+      memoryCb.checked = ui?.memoryDefault !== false;
+      const memoryText = document.createElement("div");
+      const memoryName = document.createElement("div");
+      memoryName.className = "name";
+      memoryName.textContent = t("settings.memoryDefault");
+      const memoryDesc = document.createElement("div");
+      memoryDesc.className = "desc";
+      memoryDesc.textContent = t("settings.memoryDefaultDesc");
+      memoryText.append(memoryName, memoryDesc);
+      memoryCb.addEventListener("change", async () => {
+        try {
+          await saveUiSettings({ memoryDefault: memoryCb.checked }, collectAllowedCommands());
+          setStatus(t("settings.agentSaved"));
+        } catch (err) {
+          memoryCb.checked = !memoryCb.checked;
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        }
+      });
+      memoryRow.append(memoryCb, memoryText);
+      groupEl.appendChild(memoryRow);
+
+      const autoSkillRow = document.createElement("label");
+      autoSkillRow.className = "settingsItem checkboxRow";
+      const autoSkillCb = document.createElement("input");
+      autoSkillCb.type = "checkbox";
+      autoSkillCb.checked = ui?.autoSkillDefault !== false;
+      const autoSkillText = document.createElement("div");
+      const autoSkillName = document.createElement("div");
+      autoSkillName.className = "name";
+      autoSkillName.textContent = t("settings.autoSkillDefault");
+      const autoSkillDesc = document.createElement("div");
+      autoSkillDesc.className = "desc";
+      autoSkillDesc.textContent = t("settings.autoSkillDefaultDesc");
+      autoSkillText.append(autoSkillName, autoSkillDesc);
+      autoSkillCb.addEventListener("change", async () => {
+        try {
+          await saveUiSettings({ autoSkillDefault: autoSkillCb.checked }, collectAllowedCommands());
+          setStatus(t("settings.agentSaved"));
+        } catch (err) {
+          autoSkillCb.checked = !autoSkillCb.checked;
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        }
+      });
+      autoSkillRow.append(autoSkillCb, autoSkillText);
+      groupEl.appendChild(autoSkillRow);
+
+      target.appendChild(groupEl);
+
+      const pluginsGroup = document.createElement("div");
+      pluginsGroup.className = "settingsGroup";
+      const pluginsHeading = document.createElement("h3");
+      pluginsHeading.textContent = t("settings.installedPlugins");
+      pluginsGroup.appendChild(pluginsHeading);
+
+      const pluginsHint = document.createElement("div");
+      pluginsHint.className = "settingsHint";
+      pluginsHint.textContent = t("settings.installPluginHint");
+      pluginsGroup.appendChild(pluginsHint);
+
+      const installRow = document.createElement("div");
+      installRow.className = "settingsItem pluginInstallRow";
+      const repoInput = document.createElement("input");
+      repoInput.type = "text";
+      repoInput.className = "pluginInstallInput";
+      repoInput.placeholder = t("settings.pluginInstallGithub");
+      const installBtn = document.createElement("button");
+      installBtn.type = "button";
+      installBtn.className = "btn";
+      installBtn.textContent = t("settings.installPlugin");
+      installBtn.addEventListener("click", async () => {
+        const repo = repoInput.value.trim();
+        if (!repo) return;
+        installBtn.disabled = true;
+        try {
+          await api("/api/plugins/install", {
+            method: "POST",
+            body: { source: "github", repo },
+          });
+          await refreshPluginsList();
+          installedSkills = [];
+          repoInput.value = "";
+          setStatus(t("settings.pluginInstalled"));
+        } catch (err) {
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        } finally {
+          installBtn.disabled = false;
+        }
+      });
+      installRow.append(repoInput, installBtn);
+      pluginsGroup.appendChild(installRow);
+
+      const pluginsList = document.createElement("div");
+      pluginsList.className = "pluginsSettingsList";
+      pluginsGroup.appendChild(pluginsList);
+
+      async function refreshPluginsList() {
+        pluginsList.textContent = t("app.loading");
+        try {
+          const data = await api("/api/plugins");
+          const plugins = Array.isArray(data.plugins) ? data.plugins : [];
+          pluginsList.innerHTML = "";
+          if (!plugins.length) {
+            pluginsList.textContent = t("settings.noPlugins");
+            return;
+          }
+          for (const plugin of plugins) {
+            const row = document.createElement("div");
+            row.className = "settingsItemRow";
+            const textWrap = document.createElement("div");
+            textWrap.className = "textWrap";
+            const nameEl = document.createElement("div");
+            nameEl.className = "name";
+            nameEl.textContent = (plugin.name || plugin.id) + " · " + (plugin.format || "plugin");
+            const descEl = document.createElement("div");
+            descEl.className = "desc";
+            const skillCount = Array.isArray(plugin.skillIds) ? plugin.skillIds.length : 0;
+            descEl.textContent = (plugin.description || plugin.id) + " · " + t("settings.pluginSkillCount", { count: skillCount });
+            textWrap.append(nameEl, descEl);
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "iconBtn";
+            delBtn.textContent = "✕";
+            delBtn.title = t("settings.uninstallPlugin");
+            delBtn.addEventListener("click", async () => {
+              try {
+                await api("/api/plugins/" + encodeURIComponent(plugin.id), { method: "DELETE" });
+                installedSkills = [];
+                await refreshPluginsList();
+                setStatus(t("settings.pluginRemoved"));
+              } catch (err) {
+                setStatus(t("settings.saveFailed", { message: err.message }), true);
+              }
+            });
+            row.append(textWrap, delBtn);
+            pluginsList.appendChild(row);
+          }
+        } catch (err) {
+          pluginsList.textContent = t("settings.loadFailed", { message: err.message });
+        }
+      }
+
+      await refreshPluginsList();
+      target.appendChild(pluginsGroup);
+
+      const skillsGroup = document.createElement("div");
+      skillsGroup.className = "settingsGroup";
+      const skillsHeading = document.createElement("h3");
+      skillsHeading.textContent = t("settings.installedSkills");
+      skillsGroup.appendChild(skillsHeading);
+
+      const skills = await ensureInstalledSkills();
+      if (!skills.length) {
+        const empty = document.createElement("div");
+        empty.className = "settingsHint";
+        empty.textContent = t("settings.noSkills");
+        skillsGroup.appendChild(empty);
+      } else {
+        for (const skill of skills) {
+          const row = document.createElement("div");
+          row.className = "settingsItemRow";
+          const textWrap = document.createElement("div");
+          textWrap.className = "textWrap";
+          const nameEl = document.createElement("div");
+          nameEl.className = "name";
+          nameEl.textContent = (skill.name || skill.id) + (skill.format ? " · " + skill.format : "");
+          const descEl = document.createElement("div");
+          descEl.className = "desc";
+          const commands = Array.isArray(skill.commands) && skill.commands.length
+            ? skill.commands.join(", ")
+            : "—";
+          descEl.textContent = (skill.description || skill.id) + " · " + t("settings.skillCommands", { commands });
+          textWrap.append(nameEl, descEl);
+          row.appendChild(textWrap);
+          skillsGroup.appendChild(row);
+        }
+      }
+      target.appendChild(skillsGroup);
+
+      const memoryGroup = document.createElement("div");
+      memoryGroup.className = "settingsGroup";
+      const memoryHeading = document.createElement("h3");
+      memoryHeading.textContent = t("settings.recentMemory");
+      memoryGroup.appendChild(memoryHeading);
+
+      const memoryHint = document.createElement("div");
+      memoryHint.className = "settingsHint";
+      memoryHint.textContent = t("settings.recentMemoryHint");
+      memoryGroup.appendChild(memoryHint);
+
+      const backendBadge = document.createElement("div");
+      backendBadge.className = "settingsHint";
+      memoryGroup.appendChild(backendBadge);
+
+      const memoryList = document.createElement("div");
+      memoryList.className = "memorySettingsList";
+      memoryGroup.appendChild(memoryList);
+
+      async function refreshMemoryList() {
+        memoryList.textContent = t("app.loading");
+        try {
+          const workspace = activeConversation?.workspace || appState.workspaceRoot || "";
+          const query = workspace ? ("?workspace=" + encodeURIComponent(workspace)) : "";
+          const data = await api("/api/memory" + query);
+          const items = Array.isArray(data.items) ? data.items.slice(0, 15) : [];
+          backendBadge.textContent = t("settings.memoryBackend", { backend: data.backend || "json" })
+            + (data.graphBackend ? " · graph: " + data.graphBackend : "");
+          memoryList.innerHTML = "";
+          if (!items.length) {
+            memoryList.textContent = t("settings.memoryEmpty");
+            return;
+          }
+          for (const item of items) {
+            const row = document.createElement("div");
+            row.className = "settingsItemRow memorySettingsItem";
+            const textWrap = document.createElement("div");
+            textWrap.className = "textWrap";
+            const nameEl = document.createElement("div");
+            nameEl.className = "name";
+            nameEl.textContent = "[" + item.type + "] " + String(item.content || "").slice(0, 120);
+            const descEl = document.createElement("div");
+            descEl.className = "desc";
+            descEl.textContent = item.workspace || t("settings.memoryNoWorkspace");
+            textWrap.append(nameEl, descEl);
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "iconBtn";
+            delBtn.textContent = "✕";
+            delBtn.title = t("settings.deleteMemory");
+            delBtn.addEventListener("click", async () => {
+              try {
+                await api("/api/memory/" + encodeURIComponent(item.id), { method: "DELETE" });
+                await refreshMemoryList();
+                setStatus(t("settings.memoryDeleted"));
+              } catch (err) {
+                setStatus(t("settings.saveFailed", { message: err.message }), true);
+              }
+            });
+            row.append(textWrap, delBtn);
+            memoryList.appendChild(row);
+          }
+        } catch (err) {
+          memoryList.textContent = t("settings.loadFailed", { message: err.message });
+        }
+      }
+
+      target.appendChild(memoryGroup);
+      refreshMemoryList().catch(() => {});
+    }
+
+    function renderTelegramSettings(target, telegram) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup";
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.telegramTitle");
+      groupEl.appendChild(heading);
+
+      const hint = document.createElement("div");
+      hint.className = "settingsHint";
+      hint.textContent = t("settings.telegramHint");
+      groupEl.appendChild(hint);
+
+      const enabledRow = document.createElement("label");
+      enabledRow.className = "settingsItem";
+      const enabledCb = document.createElement("input");
+      enabledCb.type = "checkbox";
+      enabledCb.checked = telegram.enabled === true;
+      const enabledText = document.createElement("div");
+      const enabledName = document.createElement("div");
+      enabledName.className = "name";
+      enabledName.textContent = t("settings.telegramEnabled");
+      const enabledDesc = document.createElement("div");
+      enabledDesc.className = "desc";
+      enabledDesc.textContent = t("settings.telegramEnabledDesc");
+      enabledText.append(enabledName, enabledDesc);
+      enabledRow.append(enabledCb, enabledText);
+      groupEl.appendChild(enabledRow);
+
+      const tokenField = document.createElement("label");
+      tokenField.className = "formField";
+      tokenField.innerHTML = "<span></span>";
+      tokenField.querySelector("span").textContent = t("settings.telegramBotToken");
+      const tokenInput = document.createElement("input");
+      tokenInput.type = "password";
+      tokenInput.autocomplete = "off";
+      tokenInput.placeholder = "123456789:ABC...";
+      tokenInput.value = telegram.botToken || "";
+      tokenField.appendChild(tokenInput);
+      groupEl.appendChild(tokenField);
+
+      const chatField = document.createElement("label");
+      chatField.className = "formField";
+      chatField.innerHTML = "<span></span>";
+      chatField.querySelector("span").textContent = t("settings.telegramChatId");
+      const chatInput = document.createElement("input");
+      chatInput.type = "text";
+      chatInput.autocomplete = "off";
+      chatInput.placeholder = "123456789";
+      chatInput.value = telegram.chatId || "";
+      chatField.appendChild(chatInput);
+      groupEl.appendChild(chatField);
+
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "iconBtn primaryBtn";
+      saveBtn.textContent = t("settings.telegramSave");
+      saveBtn.addEventListener("click", async () => {
+        try {
+          await api("/api/settings", {
+            method: "PUT",
+            body: {
+              telegram: {
+                enabled: enabledCb.checked,
+                botToken: tokenInput.value.trim(),
+                chatId: chatInput.value.trim(),
+              },
+            },
+          });
+          setStatus(t("settings.telegramSaved"));
+        } catch (err) {
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        }
+      });
+      groupEl.appendChild(saveBtn);
+      target.appendChild(groupEl);
     }
 
     function renderVoiceSettings(target) {

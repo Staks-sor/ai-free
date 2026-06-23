@@ -1,80 +1,70 @@
-// Memory Store MVP (AI Free)
-// Простое локальное хранилище памяти без зависимостей
-// Позже можно заменить на SQLite FTS / vector DB
+// Memory Store — публичный API поверх SQLite FTS + Markdown vault.
 
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
-import { randomUUID } from "node:crypto";
+import {
+  deleteMemoryItem,
+  getMemoryItem,
+  insertMemoryItem,
+  searchMemoryItems,
+} from "./db.mjs";
 
-const BASE_DIR = path.join(os.homedir(), ".ai-free", "memory");
-const INDEX_FILE = path.join(BASE_DIR, "index.json");
+function isImportantMemory({ type, content = "", tags = [], meta = {} }) {
+  const text = String(content).toLowerCase();
 
-function ensureDir() {
-  fs.mkdirSync(BASE_DIR, { recursive: true });
-}
+  if (Array.isArray(tags) && tags.length > 0) return true;
 
-function loadIndex() {
-  ensureDir();
-  if (!fs.existsSync(INDEX_FILE)) return { items: [] };
-  try {
-    return JSON.parse(fs.readFileSync(INDEX_FILE, "utf8"));
-  } catch {
-    return { items: [] };
-  }
-}
+  const keywords = [
+    "error", "fix", "fixed", "bug", "crash", "exception", "stack",
+    "implement", "update", "change", "remove", "delete", "install",
+    "config", "fail", "issue",
+  ];
 
-function saveIndex(index) {
-  ensureDir();
-  fs.writeFileSync(INDEX_FILE, JSON.stringify(index, null, 2));
+  if (keywords.some((k) => text.includes(k))) return true;
+  if (meta?.important === true) return true;
+
+  return false;
 }
 
 export function addMemory({ type = "note", content = "", tags = [], workspace = "", meta = {} }) {
-  const index = loadIndex();
-
-  const item = {
-    id: randomUUID(),
-    type,
-    content,
-    tags,
-    workspace,
-    meta,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  index.items.unshift(item);
-  saveIndex(index);
-
-  return item;
+  if (!isImportantMemory({ type, content, tags, meta })) return null;
+  return insertMemoryItem({ type, content, tags, workspace, meta });
 }
 
-export function searchMemory(query = "") {
-  const index = loadIndex();
-  const q = String(query).toLowerCase().trim();
-
-  if (!q) return index.items.slice(0, 20);
-
-  return index.items
-    .filter((item) => {
-      return (
-        item.content.toLowerCase().includes(q) ||
-        item.tags?.some((t) => t.toLowerCase().includes(q)) ||
-        item.workspace?.toLowerCase().includes(q)
-      );
-    })
-    .slice(0, 20);
+export function searchMemory(query = "", workspace = "") {
+  return searchMemoryItems(query, workspace, 20);
 }
 
 export function deleteMemory(id) {
-  const index = loadIndex();
-  const before = index.items.length;
-  index.items = index.items.filter((i) => i.id !== id);
-  saveIndex(index);
-  return index.items.length !== before;
+  return deleteMemoryItem(id);
 }
 
 export function getMemoryById(id) {
-  const index = loadIndex();
-  return index.items.find((i) => i.id === id) || null;
+  return getMemoryItem(id);
 }
+
+export function extractFromToolLogs(task, toolLogs = [], workspace = "") {
+  let saved = 0;
+
+  for (const log of toolLogs) {
+    if (!log) continue;
+    const text = String(log);
+
+    const hasError = text.includes("error") || text.includes("Error");
+    const hasFile = text.includes("write_file") || text.includes("read_file");
+    const hasCmd = text.includes("run_command") || text.includes("run_shell");
+
+    if (!hasError && !hasFile && !hasCmd) continue;
+
+    const item = addMemory({
+      type: hasError ? "error" : "execution",
+      content: `${task}\n---\n${text.slice(0, 800)}`,
+      tags: hasError ? ["error", "agent"] : ["execution", "agent"],
+      workspace,
+      meta: { important: true },
+    });
+    if (item) saved += 1;
+  }
+
+  return saved;
+}
+
+export { getMemoryBackend, warmMemoryBackend } from "./db.mjs";

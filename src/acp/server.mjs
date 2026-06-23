@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import readline from "node:readline";
-import { runCodeTask } from "../code-agent/run.mjs";
+import { runAgentTask } from "../agent-orchestrator/index.mjs";
 import { AI_FREE_VERSION, DEFAULT_AUTH_FILE } from "../config.mjs";
 import { readSavedAuth } from "../auth/files.mjs";
 import { DeepSeekChatClient } from "../providers/deepseek/client.mjs";
@@ -169,7 +169,7 @@ async function handlePrompt({ request, sessions, config, respond, respondError, 
     searchEnabled: false,
   };
 
-  const codeResult = await runCodeTask(
+  const codeResult = await runAgentTask(
     client,
     baseOptions,
     session.cwd,

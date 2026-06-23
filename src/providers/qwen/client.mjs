@@ -16,15 +16,86 @@ import path from "node:path";
 import { QWEN_BASE_URL, QWEN_DEFAULT_MODEL } from "./config.mjs";
 import { qwenBaseHeaders } from "./headers.mjs";
 import { isQwenAuthError } from "./auth-manager.mjs";
-import { getQwenBrowserProxy } from "./browser-proxy.mjs";
+import {
+  createQwenSessionExpiredError,
+  extractQwenErrorFields,
+  formatQwenSessionExpiredMessage,
+  isQwenSessionExpiredCode,
+  isQwenSessionExpiredText,
+  isQwenAntiBotRejection,
+  formatQwenAntiBotMessage,
+  throwIfQwenSessionExpiredFromAssistantText,
+  throwIfQwenSessionExpiredFromHttp,
+} from "./session-errors.mjs";
+import { getQwenBrowserProxy, resetQwenBrowserProxy } from "./browser-proxy.mjs";
+import { buildQwenCompletionPayload } from "./completion-payload.mjs";
 
 function throwIfQwenAuthFailure(status, text, context) {
+  try {
+    throwIfQwenSessionExpiredFromHttp(status, text, context);
+  } catch (error) {
+    if (error?.isQwenSessionExpired) throw error;
+  }
   const snippet = String(text || "").slice(0, 800);
   const err = new Error(`Qwen ${context} failed: HTTP ${status}: ${snippet}`);
   if (status === 401 || status === 403 || isQwenAuthError(err)) {
     err.isAuthError = true;
   }
   throw err;
+}
+
+function finalizeQwenCompletionResult(parsed, rawText, context) {
+  if (parsed?.error) {
+    const errText = String(parsed.error);
+    if (isQwenSessionExpiredText(errText)) {
+      throw createQwenSessionExpiredError({
+        code: extractCodeFromCompletionText(errText),
+        details: errText.slice(0, 300),
+        context,
+      });
+    }
+    return {
+      text: errText,
+      lastMessageId: parsed.lastMessageId ?? null,
+      thinkingText: parsed.thinkingText || "",
+    };
+  }
+
+  if (!parsed?.text && !parsed?.thinkingText) {
+    const fields = extractQwenErrorFieldsFromRaw(rawText);
+    if (fields && isQwenAntiBotRejection(fields.code, fields.details)) {
+      return {
+        text: formatQwenAntiBotMessage(fields),
+        lastMessageId: null,
+        thinkingText: "",
+        error: formatQwenAntiBotMessage(fields),
+      };
+    }
+    if (fields && isQwenSessionExpiredCode(fields.code, fields.details)) {
+      throw createQwenSessionExpiredError({ ...fields, context });
+    }
+    const fallback = emptyQwenParseFallback(rawText || "", rawText || "", 0);
+    throwIfQwenSessionExpiredFromAssistantText(fallback.text, context);
+    return fallback;
+  }
+
+  throwIfQwenSessionExpiredFromAssistantText(parsed.text, context);
+  return parsed;
+}
+
+function extractCodeFromCompletionText(text) {
+  const m = String(text || "").match(/ошибку \(([^)]+)\)/i);
+  return m?.[1] || "";
+}
+
+function extractQwenErrorFieldsFromRaw(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) return null;
+  try {
+    return extractQwenErrorFields(JSON.parse(text));
+  } catch {
+    return null;
+  }
 }
 
 // Через какой путь шлём запросы:
@@ -135,50 +206,17 @@ export class QwenChatClient {
     thinking = true,
     search = true,
     onText = null,
+    onThinking = null,
     model = ENV_DEFAULT_MODEL,
   }) {
-    const fid = randomUUID();
-    // childrenIds — это id будущего ассистент-сообщения. Фронт Qwen его pre-genерирует,
-    // вероятно сервер ожидает что мы укажем какой именно UUID будет у ответа.
-    const childId = randomUUID();
-    const timestamp = Math.floor(Date.now() / 1000);
-
-    const body = {
-      stream: true,
-      version: "2.1",
-      incremental_output: true,
-      chat_id: chatId,
-      chat_mode: "normal",
+    const body = buildQwenCompletionPayload({
+      chatId,
+      prompt,
+      parentId,
       model,
-      parent_id: parentId,
-      messages: [
-        {
-          fid,
-          parentId,
-          childrenIds: [childId],
-          role: "user",
-          content: prompt,
-          user_action: "chat",
-          files: [],
-          timestamp,
-          models: [model],
-          chat_type: "t2t",
-          feature_config: {
-            thinking_enabled: Boolean(thinking),
-            output_schema: "phase",
-            research_mode: "normal",
-            auto_thinking: Boolean(thinking),
-            thinking_mode: thinking ? "Auto" : "Off",
-            thinking_format: "summary",
-            auto_search: Boolean(search),
-          },
-          extra: { meta: { subChatType: "t2t" } },
-          sub_chat_type: "t2t",
-          parent_id: parentId,
-        },
-      ],
-      timestamp,
-    };
+      thinking,
+      search,
+    });
 
     const headers = {
       ...qwenBaseHeaders(this.cookieHeader),
@@ -189,9 +227,6 @@ export class QwenChatClient {
     const bodyStr = JSON.stringify(body);
 
     if (this.debug) {
-      console.log(
-        `[qwen] POST (transport=${QWEN_TRANSPORT}) /completions?chat_id=${chatId} thinking=${thinking} search=${search}`,
-      );
       try {
         fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
         const dump = { url, method: "POST", transport: QWEN_TRANSPORT, headers, body };
@@ -208,25 +243,48 @@ export class QwenChatClient {
     // ОСНОВНОЙ ПУТЬ: запрос через невидимый Playwright (browser-proxy).
     // Бандл chat.qwen.ai сам подписывает запрос свежим bx-ua.
     if (QWEN_TRANSPORT === "browser") {
-      const proxy = await getQwenBrowserProxy({ debug: this.debug });
-      const result = await proxy.proxyFetch({ url, body: bodyStr, chatId });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const proxy = await getQwenBrowserProxy({ debug: this.debug });
+        const useLiveStream = typeof onText === "function" || typeof onThinking === "function";
+        const streamParser = useLiveStream
+          ? createQwenIncrementalParser({ onText, onThinking })
+          : null;
+        const result = useLiveStream
+          ? await proxy.proxyFetchStream({
+            url,
+            body: bodyStr,
+            chatId,
+            onRawChunk: (chunk) => streamParser.push(chunk),
+          })
+          : await proxy.proxyFetch({ url, body: bodyStr, chatId });
 
-      if (this.debug) {
-        try {
-          fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
-          fs.writeFileSync(
-            path.join(QWEN_DEBUG_DIR, "last-response.txt"),
-            `# transport=browser, status=${result.status}, content-type=${result.contentType}, bytes=${result.text?.length || 0}\n\n${result.text || ""}`,
-          );
-          console.log(`[qwen] dumped response → ${path.join(QWEN_DEBUG_DIR, "last-response.txt")}`);
-        } catch {}
+        if (this.debug) {
+          try {
+            fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
+            fs.writeFileSync(
+              path.join(QWEN_DEBUG_DIR, "last-response.txt"),
+              `# transport=browser, stream=${useLiveStream}, status=${result.status}, content-type=${result.contentType}, bytes=${result.text?.length || 0}\n\n${result.text || ""}`,
+            );
+            console.log(`[qwen] dumped response → ${path.join(QWEN_DEBUG_DIR, "last-response.txt")}`);
+          } catch {}
+        }
+
+        if (!result.ok) {
+          throwIfQwenAuthFailure(result.status, result.text, "completion (browser)");
+        }
+
+        const parsed = useLiveStream
+          ? streamParser.finish(result.text)
+          : parseQwenResponseText(result.text, result.contentType, onText);
+
+        if (attempt < 2 && isQwenRecoverableStreamError(parsed, result.text)) {
+          if (this.debug) console.log("[qwen] recoverable stream error, resetting browser proxy…");
+          await resetQwenBrowserProxy();
+          continue;
+        }
+
+        return finalizeQwenCompletionResult(parsed, result.text, "completion (browser)");
       }
-
-      if (!result.ok) {
-        throwIfQwenAuthFailure(result.status, result.text, "completion (browser)");
-      }
-
-      return parseQwenResponseText(result.text, result.contentType, onText);
     }
 
     // FALLBACK: прямой fetch с bx-ua из .env (обычно ломается на Bad_Request).
@@ -266,16 +324,31 @@ export class QwenChatClient {
 export function formatQwenStreamError(parsed) {
   if (!parsed || typeof parsed !== "object") return null;
   const err = parsed.error;
-  if (!err || typeof err !== "object") return null;
-  const code = String(err.code || err.type || "error");
-  const details = String(
-    err.details || err.message || err.detail || err.msg || JSON.stringify(err),
-  );
-  return formatQwenUserFacingError(code, details);
+  if (err && typeof err === "object") {
+    const code = String(err.code || err.type || "error");
+    const details = String(
+      err.details || err.message || err.detail || err.msg || JSON.stringify(err),
+    );
+    return formatQwenUserFacingError(code, details);
+  }
+  const data = parsed.data;
+  if (parsed.success === false && data && typeof data === "object") {
+    const code = String(data.code || data.type || "error");
+    const details = String(data.details || data.message || data.detail || JSON.stringify(data));
+    return formatQwenUserFacingError(code, details);
+  }
+  return null;
 }
 
 export function formatQwenUserFacingError(code, details) {
   const d = details.toLowerCase();
+  const c = String(code || "").toLowerCase();
+  if (isQwenAntiBotRejection(code, details)) {
+    return formatQwenAntiBotMessage({ code, details });
+  }
+  if (isQwenSessionExpiredCode(c, details)) {
+    return formatQwenSessionExpiredMessage({ code, details });
+  }
   if (
     d.includes("quota exceeded")
     || d.includes("allocated quota")
@@ -297,6 +370,68 @@ export function formatQwenUserFacingError(code, details) {
     return `Слишком много запросов к Qwen (rate limit).\n\n${details}`;
   }
   return `Qwen вернул ошибку (${code}):\n\n${details}`;
+}
+
+export function formatQwenStreamDisplay(thinkingText, answerText) {
+  const thinking = String(thinkingText || "").trim();
+  const answer = String(answerText || "").trim();
+  if (thinking && answer) return `🧠 ${thinking}\n\n---\n\n${answer}`;
+  if (thinking) return `🧠 ${thinking}`;
+  return answer || "…";
+}
+
+export function createQwenIncrementalParser({ onText = null, onThinking = null } = {}) {
+  let buffer = "";
+  let fullText = "";
+  let thinkingBuf = "";
+  let lastMessageId = null;
+  let error = null;
+
+  function consumeEvent(raw) {
+    const ev = parseSseEvent(raw);
+    if (!ev.data || ev.data === "[DONE]") return;
+    let parsed;
+    try { parsed = JSON.parse(ev.data); } catch { return; }
+    const errMsg = formatQwenStreamError(parsed);
+    if (errMsg) {
+      error = errMsg;
+      return;
+    }
+    const found = extractTextRecursively(parsed);
+    if (found.text) {
+      if (found.isThinking) {
+        thinkingBuf += found.text;
+        onThinking?.(found.text);
+      } else {
+        fullText += found.text;
+        onText?.(found.text);
+      }
+    }
+    if (found.messageId) lastMessageId = String(found.messageId);
+  }
+
+  return {
+    push(chunk) {
+      buffer += String(chunk || "");
+      let boundary;
+      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        consumeEvent(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        if (error) break;
+      }
+    },
+    finish(rawFallback = "") {
+      if (buffer.trim()) consumeEvent(buffer);
+      if (error) {
+        return { text: error, lastMessageId, thinkingText: thinkingBuf, error };
+      }
+      if (!fullText && !thinkingBuf) {
+        const fallback = emptyQwenParseFallback(rawFallback, rawFallback, 0);
+        return { ...fallback, error: null };
+      }
+      return { text: fullText, lastMessageId, thinkingText: thinkingBuf, error: null };
+    },
+  };
 }
 
 function findQwenErrorInSseText(text) {
@@ -351,6 +486,10 @@ function parseQwenResponseText(text, contentType, onText) {
   if (ct.includes("application/json") || text.trim().startsWith("{")) {
     try {
       const json = JSON.parse(text);
+      const errMsg = formatQwenStreamError(json);
+      if (errMsg) {
+        return { text: errMsg, lastMessageId: null, thinkingText: "" };
+      }
       const found = extractTextRecursively(json);
       if (found.text) {
         return { text: found.text, lastMessageId: found.messageId, thinkingText: found.isThinking ? found.text : "" };
@@ -554,4 +693,10 @@ function parseSseEvent(raw) {
     }
   }
   return event;
+}
+
+export function isQwenRecoverableStreamError(parsed, rawText = "") {
+  const blob = `${parsed?.error || ""}\n${parsed?.text || ""}\n${rawText}`.toLowerCase();
+  if (isQwenSessionExpiredText(blob)) return false;
+  return /bad_request|internal_error|непредвиденн|unexpected error/.test(blob);
 }

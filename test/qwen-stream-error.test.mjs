@@ -25,8 +25,13 @@ describe("Qwen SSE error parsing", () => {
     assert.equal(formatQwenStreamError({ "response.created": { chat_id: "x" } }), null);
   });
 
-  it("formatQwenUserFacingError handles rate limit", () => {
-    const msg = formatQwenUserFacingError("rate_limit", "Too many requests");
-    assert.match(msg, /много запросов/i);
+  it("formats success=false JSON errors as anti-bot when generic Bad_Request", () => {
+    const msg = formatQwenStreamError({
+      success: false,
+      data: { code: "Bad_Request", details: "Internal error" },
+    });
+    assert.ok(msg);
+    assert.match(msg, /anti-bot/i);
+    assert.doesNotMatch(msg, /Сессия Qwen устарела/);
   });
 });

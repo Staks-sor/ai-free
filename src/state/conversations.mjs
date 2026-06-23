@@ -13,6 +13,9 @@ export function conversationList(state) {
     pipelineMode: conversation.pipelineMode === true,
     coderMode: conversation.coderMode === true,
     hardwareMode: conversation.hardwareMode === true,
+    memoryEnabled: conversation.memoryEnabled !== false,
+    autoSkill: conversation.autoSkill !== false,
+    skillId: conversation.skillId || null,
     updatedAt: conversation.updatedAt,
     messageCount: conversation.messages.length,
   }));
@@ -23,6 +26,7 @@ export function conversationList(state) {
 export function makeConversationTitle(prompt) {
   const clean = String(prompt || "")
     .replace(/^\/code\s+/i, "")
+    .replace(/^\/skill\s+[a-z0-9_-]+\s+/i, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!clean) return "New chat";

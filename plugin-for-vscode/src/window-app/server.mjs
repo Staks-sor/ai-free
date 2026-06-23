@@ -132,7 +132,7 @@ export async function runWindowApp({
         if (isQwenTransportError(error) && !transportResetDone) {
           console.log(`[qwen] browser transport error, resetting proxy: ${error.message}`);
           const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
-          resetQwenBrowserProxy();
+          await resetQwenBrowserProxy();
           qwenClient = null;
           client = await getOrCreateQwenClient({ forceRebuild: true });
           transportResetDone = true;
@@ -417,7 +417,7 @@ export async function runWindowApp({
           await provider.login();
           if (providerId === "qwen") {
             const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
-            resetQwenBrowserProxy();
+            await resetQwenBrowserProxy();
             qwenClient = null;
           }
           return sendJson(res, { ok: true, hasAuth: provider.hasAuth() });
@@ -1000,12 +1000,14 @@ export async function runWindowApp({
                   conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
                   const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
                   progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+                  delete progressMessage.streaming;
                   progressMessage.updatedAt = new Date().toISOString();
                   if (toolText) logConsoleBlock("code tools", toolText);
                   logConsoleBlock("assistant", codeResult.message);
                   logConsole(`[code] qwen completed: ${codeResult.toolLogs.length} tool log(s)`);
                 } catch (err) {
                   progressMessage.content = `⚠️ /code error: ${err.message}`;
+                  delete progressMessage.streaming;
                   progressMessage.updatedAt = new Date().toISOString();
                   logConsole(`[code] qwen failed: ${err.message}`);
                 }
@@ -1175,12 +1177,14 @@ export async function runWindowApp({
               conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
               const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
               progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+              delete progressMessage.streaming;
               progressMessage.updatedAt = new Date().toISOString();
               if (toolText) logConsoleBlock("code tools", toolText);
               logConsoleBlock("assistant", codeResult.message);
               logConsole(`[code] deepseek completed: ${codeResult.toolLogs.length} tool log(s)`);
             } catch (err) {
               progressMessage.content = `⚠️ /code error: ${err.message}`;
+              delete progressMessage.streaming;
               progressMessage.updatedAt = new Date().toISOString();
               logConsole(`[code] deepseek failed: ${err.message}`);
             }
@@ -1443,6 +1447,7 @@ function createCodeProgressMessage(task) {
   return {
     role: "assistant",
     content: `⏳ Выполняю задачу...\n\n${summarizeForLog(task, 240)}`,
+    streaming: true,
     createdAt: now,
     updatedAt: now,
   };

@@ -1,0 +1,9 @@
+{
+  "id": "code-review",
+  "name": "Code Review",
+  "description": "Ревью кода с поиском багов и улучшений",
+  "version": "0.1.0",
+  "promptFile": "prompt.md",
+  "commands": ["list_files", "read_file"],
+  "permissions": []
+}
