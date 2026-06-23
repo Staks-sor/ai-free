@@ -39,6 +39,17 @@ describe("ui-html inline script", () => {
     assert.doesNotMatch(html, /confirm\(t\("chat\.deleteConfirm"\)\)/);
   });
 
+  it("uses an in-app modal to confirm app updates", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /id="updateConfirmOverlay"/);
+    assert.match(html, /id="updateConfirmRun"/);
+    assert.match(html, /id="updateConfirmCancel"/);
+    assert.match(html, /document\.body\.appendChild\(updateConfirmOverlay\)/);
+    assert.match(html, /#updateConfirmOverlay\s*\{\s*z-index: 3000;/);
+    assert.match(html, /await confirmAppUpdate\(\)/);
+    assert.doesNotMatch(html, /confirm\(t\("update\.confirm"\)\)/);
+  });
+
   it("shows Coder and ESP controls for ChatGPT conversations", () => {
     const html = renderWindowHtml({ language: "ru" });
     assert.doesNotMatch(html, /if \(prov === "chatgpt"\) \{\s*coderToggleEl\.classList\.add\("hidden"\)/);

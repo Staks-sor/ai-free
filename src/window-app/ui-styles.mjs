@@ -443,6 +443,9 @@ export const STYLES = `
     .confirmOverlay {
       align-items: center;
     }
+    #updateConfirmOverlay {
+      z-index: 3000;
+    }
     .confirmPanel {
       width: min(420px, 92vw);
     }
@@ -454,6 +457,9 @@ export const STYLES = `
       color: var(--muted);
       font-size: 13px;
       line-height: 1.5;
+    }
+    .confirmMessage {
+      white-space: pre-line;
     }
     .confirmTarget {
       margin-bottom: 18px;

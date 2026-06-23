@@ -122,6 +122,21 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           </div>
         </div>
       </div>
+      <div id="updateConfirmOverlay" class="settingsOverlay confirmOverlay hidden" aria-hidden="true">
+        <div class="settingsPanel confirmPanel" role="dialog" aria-modal="true" aria-labelledby="updateConfirmTitle">
+          <div class="settingsHead">
+            <h2 id="updateConfirmTitle">${t("update.install")}</h2>
+            <button id="updateConfirmClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
+          </div>
+          <div class="confirmBody">
+            <p id="updateConfirmMessage" class="confirmMessage">${t("update.confirm")}</p>
+            <div class="confirmActions">
+              <button id="updateConfirmCancel" class="iconBtn" type="button">${t("newChat.cancel")}</button>
+              <button id="updateConfirmRun" class="iconBtn primaryBtn" type="button">${t("update.install")}</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div id="chatList" class="chatList"></div>
     </aside>
       <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
@@ -332,6 +347,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     applySavedComposerHeight();
     setupComposerResize();
 
+    // The update modal is declared near the refresh button, but it must render as a
+    // window-level overlay instead of being clipped by the sidebar.
+    document.body.appendChild(updateConfirmOverlay);
+
     document.getElementById("refreshBtn").addEventListener("click", loadState);
 
     function closeDeleteChatModal(confirmed = false) {
@@ -359,9 +378,39 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     deleteChatOverlay.addEventListener("click", (event) => {
       if (event.target === deleteChatOverlay) closeDeleteChatModal(false);
     });
+
+    let updateConfirmResolver = null;
+    function closeUpdateConfirmModal(confirmed = false) {
+      updateConfirmOverlay.classList.add("hidden");
+      updateConfirmOverlay.setAttribute("aria-hidden", "true");
+      const resolve = updateConfirmResolver;
+      updateConfirmResolver = null;
+      resolve?.(confirmed);
+    }
+
+    function confirmAppUpdate() {
+      if (updateConfirmResolver) closeUpdateConfirmModal(false);
+      updateConfirmOverlay.classList.remove("hidden");
+      updateConfirmOverlay.setAttribute("aria-hidden", "false");
+      updateConfirmRun.focus();
+      return new Promise((resolve) => {
+        updateConfirmResolver = resolve;
+      });
+    }
+
+    updateConfirmRun.addEventListener("click", () => closeUpdateConfirmModal(true));
+    updateConfirmCancel.addEventListener("click", () => closeUpdateConfirmModal(false));
+    updateConfirmClose.addEventListener("click", () => closeUpdateConfirmModal(false));
+    updateConfirmOverlay.addEventListener("click", (event) => {
+      if (event.target === updateConfirmOverlay) closeUpdateConfirmModal(false);
+    });
+
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !deleteChatOverlay.classList.contains("hidden")) {
         closeDeleteChatModal(false);
+      }
+      if (event.key === "Escape" && !updateConfirmOverlay.classList.contains("hidden")) {
+        closeUpdateConfirmModal(false);
       }
     });
 
@@ -3439,7 +3488,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       checkBtn.addEventListener("click", check);
       installBtn.addEventListener("click", async () => {
         if (!lastCheck?.updateAvailable) return;
-        if (!confirm(t("update.confirm"))) return;
+        if (!await confirmAppUpdate()) return;
         checkBtn.disabled = true;
         installBtn.disabled = true;
         status.textContent = t("update.installing");

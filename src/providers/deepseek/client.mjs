@@ -358,6 +358,11 @@ export class DeepSeekChatClient {
     return /biz_code\s*9/i.test(msg) || /invalid ref file id/i.test(msg);
   }
 
+  static _isInvalidMessageIdError(error) {
+    const msg = String(error?.message || "");
+    return /biz_code\s*26/i.test(msg) || /invalid message id/i.test(msg);
+  }
+
   // Polling статуса файла после upload. Картинки 3–15+ сек (PENDING → PARSING → SUCCESS).
   async waitForFileReady(fileId, { timeoutMs = 120000, intervalMs = 800, settleMs = 1200 } = {}) {
     const deadline = Date.now() + timeoutMs;
@@ -416,10 +421,26 @@ export class DeepSeekChatClient {
   // Completion с ref_file_ids: при biz_code 9 повторно ждём готовность файлов и ретраим.
   async complete(args) {
     const refFileIds = Array.isArray(args?.refFileIds) ? args.refFileIds.filter(Boolean) : [];
-    if (!refFileIds.length) {
-      return await this._withReauth(() => this._completeOnce(args));
+    return await this._withReauth(() => this._completeWithInvalidMessageRetry(args, refFileIds));
+  }
+
+  async _completeWithInvalidMessageRetry(args, refFileIds) {
+    try {
+      if (!refFileIds.length) {
+        return await this._completeOnce(args);
+      }
+      return await this._completeOnceWithRefRetry(args, refFileIds);
+    } catch (error) {
+      if (!args?.parentMessageId || !DeepSeekChatClient._isInvalidMessageIdError(error)) {
+        throw error;
+      }
+      console.log("[complete] DeepSeek rejected parent_message_id, retrying once with a fresh message chain…");
+      const retryArgs = { ...args, parentMessageId: null };
+      if (!refFileIds.length) {
+        return await this._completeOnce(retryArgs);
+      }
+      return await this._completeOnceWithRefRetry(retryArgs, refFileIds);
     }
-    return await this._withReauth(() => this._completeOnceWithRefRetry(args, refFileIds));
   }
 
   async _completeOnceWithRefRetry(args, refFileIds, { maxAttempts = 4 } = {}) {
