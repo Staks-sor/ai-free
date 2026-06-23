@@ -977,17 +977,36 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     let newChatSelectedProvider = localStorage.getItem(PROVIDER_PICK_KEY) || "deepseek";
     let newChatSelectedMode = localStorage.getItem(NEWCHAT_MODE_KEY) || "fast";
 
-    async function connectProvider(id) {
+    async function connectProvider(id, { confirmFirst = true } = {}) {
       const info = PROVIDER_INFO[id];
       if (!info) return;
       const label = info.label;
-      if (!confirm(
+      const providerButton = newChatProviderPicker.querySelector('[data-provider="' + id + '"] .reconnectLink');
+      if (providerButton?.disabled) return;
+      if (confirmFirst && !confirm(
         t("provider.connectConfirm", { label }),
       )) return;
+      if (providerButton) providerButton.disabled = true;
       try {
         const r = await fetch("/api/providers/" + id + "/login", { method: "POST" });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+        if (j.loginStarted) {
+          for (let attempt = 0; attempt < 120; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            await refreshAvailableProviders();
+            if (availableProviders.includes(id)) {
+              newChatSelectedProvider = id;
+              localStorage.setItem(PROVIDER_PICK_KEY, id);
+              renderProviderPicker();
+              renderModePickerForProvider();
+              alert(t("provider.connectedAlert", { label }));
+              return;
+            }
+          }
+          alert(t("provider.tokenMissing", { id }));
+          return;
+        }
         await refreshAvailableProviders();
         if (availableProviders.includes(id)) {
           newChatSelectedProvider = id;
@@ -1000,6 +1019,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
       } catch (e) {
         alert(t("provider.connectFailed", { label, message: e.message }));
+      } finally {
+        if (providerButton) providerButton.disabled = false;
       }
     }
 
@@ -1021,7 +1042,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "providerOption " + id
-          + (id === newChatSelectedProvider && isAuthed ? " active" : "")
+          + (id === newChatSelectedProvider ? " active" : "")
           + (!isAuthed ? " needsAuth" : "");
         btn.dataset.provider = id;
         btn.dataset.authed = isAuthed ? "1" : "0";
@@ -1029,8 +1050,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           '<div class="providerOptionTitle"></div>' +
           '<div class="providerOptionSub"></div>' +
           (isAuthed 
-            ? '<span class="reconnectLink success" title="' + t("provider.connectedTitle") + '">' + t("provider.connected") + '</span>'
-            : '<span class="reconnectLink danger" title="' + t("provider.authorizeTitle") + '">' + t("provider.authorize") + '</span>');
+            ? '<button type="button" class="reconnectLink success" title="' + t("provider.connectedTitle") + '">' + t("provider.connected") + '</button>'
+            : '<button type="button" class="reconnectLink danger" title="' + t("provider.authorizeTitle") + '">' + t("provider.authorize") + '</button>');
         btn.querySelector(".providerOptionTitle").textContent = info.icon ? (info.icon + " " + info.label) : info.label;
         btn.querySelector(".providerOptionSub").textContent = info.sub;
         newChatProviderPicker.appendChild(btn);
@@ -1136,6 +1157,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         displayParts.push(attachments.map((a) => "📎 " + a.name).join("\\n"));
       }
       const displayForChat = displayParts.join("\\n\\n");
+      const sendProvider = activeConversation.provider || "deepseek";
+
+      await refreshAvailableProviders();
+      if (!availableProviders.includes(sendProvider)) {
+        setStatus(t("provider.authorizeTitle"));
+        await connectProvider(sendProvider, { confirmFirst: false });
+        await refreshAvailableProviders();
+        if (!availableProviders.includes(sendProvider)) {
+          setStatus(t("provider.tokenMissing", { id: sendProvider }), true);
+          return;
+        }
+        setStatus("");
+      }
 
       sending = true;
       setComposerEnabled(false);

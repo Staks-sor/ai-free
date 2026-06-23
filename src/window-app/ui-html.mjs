@@ -574,14 +574,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const createFolder = newCreateFolder.checked;
       newFormError.classList.add("hidden");
       newFormError.textContent = "";
-      if (!availableProviders.includes(newChatSelectedProvider)) {
-        await connectProvider(newChatSelectedProvider);
-        if (!availableProviders.includes(newChatSelectedProvider)) {
-          newFormError.textContent = t("provider.tokenMissing", { id: newChatSelectedProvider });
-          newFormError.classList.remove("hidden");
-          return;
-        }
-      }
       setStatus(t("newChat.creating"));
       try {
         const data = await api("/api/conversations", {
@@ -1045,14 +1037,17 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     let newChatSelectedProvider = localStorage.getItem(PROVIDER_PICK_KEY) || "deepseek";
     let newChatSelectedMode = localStorage.getItem(NEWCHAT_MODE_KEY) || "fast";
 
-    async function connectProvider(id) {
+    async function connectProvider(id, { confirmFirst = true } = {}) {
       const info = PROVIDER_INFO[id];
       if (!info) return;
       const label = info.label;
+      const providerButton = newChatProviderPicker.querySelector('[data-provider="' + id + '"] .reconnectLink');
+      if (providerButton?.disabled) return;
       const confirmKey = id === "chatgpt" ? "provider.chatgptConnectConfirm" : "provider.connectConfirm";
-      if (!confirm(
+      if (confirmFirst && !confirm(
         t(confirmKey, { label }),
       )) return;
+      if (providerButton) providerButton.disabled = true;
       try {
         const r = await fetch("/api/providers/" + id + "/login", { method: "POST" });
         const j = await r.json().catch(() => ({}));
@@ -1060,7 +1055,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         if (j.embedLogin && id === "chatgpt") {
           setAgentDrawerTab("browser");
           openAgentDrawer();
+          notifyBrowserTab("chatgpt", { force: true });
           alert(t("provider.chatgptEmbedLogin"));
+        }
+        if (j.loginStarted || j.embedLogin) {
           for (let attempt = 0; attempt < 120; attempt += 1) {
             await new Promise((resolve) => setTimeout(resolve, 5000));
             await refreshAvailableProviders();
@@ -1073,7 +1071,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
               return;
             }
           }
-          alert(t("provider.chatgptEmbedLoginTimeout", { label }));
+          alert(id === "chatgpt" ? t("provider.chatgptEmbedLoginTimeout", { label }) : t("provider.tokenMissing", { id }));
           return;
         }
         await refreshAvailableProviders();
@@ -1088,6 +1086,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
       } catch (e) {
         alert(t("provider.connectFailed", { label, message: e.message }));
+      } finally {
+        if (providerButton) providerButton.disabled = false;
       }
     }
 
@@ -1109,7 +1109,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "providerOption " + id
-          + (id === newChatSelectedProvider && isAuthed ? " active" : "")
+          + (id === newChatSelectedProvider ? " active" : "")
           + (!isAuthed ? " needsAuth" : "");
         btn.dataset.provider = id;
         btn.dataset.authed = isAuthed ? "1" : "0";
@@ -1117,8 +1117,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           '<div class="providerOptionTitle"></div>' +
           '<div class="providerOptionSub"></div>' +
           (isAuthed 
-            ? '<span class="reconnectLink success" title="' + t("provider.connectedTitle") + '">' + t("provider.connected") + '</span>'
-            : '<span class="reconnectLink danger" title="' + t("provider.authorizeTitle") + '">' + t("provider.authorize") + '</span>');
+            ? '<button type="button" class="reconnectLink success" title="' + t("provider.connectedTitle") + '">' + t("provider.connected") + '</button>'
+            : '<button type="button" class="reconnectLink danger" title="' + t("provider.authorizeTitle") + '">' + t("provider.authorize") + '</button>');
         btn.querySelector(".providerOptionTitle").textContent = info.icon ? (info.icon + " " + info.label) : info.label;
         btn.querySelector(".providerOptionSub").textContent = info.sub;
         newChatProviderPicker.appendChild(btn);
@@ -1165,7 +1165,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       // Запускаем авторизацию ТОЛЬКО если кликнули по кнопке НЕавторизованного провайдера.
       // Если провайдер уже подключен, клик по зеленому бейджу просто выбирает его!
       const reconnectBtn = event.target.closest(".reconnectLink");
-      if (opt.dataset.authed !== "1") {
+      if (reconnectBtn && opt.dataset.authed !== "1") {
         event.stopPropagation();
         await connectProvider(id);
         return;
@@ -1190,9 +1190,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       await refreshModelCatalog();
       await refreshAgentRoles();
       await refreshAvailableProviders();
-      if (!availableProviders.includes(newChatSelectedProvider) && availableProviders.length) {
-        newChatSelectedProvider = availableProviders[0];
-      }
       renderProviderPicker();
       renderModePickerForProvider();
     })();
@@ -1224,6 +1221,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         displayParts.push(attachments.map((a) => "📎 " + a.name).join("\\n"));
       }
       const displayForChat = displayParts.join("\\n\\n");
+      const sendProvider = activeConversation.provider || "deepseek";
+
+      await refreshAvailableProviders();
+      if (!availableProviders.includes(sendProvider)) {
+        setStatus(t("provider.authorizeTitle"));
+        await connectProvider(sendProvider, { confirmFirst: false });
+        await refreshAvailableProviders();
+        if (!availableProviders.includes(sendProvider)) {
+          setStatus(t("provider.tokenMissing", { id: sendProvider }), true);
+          return;
+        }
+        setStatus("");
+      }
 
       sending = true;
       setComposerEnabled(false);
@@ -1243,7 +1253,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         // (получаем file_id для vision-completion).
         const refFileIds = [];
         let inlineImages = [];
-        const sendProvider = activeConversation.provider || "deepseek";
         if (imageFiles.length) {
           if (sendProvider === "chatgpt") {
             inlineImages = imageFiles.map((img) => ({

@@ -66,6 +66,7 @@ export async function runWindowApp({
   // Lazy init Qwen-клиента + авто-relogin (как DeepSeek AuthManager).
   let qwenClient = null;
   let qwenAuthManager = null;
+  const providerLoginJobs = new Map();
 
   async function getQwenAuthManager() {
     if (!qwenAuthManager) {
@@ -414,13 +415,31 @@ export async function runWindowApp({
           return sendJson(res, { error: `Unknown provider: ${providerId}` }, 404);
         }
         try {
-          await provider.login();
-          if (providerId === "qwen") {
-            const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
-            await resetQwenBrowserProxy();
-            qwenClient = null;
+          if (providerLoginJobs.has(providerId)) {
+            return sendJson(res, {
+              ok: true,
+              loginStarted: true,
+              alreadyRunning: true,
+              hasAuth: provider.hasAuth(),
+            });
           }
-          return sendJson(res, { ok: true, hasAuth: provider.hasAuth() });
+          const loginJob = (async () => {
+            await provider.login();
+            if (providerId === "qwen") {
+              const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
+              await resetQwenBrowserProxy();
+              qwenClient = null;
+            }
+          })();
+          providerLoginJobs.set(providerId, loginJob);
+          loginJob
+            .catch((error) => {
+              console.error(`[provider-login] ${providerId} failed:`, error);
+            })
+            .finally(() => {
+              providerLoginJobs.delete(providerId);
+            });
+          return sendJson(res, { ok: true, loginStarted: true, hasAuth: provider.hasAuth() });
         } catch (error) {
           return sendJson(res, { error: error.message }, 500);
         }
@@ -696,7 +715,7 @@ export async function runWindowApp({
         // Сессию DeepSeek создаём только для DeepSeek-чатов. У Qwen своя модель чатов,
         // там нет понятия "сессии перед сообщением" в том же виде.
         const _provider = String(body.provider || "deepseek");
-        const sessionId = _provider === "deepseek" ? await client.createSession() : null;
+        const sessionId = null;
         const now = new Date().toISOString();
         const rawTitle = String(body.title || "").trim();
         // Провайдер и режим фиксируются при создании чата.
@@ -1098,6 +1117,10 @@ export async function runWindowApp({
         // С картинками поиск обычно ломает vision-completion (ref_file_ids).
         if (refFileIds.length > 0) {
           useSearch = false;
+        }
+        if (!conversation.sessionId) {
+          conversation.sessionId = await client.createSession();
+          saveWindowState(workspaceRoot, state);
         }
 
         const now = new Date().toISOString();

@@ -135,6 +135,7 @@ export async function runWindowApp({
   let qwenClient = null;
   let qwenAuthManager = null;
   let chatGPTClient = null;
+  const providerLoginJobs = new Map();
 
   async function getQwenAuthManager() {
     if (!qwenAuthManager) {
@@ -843,16 +844,34 @@ export async function runWindowApp({
               hasAuth: provider.hasAuth(),
             });
           }
-          await provider.login();
-          if (providerId === "qwen") {
-            const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
-            await resetQwenBrowserProxy();
-            qwenClient = null;
+          if (providerLoginJobs.has(providerId)) {
+            return sendJson(res, {
+              ok: true,
+              loginStarted: true,
+              alreadyRunning: true,
+              hasAuth: provider.hasAuth(),
+            });
           }
-          if (providerId === "chatgpt") {
-            chatGPTClient = null;
-          }
-          return sendJson(res, { ok: true, hasAuth: provider.hasAuth() });
+          const loginJob = (async () => {
+            await provider.login();
+            if (providerId === "qwen") {
+              const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
+              await resetQwenBrowserProxy();
+              qwenClient = null;
+            }
+            if (providerId === "chatgpt") {
+              chatGPTClient = null;
+            }
+          })();
+          providerLoginJobs.set(providerId, loginJob);
+          loginJob
+            .catch((error) => {
+              console.error(`[provider-login] ${providerId} failed:`, error);
+            })
+            .finally(() => {
+              providerLoginJobs.delete(providerId);
+            });
+          return sendJson(res, { ok: true, loginStarted: true, hasAuth: provider.hasAuth() });
         } catch (error) {
           return sendJson(res, { error: error.message }, 500);
         }
@@ -1154,17 +1173,9 @@ export async function runWindowApp({
           return sendJson(res, { error: `Провайдер "${requestedProvider}" не поддерживается.` }, 400);
         }
         const provider = requestedProvider;
-        const { getProvider } = await import("../providers/registry.mjs");
-        if (provider === "chatgpt") {
-          await refreshChatGPTAuthFromOpenBrowser();
-        }
-        const providerEntry = getProvider(provider);
-        if (!providerEntry?.hasAuth()) {
-          return sendJson(res, { error: `Провайдер "${provider}" не авторизован. Сначала подключи его в окне создания чата.` }, 401);
-        }
         // Сессию DeepSeek создаём только для DeepSeek-чатов. У Qwen и ChatGPT свои
         // web-диалоги, которые появляются при первом сообщении.
-        const sessionId = provider === "deepseek" ? await client.createSession() : null;
+        const sessionId = null;
         const now = new Date().toISOString();
         const rawTitle = String(body.title || "").trim();
         // Допустимые режимы per-provider. Если режим не из набора — fallback на дефолт провайдера.
@@ -1956,6 +1967,10 @@ export async function runWindowApp({
         // С картинками поиск обычно ломает vision-completion (ref_file_ids).
         if (refFileIds.length > 0) {
           useSearch = false;
+        }
+        if (!conversation.sessionId) {
+          conversation.sessionId = await client.createSession();
+          saveWindowState(workspaceRoot, state);
         }
 
         const now = new Date().toISOString();

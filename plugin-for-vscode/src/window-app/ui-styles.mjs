@@ -1336,6 +1336,12 @@ export const STYLES = `
       transition: all 120ms ease;
       text-transform: none;
       border: 1px solid transparent;
+      font-family: inherit;
+      line-height: 1.2;
+    }
+    .reconnectLink:disabled {
+      cursor: wait;
+      opacity: 0.65;
     }
     .reconnectLink.success {
       color: #22c55e;
