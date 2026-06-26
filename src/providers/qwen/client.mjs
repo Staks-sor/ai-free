@@ -30,6 +30,11 @@ import {
 import { getQwenBrowserProxy, resetQwenBrowserProxy } from "./browser-proxy.mjs";
 import { buildQwenCompletionPayload } from "./completion-payload.mjs";
 
+export function isQwenTransientBrowserTransportError(error) {
+  const message = String(error?.message || error || "");
+  return /Execution context was destroyed|most likely because of a navigation|Target closed|Page closed|Context closed|Timeout .* exceeded|qwen_page_evaluate_timeout|net::ERR_ABORTED|Failed to fetch|request is finished/i.test(message);
+}
+
 function throwIfQwenAuthFailure(status, text, context) {
   try {
     throwIfQwenSessionExpiredFromHttp(status, text, context);
@@ -244,46 +249,53 @@ export class QwenChatClient {
     // Бандл chat.qwen.ai сам подписывает запрос свежим bx-ua.
     if (QWEN_TRANSPORT === "browser") {
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const proxy = await getQwenBrowserProxy({ debug: this.debug });
-        const useLiveStream = typeof onText === "function" || typeof onThinking === "function";
-        const streamParser = useLiveStream
-          ? createQwenIncrementalParser({ onText, onThinking })
-          : null;
-        const result = useLiveStream
-          ? await proxy.proxyFetchStream({
-            url,
-            body: bodyStr,
-            chatId,
-            onRawChunk: (chunk) => streamParser.push(chunk),
-          })
-          : await proxy.proxyFetch({ url, body: bodyStr, chatId });
+        try {
+          const proxy = await getQwenBrowserProxy({ debug: this.debug });
+          const useLiveStream = typeof onText === "function" || typeof onThinking === "function";
+          const streamParser = useLiveStream
+            ? createQwenIncrementalParser({ onText, onThinking })
+            : null;
+          const result = useLiveStream
+            ? await proxy.proxyFetchStream({
+              url,
+              body: bodyStr,
+              chatId,
+              onRawChunk: (chunk) => streamParser.push(chunk),
+            })
+            : await proxy.proxyFetch({ url, body: bodyStr, chatId });
 
-        if (this.debug) {
-          try {
-            fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
-            fs.writeFileSync(
-              path.join(QWEN_DEBUG_DIR, "last-response.txt"),
-              `# transport=browser, stream=${useLiveStream}, status=${result.status}, content-type=${result.contentType}, bytes=${result.text?.length || 0}\n\n${result.text || ""}`,
-            );
-            console.log(`[qwen] dumped response → ${path.join(QWEN_DEBUG_DIR, "last-response.txt")}`);
-          } catch {}
-        }
+          if (this.debug) {
+            try {
+              fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
+              fs.writeFileSync(
+                path.join(QWEN_DEBUG_DIR, "last-response.txt"),
+                `# transport=browser, stream=${useLiveStream}, status=${result.status}, content-type=${result.contentType}, bytes=${result.text?.length || 0}\n\n${result.text || ""}`,
+              );
+              console.log(`[qwen] dumped response → ${path.join(QWEN_DEBUG_DIR, "last-response.txt")}`);
+            } catch {}
+          }
 
-        if (!result.ok) {
-          throwIfQwenAuthFailure(result.status, result.text, "completion (browser)");
-        }
+          if (!result.ok) {
+            throwIfQwenAuthFailure(result.status, result.text, "completion (browser)");
+          }
 
-        const parsed = useLiveStream
-          ? streamParser.finish(result.text)
-          : parseQwenResponseText(result.text, result.contentType, onText);
+          const parsed = useLiveStream
+            ? streamParser.finish(result.text)
+            : parseQwenResponseText(result.text, result.contentType, onText);
 
-        if (attempt < 2 && isQwenRecoverableStreamError(parsed, result.text)) {
-          if (this.debug) console.log("[qwen] recoverable stream error, resetting browser proxy…");
+          if (attempt < 2 && isQwenRecoverableStreamError(parsed, result.text)) {
+            if (this.debug) console.log("[qwen] recoverable stream error, resetting browser proxy…");
+            await resetQwenBrowserProxy();
+            continue;
+          }
+
+          return finalizeQwenCompletionResult(parsed, result.text, "completion (browser)");
+        } catch (error) {
+          if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) throw error;
+          if (this.debug) console.log(`[qwen] transient browser transport error, resetting proxy and retrying: ${error.message}`);
           await resetQwenBrowserProxy();
           continue;
         }
-
-        return finalizeQwenCompletionResult(parsed, result.text, "completion (browser)");
       }
     }
 

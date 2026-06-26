@@ -16,7 +16,12 @@ import path from "node:path";
 import { QWEN_BASE_URL, QWEN_DEFAULT_MODEL } from "./config.mjs";
 import { qwenBaseHeaders } from "./headers.mjs";
 import { isQwenAuthError } from "./auth-manager.mjs";
-import { getQwenBrowserProxy } from "./browser-proxy.mjs";
+import { getQwenBrowserProxy, resetQwenBrowserProxy } from "./browser-proxy.mjs";
+
+export function isQwenTransientBrowserTransportError(error) {
+  const message = String(error?.message || error || "");
+  return /Execution context was destroyed|most likely because of a navigation|Target closed|Page closed|Context closed|Timeout .* exceeded|qwen_page_evaluate_timeout|net::ERR_ABORTED|Failed to fetch|request is finished/i.test(message);
+}
 
 function throwIfQwenAuthFailure(status, text, context) {
   const snippet = String(text || "").slice(0, 800);
@@ -208,25 +213,33 @@ export class QwenChatClient {
     // ОСНОВНОЙ ПУТЬ: запрос через невидимый Playwright (browser-proxy).
     // Бандл chat.qwen.ai сам подписывает запрос свежим bx-ua.
     if (QWEN_TRANSPORT === "browser") {
-      const proxy = await getQwenBrowserProxy({ debug: this.debug });
-      const result = await proxy.proxyFetch({ url, body: bodyStr, chatId });
-
-      if (this.debug) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
-          fs.writeFileSync(
-            path.join(QWEN_DEBUG_DIR, "last-response.txt"),
-            `# transport=browser, status=${result.status}, content-type=${result.contentType}, bytes=${result.text?.length || 0}\n\n${result.text || ""}`,
-          );
-          console.log(`[qwen] dumped response → ${path.join(QWEN_DEBUG_DIR, "last-response.txt")}`);
-        } catch {}
-      }
+          const proxy = await getQwenBrowserProxy({ debug: this.debug });
+          const result = await proxy.proxyFetch({ url, body: bodyStr, chatId });
 
-      if (!result.ok) {
-        throwIfQwenAuthFailure(result.status, result.text, "completion (browser)");
-      }
+          if (this.debug) {
+            try {
+              fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
+              fs.writeFileSync(
+                path.join(QWEN_DEBUG_DIR, "last-response.txt"),
+                `# transport=browser, status=${result.status}, content-type=${result.contentType}, bytes=${result.text?.length || 0}\n\n${result.text || ""}`,
+              );
+              console.log(`[qwen] dumped response → ${path.join(QWEN_DEBUG_DIR, "last-response.txt")}`);
+            } catch {}
+          }
 
-      return parseQwenResponseText(result.text, result.contentType, onText);
+          if (!result.ok) {
+            throwIfQwenAuthFailure(result.status, result.text, "completion (browser)");
+          }
+
+          return parseQwenResponseText(result.text, result.contentType, onText);
+        } catch (error) {
+          if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) throw error;
+          if (this.debug) console.log(`[qwen] transient browser transport error, resetting proxy and retrying: ${error.message}`);
+          await resetQwenBrowserProxy();
+        }
+      }
     }
 
     // FALLBACK: прямой fetch с bx-ua из .env (обычно ломается на Bad_Request).

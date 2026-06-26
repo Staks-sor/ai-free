@@ -9,7 +9,7 @@ import {
   isQwenSessionExpiredText,
 } from "../src/providers/qwen/session-errors.mjs";
 import { isQwenAuthError } from "../src/providers/qwen/auth-manager.mjs";
-import { formatQwenUserFacingError } from "../src/providers/qwen/client.mjs";
+import { formatQwenUserFacingError, isQwenTransientBrowserTransportError } from "../src/providers/qwen/client.mjs";
 
 describe("qwen session errors", () => {
   it("treats Bad_Request internal error as anti-bot, not expired session", () => {
@@ -44,5 +44,10 @@ describe("qwen session errors", () => {
   it("does not treat generic internal_error assistant text as session expired", () => {
     const text = "Qwen вернул ошибку (internal_error):\n\nПроизошла непредвиденная ошибка.";
     assert.equal(isQwenSessionExpiredText(text), false);
+  });
+
+  it("detects browser navigation loss as a transient transport error", () => {
+    const error = new Error("page.evaluate: Execution context was destroyed, most likely because of a navigation.");
+    assert.equal(isQwenTransientBrowserTransportError(error), true);
   });
 });
