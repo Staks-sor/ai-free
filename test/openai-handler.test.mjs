@@ -95,6 +95,50 @@ describe("OpenAI-compatible handler", () => {
     });
   });
 
+  it("buffers split XML tool_call chunks and emits OpenAI tool calls", () => {
+    const res = makeWritableResponse();
+    const parser = new StreamParser("qwen3.7-max", res);
+
+    parser.onText("Сейчас проверю.\n<tool");
+    parser.onText('_call name="read_file">');
+    parser.onText('{"path":"src/app.js"}');
+    parser.onText("</tool");
+    parser.onText("_call>");
+    parser.onEnd();
+
+    const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
+    const content = events
+      .map((event) => event.choices[0].delta.content || "")
+      .join("");
+
+    assert.equal(content, "Сейчас проверю.\n");
+    assert.equal(content.includes("<tool"), false);
+    assert.equal(events.some((event) => event.choices[0].delta.tool_calls?.[0]?.function?.name === "read_file"), true);
+    assert.equal(events.at(-1).choices[0].finish_reason, "tool_calls");
+  });
+
+  it("buffers split Qwen function XML chunks and emits OpenAI tool calls", () => {
+    const res = makeWritableResponse();
+    const parser = new StreamParser("qwen3.7-max", res);
+
+    parser.onText("<func");
+    parser.onText("tion=write_file>");
+    parser.onText("<parameter=path>src/app.js</parameter>");
+    parser.onText('<parameter=content>{"ok":true}</parameter>');
+    parser.onText("</function>");
+    parser.onEnd();
+
+    const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
+    const toolCall = events.find((event) => event.choices[0].delta.tool_calls)?.choices[0].delta.tool_calls[0];
+
+    assert.equal(toolCall.function.name, "write_file");
+    assert.deepEqual(JSON.parse(toolCall.function.arguments), {
+      path: "src/app.js",
+      content: { ok: true },
+    });
+    assert.equal(events.at(-1).choices[0].finish_reason, "tool_calls");
+  });
+
   it("terminates normal streaming text with finish_reason=stop", () => {
     const res = makeWritableResponse();
     const parser = new StreamParser("deepseek-chat", res);

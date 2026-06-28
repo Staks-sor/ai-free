@@ -164,10 +164,26 @@ async function handleChatCompletions(req, res) {
   try {
     if (mapping.provider === "qwen") {
       const runQwen = async (client) => {
-        const chatId = await client.createChat({ model: mapping.model, title: "API request" });
         if (body.stream === true) {
-          return handleQwenStream(client, chatId, prompt, modelName, mapping.model, res, { thinking, search });
+          return handleQwenStream(client, null, prompt, modelName, mapping.model, res, {
+            thinking,
+            search,
+            createChat: (currentClient) => currentClient.createChat({ model: mapping.model, title: "API request" }),
+            refreshClient: async (error) => {
+              const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
+              if (!isQwenAuthError(error)) throw error;
+              qwenClient = null;
+              const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
+              qwenClient = new QwenChatClient({
+                token: fresh.token,
+                cookieHeader: fresh.cookieHeader,
+                debug: Boolean(process.env.API_DEBUG),
+              });
+              return qwenClient;
+            },
+          });
         }
+        const chatId = await client.createChat({ model: mapping.model, title: "API request" });
         const result = await client.complete({
           chatId,
           prompt,
@@ -736,39 +752,117 @@ function toOpenAIStreamChunk(model, textDelta, isFirst = false) {
 }
 
 // Обработка streaming-запроса к Qwen.
-async function handleQwenStream(client, chatId, prompt, modelName, model, res, { thinking = false, search = false } = {}) {
+async function handleQwenStream(client, chatId, prompt, modelName, model, res, {
+  thinking = false,
+  search = false,
+  createChat = null,
+  refreshClient = null,
+} = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
+  const requestId = `qwen_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  const startedAt = Date.now();
   const parser = new StreamParser(modelName, res);
   let sawDelta = false;
+  let firstDeltaAt = 0;
   const heartbeat = setInterval(() => {
-    if (!sawDelta) writeSseRaw(res, ": qwen waiting\n\n");
-  }, 10_000);
+    if (!sawDelta) writeSseRaw(res, `: qwen waiting ${elapsedMs(startedAt)}ms\n\n`);
+  }, 3_000);
+  writeSseRaw(res, `: qwen stream opened ${requestId}\n\n`);
+
   try {
-    await client.complete({
-      chatId,
-      prompt,
-      thinking,
-      search,
-      model,
-      onText: (textDelta) => {
-        sawDelta = true;
-        parser.onText(textDelta);
-      },
-    });
+    let activeClient = client;
+    let activeChatId = chatId;
+    let lastError = null;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        if (!activeChatId) {
+          if (typeof createChat !== "function") throw new Error("Qwen stream requires chatId or createChat callback");
+          const createStartedAt = Date.now();
+          logQwenTiming(requestId, "create_chat_start", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
+          activeChatId = await createChat(activeClient);
+          logQwenTiming(requestId, "create_chat_done", {
+            attempt: attempt + 1,
+            create_chat_ms: elapsedMs(createStartedAt),
+            total_ms: elapsedMs(startedAt),
+          });
+        }
+
+        const completionStartedAt = Date.now();
+        logQwenTiming(requestId, "completion_start", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
+        await activeClient.complete({
+          chatId: activeChatId,
+          prompt,
+          thinking,
+          search,
+          model,
+          onText: (textDelta) => {
+            if (!sawDelta) {
+              sawDelta = true;
+              firstDeltaAt = Date.now();
+              logQwenTiming(requestId, "first_delta", {
+                attempt: attempt + 1,
+                ttft_ms: elapsedMs(startedAt),
+                completion_to_first_delta_ms: elapsedMs(completionStartedAt),
+              });
+            }
+            parser.onText(textDelta);
+          },
+        });
+        logQwenTiming(requestId, "completion_done", {
+          attempt: attempt + 1,
+          completion_ms: elapsedMs(completionStartedAt),
+          total_ms: elapsedMs(startedAt),
+          first_delta_ms: firstDeltaAt ? firstDeltaAt - startedAt : null,
+        });
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (sawDelta || attempt >= 1 || typeof refreshClient !== "function") throw error;
+        logQwenTiming(requestId, "retry_before_first_delta", {
+          attempt: attempt + 1,
+          total_ms: elapsedMs(startedAt),
+          error: error.message,
+        });
+        activeClient = await refreshClient(error);
+        activeChatId = null;
+      }
+    }
+
+    if (lastError) throw lastError;
     clearInterval(heartbeat);
     if (res.destroyed || res.writableEnded) return;
     parser.onEnd();
     writeSseRaw(res, "data: [DONE]\n\n");
     if (!res.destroyed && !res.writableEnded) res.end();
+    logQwenTiming(requestId, "stream_done", { total_ms: elapsedMs(startedAt) });
   } catch (e) {
     clearInterval(heartbeat);
+    logQwenTiming(requestId, "stream_error", {
+      total_ms: elapsedMs(startedAt),
+      first_delta_ms: firstDeltaAt ? firstDeltaAt - startedAt : null,
+      error: e.message,
+    });
     console.error("[API] Qwen stream error:", e.message);
     sendStreamError(res, modelName, e.message);
   }
+}
+
+function elapsedMs(startedAt) {
+  return Date.now() - startedAt;
+}
+
+function logQwenTiming(requestId, stage, fields = {}) {
+  const details = Object.entries(fields)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+    .join(" ");
+  console.log(`[API][qwen-timing] request=${requestId} stage=${stage}${details ? ` ${details}` : ""}`);
 }
 
 // Обработка streaming-запроса к ChatGPT.
@@ -1093,6 +1187,7 @@ export class StreamParser {
     this.res = res;
     this.buffer = "";
     this.isTools = false;
+    this.isXmlTools = false;
     this.toolsBuffer = "";
     this.first = true;
     this.ended = false;
@@ -1105,29 +1200,40 @@ export class StreamParser {
       this.first = false;
     }
 
-    if (!this.isTools) {
+    if (!this.isTools && !this.isXmlTools) {
       this.buffer += textDelta;
       
       // Look for multiple tool block indicators
       const idx = this.buffer.indexOf("```tool_calls");
       const idxJson = this.buffer.indexOf("```json");
+      const idxXml = findXmlToolStart(this.buffer);
 
-      if (idx !== -1 || idxJson !== -1) {
-        this.isTools = true;
-        const actualIdx = idx !== -1 ? idx : idxJson;
-        const offset = idx !== -1 ? 13 : 7;
+      if (idx !== -1 || idxJson !== -1 || idxXml !== -1) {
+        const actualIdx = earliestIndex([idx, idxJson, idxXml]);
+        if (actualIdx === idxXml) {
+          this.isXmlTools = true;
 
-        const before = this.buffer.slice(0, actualIdx);
-        if (before) {
-          this.sendChunk({ content: before });
+          const before = this.buffer.slice(0, actualIdx);
+          if (before) {
+            this.sendChunk({ content: before });
+          }
+          this.toolsBuffer = this.buffer.slice(actualIdx);
+        } else {
+          this.isTools = true;
+          const offset = actualIdx === idx ? 13 : 7;
+
+          const before = this.buffer.slice(0, actualIdx);
+          if (before) {
+            this.sendChunk({ content: before });
+          }
+          this.toolsBuffer = this.buffer.slice(actualIdx + offset);
         }
-        this.toolsBuffer = this.buffer.slice(actualIdx + offset);
       } else {
-        if (this.buffer.length > 20) {
-          const toEmit = this.buffer.slice(0, -15);
+        if (this.buffer.length > 96) {
+          const toEmit = this.buffer.slice(0, -80);
           if (toEmit) {
             this.sendChunk({ content: toEmit });
-            this.buffer = this.buffer.slice(-15);
+            this.buffer = this.buffer.slice(-80);
           }
         }
       }
@@ -1140,9 +1246,19 @@ export class StreamParser {
     if (this.ended) return;
     this.ended = true;
     let finishReason = "stop";
-    if (!this.isTools && this.buffer) {
+    if (!this.isTools && !this.isXmlTools && this.buffer) {
       // Just in case it never closes or emits normal text
       this.sendChunk({ content: this.buffer });
+    } else if (this.isXmlTools) {
+      const parsed = parseModelToolCalls(this.toolsBuffer);
+      if (parsed.calls.length) {
+        console.log(`[API] Parsed streaming XML tool calls: ${parsed.calls.length}`);
+        this.sendToolCalls(parsed.calls);
+        finishReason = "tool_calls";
+      } else {
+        console.error("[API] Error parsing XML tool calls from streaming response");
+        this.sendChunk({ content: "\n[Error parsing XML tool call from model]\n" + this.toolsBuffer });
+      }
     } else if (this.isTools) {
       // Sometimes the model outputs extra text before the array, like "[ASSISTANT]```tool_calls ["
       // Let's extract everything from the first '[' to the last ']'.
@@ -1194,19 +1310,7 @@ export class StreamParser {
         
         console.log(`[API] Parsed streaming tool calls: ${calls.length}`);
         
-        calls.forEach((call, index) => {
-            this.sendChunk({
-              tool_calls: [{
-                index,
-                id: `call_${Math.random().toString(36).slice(2, 10)}`,
-                type: "function",
-                function: {
-                  name: call.name,
-                  arguments: typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments)
-                }
-              }]
-            });
-        });
+        this.sendToolCalls(calls);
         finishReason = "tool_calls";
       } catch (e) {
         try {
@@ -1268,19 +1372,7 @@ export class StreamParser {
           
           console.log(`[API] Parsed streaming tool calls (after brace fix): ${calls.length}`);
           
-          calls.forEach((call, index) => {
-            this.sendChunk({
-              tool_calls: [{
-                index,
-                id: `call_${Math.random().toString(36).slice(2, 10)}`,
-                type: "function",
-                function: {
-                  name: call.name,
-                  arguments: typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments)
-                }
-              }]
-            });
-          });
+          this.sendToolCalls(calls);
           finishReason = "tool_calls";
         } catch (e2) {
           console.error("[API] Error parsing tool calls from streaming response:", e2.message);
@@ -1305,6 +1397,24 @@ export class StreamParser {
     if (this.res.flush) this.res.flush();
   }
 
+  sendToolCalls(calls) {
+    calls.forEach((call, index) => {
+      const name = call.name || call.tool;
+      if (!name) return;
+      this.sendChunk({
+        tool_calls: [{
+          index,
+          id: `call_${Math.random().toString(36).slice(2, 10)}`,
+          type: "function",
+          function: {
+            name,
+            arguments: typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments || {})
+          }
+        }]
+      });
+    });
+  }
+
   sendTerminalChunk(finishReason) {
     const chunk = {
       id: this.id,
@@ -1316,4 +1426,18 @@ export class StreamParser {
     sendSseEvent(this.res, chunk);
     if (this.res.flush) this.res.flush();
   }
+}
+
+function earliestIndex(indexes) {
+  return indexes.filter((idx) => idx !== -1).sort((a, b) => a - b)[0] ?? -1;
+}
+
+function findXmlToolStart(buffer) {
+  const lower = String(buffer || "").toLowerCase();
+  const starts = [
+    lower.indexOf("<tool_call"),
+    lower.indexOf("<tool_calls"),
+    lower.indexOf("<function="),
+  ].filter((idx) => idx !== -1);
+  return starts.length ? Math.min(...starts) : -1;
 }

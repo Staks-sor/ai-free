@@ -30,4 +30,32 @@ describe("model tool-call bridge", () => {
     assert.equal(parsed.content, "Обычный ответ без инструментов.");
     assert.deepEqual(parsed.calls, []);
   });
+
+  it("parses XML tool_call blocks into normalized calls", () => {
+    const parsed = parseModelToolCalls('Сейчас посмотрю.\n<tool_call name="read_file">{"path":"src/app.js"}</tool_call>');
+    assert.equal(parsed.content, "Сейчас посмотрю.");
+    assert.deepEqual(parsed.calls, [
+      {
+        name: "read_file",
+        arguments: JSON.stringify({ path: "src/app.js" }),
+      },
+    ]);
+  });
+
+  it("parses Qwen function parameter XML into normalized calls", () => {
+    const parsed = parseModelToolCalls([
+      "<function=write_file>",
+      "<parameter=path>src/app.js</parameter>",
+      '<parameter=content>{"ok":true}</parameter>',
+      "</function>",
+    ].join(""));
+
+    assert.equal(parsed.content, "");
+    assert.deepEqual(parsed.calls, [
+      {
+        name: "write_file",
+        arguments: JSON.stringify({ path: "src/app.js", content: { ok: true } }),
+      },
+    ]);
+  });
 });
