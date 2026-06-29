@@ -1,8 +1,27 @@
 <h1 align="center">AI Free</h1>
 
 <p align="center">
-  <strong>Бесплатные AI-чаты, код-агент, память и локальный API в одном приложении</strong>
+  <strong>Free local AI client for DeepSeek, Qwen and ChatGPT with API, CLI, code agent, memory and skills</strong>
 </p>
+
+AI Free turns free AI web chats into a local developer tool.
+
+Use **DeepSeek**, **Qwen** and **ChatGPT** from one desktop window, CLI, OpenAI-compatible API, Anthropic-compatible API, IDE integrations and code-agent workflows — with local memory, skills and workspace-aware chats.
+
+Good for:
+
+- developers who want a free local AI coding assistant;
+- people who use web AI chats but want API/CLI access;
+- experiments with agents, memory, skills and IDE automation.
+
+## ✨ Highlights
+
+- **One local app:** DeepSeek, Qwen and ChatGPT chats in one workspace.
+- **Developer interfaces:** desktop UI, CLI, OpenAI-compatible API and Anthropic-compatible API.
+- **Code agent:** `/code` mode with workspace file access and controlled command permissions.
+- **Memory and skills:** long-term memory, memory graph and reusable task workflows.
+- **IDE-friendly:** works with tools such as Continue, Kilo Code and PyCharm ACP-compatible flows.
+- **Local-first sessions:** provider browser sessions and app state are stored on your machine.
 
 ## 🌍 Выберите язык / Choose your language
 
@@ -25,11 +44,13 @@
   <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
 </p>
 
-> CLI и десктопное окно для бесплатных AI-веб-чатов в одном интерфейсе. Сейчас: **DeepSeek + Qwen + ChatGPT**. Кросс-платформенно — macOS, Linux, Windows.
+> Локальный AI-клиент, который превращает веб-чаты DeepSeek, Qwen и ChatGPT в инструмент для разработчика: окно чатов, CLI, совместимые API, `/code`-агент, память, skills и IDE-интеграции.
 
 ---
 
 ## ⭐ Понравилось? Поставь звезду
+
+Если AI Free экономит тебе время, поставь звезду на GitHub — это помогает проекту появляться в поиске и рекомендациях.
 
 ## 💳 Поддержать развитие
 
@@ -41,7 +62,7 @@
 
 ---
 
-Архитектурно проект разделён на модули в `src/` (auth, browser, providers, code-agent, **memory**, **skills**, agent-orchestrator, state, window-app, api, cli). Точка входа — `bin/deepseek.mjs`. Юнит-тесты: `npm test` (**190** кейсов, встроенный Node test runner). Архитектура памяти и skills — [docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md](docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md). Сценарий для видео — [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md).
+Архитектурно проект разделён на модули в `src/` (auth, browser, providers, code-agent, **memory**, **skills**, agent-orchestrator, state, window-app, api, cli). Точка входа — `bin/deepseek.mjs`. Юнит-тесты: `npm test` (**273** кейса, встроенный Node test runner). Архитектура памяти и skills — [docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md](docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md). Сценарий для видео — [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md).
 
 ## ✨ Что внутри
 
@@ -179,7 +200,7 @@ npm start
 | `npm run login-qwen` | Re-login Qwen → `~/.qwen-cli/auth.json`. |
 | `npm run import-qwen` | Импорт cookies из JSON (Chrome / Cookie Editor), без Playwright. |
 | `npm run save-creds` | Email + пароль для авто-заполнения формы DeepSeek. |
-| `npm test` | Юнит-тесты (**190** кейсов). |
+| `npm test` | Юнит-тесты (**273** кейса). |
 
 Запуск OpenAI-совместимого API (отдельный процесс):
 

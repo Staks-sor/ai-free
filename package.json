@@ -1,8 +1,36 @@
 {
   "name": "ai-free",
   "version": "0.3.3",
+  "description": "Free local AI client for DeepSeek, Qwen and ChatGPT with OpenAI-compatible API, CLI, code agent, memory and skills.",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Staks-sor/ai-free.git"
+  },
+  "homepage": "https://github.com/Staks-sor/ai-free#readme",
+  "bugs": {
+    "url": "https://github.com/Staks-sor/ai-free/issues"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "deepseek",
+    "qwen",
+    "chatgpt",
+    "openai-api",
+    "anthropic-api",
+    "ai-agent",
+    "code-agent",
+    "cli",
+    "developer-tools",
+    "automation",
+    "playwright",
+    "nodejs",
+    "local-ai",
+    "ide"
+  ],
   "bin": {
     "ai-free": "./bin/deepseek.mjs",
     "deepseek": "./bin/deepseek.mjs",
