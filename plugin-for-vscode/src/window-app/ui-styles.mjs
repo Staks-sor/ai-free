@@ -826,6 +826,125 @@ export const STYLES = `
       padding: 7px 8px;
       font-size: 12px;
     }
+    .sidebarPromos {
+      width: calc(100% - 16px);
+      margin: 0 8px 6px;
+      display: grid;
+      gap: 5px;
+      flex: 0 0 auto;
+    }
+    .sidebarPromo {
+      --promo-a: rgba(77, 124, 255, 0.18);
+      --promo-b: rgba(34, 197, 94, 0.10);
+      --promo-border: rgba(77, 124, 255, 0.34);
+      --promo-mark-bg: rgba(77, 124, 255, 0.22);
+      --promo-mark-color: #facc15;
+      border: 1px solid var(--promo-border);
+      background: linear-gradient(120deg, var(--promo-a), var(--promo-b), var(--promo-a));
+      background-size: 220% 220%;
+      color: var(--text);
+      border-radius: 7px;
+      padding: 6px 8px;
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 7px;
+      align-items: center;
+      text-decoration: none;
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16);
+      transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+      animation: sidebarPromoShift 3.8s ease-in-out infinite;
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
+    }
+    .sidebarPromo::before {
+      content: "";
+      position: absolute;
+      inset: -40% -55%;
+      background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.28) 48%, transparent 66%);
+      transform: translateX(-70%) rotate(8deg);
+      animation: sidebarPromoGlint 2.8s ease-in-out infinite;
+      pointer-events: none;
+      z-index: -1;
+    }
+    .sidebarPromo:hover {
+      border-color: color-mix(in srgb, var(--promo-border) 72%, var(--text));
+      transform: translateY(-1px);
+    }
+    .sidebarPromoGithub {
+      --promo-a: rgba(77, 124, 255, 0.22);
+      --promo-b: rgba(34, 197, 94, 0.12);
+      --promo-border: rgba(77, 124, 255, 0.42);
+      --promo-mark-bg: rgba(77, 124, 255, 0.24);
+      --promo-mark-color: #facc15;
+    }
+    .sidebarPromoAd {
+      --promo-a: rgba(250, 204, 21, 0.18);
+      --promo-b: rgba(244, 63, 94, 0.12);
+      --promo-border: rgba(250, 204, 21, 0.38);
+      --promo-mark-bg: rgba(250, 204, 21, 0.18);
+      --promo-mark-color: #fef08a;
+      animation-delay: -1.5s;
+    }
+    .sidebarPromoVibe {
+      --promo-a: rgba(20, 184, 166, 0.20);
+      --promo-b: rgba(168, 85, 247, 0.16);
+      --promo-border: rgba(20, 184, 166, 0.40);
+      --promo-mark-bg: rgba(20, 184, 166, 0.20);
+      --promo-mark-color: #5eead4;
+      animation-delay: -3s;
+    }
+    .sidebarPromoMark {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      background: var(--promo-mark-bg);
+      color: var(--promo-mark-color);
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1;
+      animation: sidebarPromoMarkPulse 2.4s ease-in-out infinite;
+    }
+    .sidebarPromoText {
+      min-width: 0;
+      display: grid;
+      gap: 1px;
+      line-height: 1.15;
+    }
+    .sidebarPromoText strong {
+      font-size: 11px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sidebarPromoText small {
+      color: var(--muted);
+      font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    @keyframes sidebarPromoShift {
+      0%, 100% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+    }
+    @keyframes sidebarPromoGlint {
+      0%, 18% { transform: translateX(-75%) rotate(8deg); opacity: 0; }
+      38% { opacity: 1; }
+      62%, 100% { transform: translateX(75%) rotate(8deg); opacity: 0; }
+    }
+    @keyframes sidebarPromoMarkPulse {
+      0%, 100% { box-shadow: 0 0 0 rgba(255, 255, 255, 0); transform: scale(1); }
+      50% { box-shadow: 0 0 16px color-mix(in srgb, var(--promo-mark-color) 46%, transparent); transform: scale(1.04); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sidebarPromo,
+      .sidebarPromo::before,
+      .sidebarPromoMark { animation: none; }
+    }
     .formField {
       display: grid;
       gap: 6px;

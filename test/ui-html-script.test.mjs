@@ -71,6 +71,8 @@ describe("ui-html inline script", () => {
     assert.match(html, /Vibe private/);
     assert.match(html, /Закрытый сервис для своих/);
     assert.match(html, /sidebarPromoShift/);
+    assert.match(html, /sidebarPromoGlint/);
+    assert.match(html, /sidebarPromoMarkPulse/);
     assert.match(html, /\.sidebarPromo\s*\{/);
   });
 

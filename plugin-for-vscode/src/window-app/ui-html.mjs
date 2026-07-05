@@ -33,6 +33,29 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         <button id="refreshBtn" class="iconBtn" title="${t("app.refresh")}">↻</button>
       </div>
       <button id="openNewChat" class="iconBtn newChatBtn" type="button">${t("app.newChat")}</button>
+      <div class="sidebarPromos" aria-label="Project links">
+        <a class="sidebarPromo sidebarPromoGithub" href="https://github.com/Staks-sor/ai-free" target="_blank" rel="noreferrer">
+          <span class="sidebarPromoMark">★</span>
+          <span class="sidebarPromoText">
+            <strong>AI Free на GitHub</strong>
+            <small>Поставить звезду и поддержать проект</small>
+          </span>
+        </a>
+        <a class="sidebarPromo sidebarPromoAd" href="mailto:hello@stas-sor.ru?subject=AI%20Free%20ad" target="_blank" rel="noreferrer">
+          <span class="sidebarPromoMark">AD</span>
+          <span class="sidebarPromoText">
+            <strong>Здесь может быть ваша реклама</strong>
+            <small>Нативно внутри AI Free</small>
+          </span>
+        </a>
+        <a class="sidebarPromo sidebarPromoVibe" href="https://vibe.stas-sor.ru/" target="_blank" rel="noreferrer">
+          <span class="sidebarPromoMark">V</span>
+          <span class="sidebarPromoText">
+            <strong>Vibe private</strong>
+            <small>Закрытый сервис для своих</small>
+          </span>
+        </a>
+      </div>
 
       <div id="newChatOverlay" class="settingsOverlay hidden" aria-hidden="true">
         <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="newChatTitle">

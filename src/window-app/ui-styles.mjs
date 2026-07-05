@@ -1023,7 +1023,20 @@ export const STYLES = `
       text-decoration: none;
       box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16);
       transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
-      animation: sidebarPromoShift 6s ease-in-out infinite;
+      animation: sidebarPromoShift 3.8s ease-in-out infinite;
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
+    }
+    .sidebarPromo::before {
+      content: "";
+      position: absolute;
+      inset: -40% -55%;
+      background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.28) 48%, transparent 66%);
+      transform: translateX(-70%) rotate(8deg);
+      animation: sidebarPromoGlint 2.8s ease-in-out infinite;
+      pointer-events: none;
+      z-index: -1;
     }
     .sidebarPromo:hover {
       border-color: color-mix(in srgb, var(--promo-border) 72%, var(--text));
@@ -1063,6 +1076,7 @@ export const STYLES = `
       font-size: 12px;
       font-weight: 900;
       line-height: 1;
+      animation: sidebarPromoMarkPulse 2.4s ease-in-out infinite;
     }
     .sidebarPromoText {
       min-width: 0;
@@ -1088,8 +1102,19 @@ export const STYLES = `
       0%, 100% { background-position: 0% 50%; }
       50% { background-position: 100% 50%; }
     }
+    @keyframes sidebarPromoGlint {
+      0%, 18% { transform: translateX(-75%) rotate(8deg); opacity: 0; }
+      38% { opacity: 1; }
+      62%, 100% { transform: translateX(75%) rotate(8deg); opacity: 0; }
+    }
+    @keyframes sidebarPromoMarkPulse {
+      0%, 100% { box-shadow: 0 0 0 rgba(255, 255, 255, 0); transform: scale(1); }
+      50% { box-shadow: 0 0 16px color-mix(in srgb, var(--promo-mark-color) 46%, transparent); transform: scale(1.04); }
+    }
     @media (prefers-reduced-motion: reduce) {
-      .sidebarPromo { animation: none; }
+      .sidebarPromo,
+      .sidebarPromo::before,
+      .sidebarPromoMark { animation: none; }
     }
     .formField {
       display: grid;
