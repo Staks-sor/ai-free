@@ -61,6 +61,19 @@ describe("ui-html inline script", () => {
     assert.match(html, /body: \{ restart: options\.restart === true \}/);
   });
 
+  it("renders compact promo links in the desktop sidebar", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /class="sidebarPromos"/);
+    assert.match(html, /https:\/\/github\.com\/Staks-sor\/ai-free/);
+    assert.match(html, /https:\/\/vibe\.stas-sor\.ru\//);
+    assert.match(html, /AI Free на GitHub/);
+    assert.match(html, /Здесь может быть ваша реклама/);
+    assert.match(html, /Vibe private/);
+    assert.match(html, /Закрытый сервис для своих/);
+    assert.match(html, /sidebarPromoShift/);
+    assert.match(html, /\.sidebarPromo\s*\{/);
+  });
+
   it("shows Coder and ESP controls for ChatGPT conversations", () => {
     const html = renderWindowHtml({ language: "ru" });
     assert.doesNotMatch(html, /if \(prov === "chatgpt"\) \{\s*coderToggleEl\.classList\.add\("hidden"\)/);
