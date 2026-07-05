@@ -1,0 +1,9 @@
+{
+  "id": "video-script",
+  "name": "Video Script",
+  "description": "Сценарии для YouTube Shorts, Reels и длинных демо-роликов",
+  "version": "0.1.0",
+  "promptFile": "prompt.md",
+  "commands": ["list_files", "read_file", "write_file"],
+  "permissions": []
+}

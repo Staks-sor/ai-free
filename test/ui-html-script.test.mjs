@@ -50,6 +50,17 @@ describe("ui-html inline script", () => {
     assert.doesNotMatch(html, /confirm\(t\("update\.confirm"\)\)/);
   });
 
+  it("shows an update toast only when an update is available", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /id="updateToast" class="updateToast hidden"/);
+    assert.match(html, /id="updateToastDownload"/);
+    assert.match(html, /function renderUpdateToast\(data\)/);
+    assert.match(html, /updateToast\.classList\.toggle\("hidden", !shouldShow\)/);
+    assert.match(html, /checkUpdateToast\(\)\.catch\(\(\) => \{\}\)/);
+    assert.match(html, /installAvailableUpdate\(availableUpdateCheck, \{ restart: true \}\)/);
+    assert.match(html, /body: \{ restart: options\.restart === true \}/);
+  });
+
   it("shows Coder and ESP controls for ChatGPT conversations", () => {
     const html = renderWindowHtml({ language: "ru" });
     assert.doesNotMatch(html, /if \(prov === "chatgpt"\) \{\s*coderToggleEl\.classList\.add\("hidden"\)/);
@@ -81,5 +92,13 @@ describe("ui-html inline script", () => {
     assert.match(html, /item\.kind === "file" && item\.type\.startsWith\("image\/"\)/);
     assert.match(html, /await addAttachmentFiles\(imageFiles, \{ fromClipboard: true \}\)/);
     assert.match(html, /event\.preventDefault\(\)/);
+  });
+
+  it("polls external state changes and labels Telegram messages", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /const EXTERNAL_STATE_POLL_MS = 2500/);
+    assert.match(html, /setInterval\(refreshExternalState, EXTERNAL_STATE_POLL_MS\)/);
+    assert.match(html, /conversationSummaryChanged\(previousActiveSummary, nextActiveSummary\)/);
+    assert.match(html, /message\.source === "telegram" \? t\("chat\.you"\) \+ " · Telegram"/);
   });
 });

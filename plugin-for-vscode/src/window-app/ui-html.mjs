@@ -24,6 +24,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 <body>
   <div class="app">
     <aside class="sidebar">
+      <nav class="sidebarMenu" aria-label="${t("sidebar.menu")}">
+        <button type="button" id="sidebarMenuPlugins" class="sidebarMenuBtn">${t("sidebar.plugins")}</button>
+        <button type="button" id="sidebarMenuTelegram" class="sidebarMenuBtn">${t("sidebar.telegram")}</button>
+      </nav>
       <div class="sideHead">
         <div class="brand">${t("app.workspace")}</div>
         <button id="refreshBtn" class="iconBtn" title="${t("app.refresh")}">↻</button>
@@ -118,25 +122,50 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           </div>
         </div>
       </div>
+      <div id="updateConfirmOverlay" class="settingsOverlay confirmOverlay hidden" aria-hidden="true">
+        <div class="settingsPanel confirmPanel" role="dialog" aria-modal="true" aria-labelledby="updateConfirmTitle">
+          <div class="settingsHead">
+            <h2 id="updateConfirmTitle">${t("update.install")}</h2>
+            <button id="updateConfirmClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
+          </div>
+          <div class="confirmBody">
+            <p id="updateConfirmMessage" class="confirmMessage">${t("update.confirm")}</p>
+            <div class="confirmActions">
+              <button id="updateConfirmCancel" class="iconBtn" type="button">${t("newChat.cancel")}</button>
+              <button id="updateConfirmRun" class="iconBtn primaryBtn" type="button">${t("update.install")}</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div id="chatList" class="chatList"></div>
     </aside>
       <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
     <main class="main">
       <header class="topbar">
-        <div id="activeTitleRow" class="titleRow">
+        <div id="activeTitleRow" class="titleRow topbarTitle">
           <div id="activeTitle" class="title">${t("app.noChat")}</div>
+          <div id="workspace" class="workspace"></div>
+        </div>
+        <div class="topbarControls">
           <span id="activeMode" class="modeBadge hidden"></span>
           <select id="modelPicker" class="modelPicker hidden" title="${t("topbar.model")}"></select>
           <select id="rolePicker" class="rolePicker hidden" title="${t("topbar.role")}"></select>
-          <button id="coderToggle" class="coderToggle hidden" type="button" title="${t("topbar.coderTitle")}">🛠 Coder</button>
-          <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="${t("topbar.hardwareTitle")}">ESP</button>
-          <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">${t("topbar.pipeline")}</button>
+          <button id="agentDrawerBtn" class="iconBtn agentDrawerBtn" type="button" title="${t("agentDrawer.title")}">🧠</button>
           <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="${t("topbar.flowTitle")}">${t("topbar.flow")}</button>
         </div>
-        <div id="workspace" class="workspace"></div>
-        <button id="themeBtn" class="iconBtn themeBtn" type="button" title="${t("topbar.theme")}">◐</button>
-        <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="${t("topbar.settings")}">⚙</button>
+        <div class="topbarActions">
+          <button id="themeBtn" class="iconBtn themeBtn" type="button" title="${t("topbar.theme")}">◐</button>
+          <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="${t("topbar.settings")}">⚙</button>
+          <button id="quitBtn" class="iconBtn quitBtn" type="button" title="${t("topbar.quit")}">⏻</button>
+        </div>
       </header>
+
+      <div id="shutdownOverlay" class="shutdownOverlay hidden" aria-hidden="true">
+        <div class="shutdownPanel">
+          <div id="shutdownTitle" class="shutdownTitle">${t("shutdown.gracefulTitle")}</div>
+          <div id="shutdownSub" class="shutdownSub">${t("shutdown.stoppingTasks")}</div>
+        </div>
+      </div>
 
       <div id="settingsOverlay" class="settingsOverlay hidden" aria-hidden="true">
         <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
@@ -157,6 +186,48 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         </div>
         <div id="pipelineBody" class="pipelineBody"></div>
       </div>
+      <div id="agentDrawerBackdrop" class="agentDrawerBackdrop" aria-hidden="true"></div>
+      <aside id="agentDrawer" class="agentDrawer" aria-hidden="true">
+        <div id="agentDrawerResize" class="agentDrawerResize" role="separator" aria-orientation="vertical" aria-label="Изменить ширину панели" title="Потяните, чтобы изменить ширину"></div>
+        <div class="agentDrawerHead">
+          <div>
+            <div class="agentDrawerTitle">${t("agentDrawer.title")}</div>
+            <div class="agentDrawerSub">${t("agentDrawer.sub")}</div>
+          </div>
+          <button id="agentDrawerClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
+        </div>
+        <div class="agentDrawerTabs">
+          <button type="button" class="agentDrawerTab active" data-tab="controls">${t("agentDrawer.tabAgent")}</button>
+          <button type="button" class="agentDrawerTab" data-tab="browser">${t("agentDrawer.tabBrowser")}</button>
+        </div>
+        <div class="agentDrawerBody">
+          <div class="agentDrawerPanel active" data-panel="controls">
+            <div id="agentDrawerControls" class="agentDrawerControls">
+              <div class="agentDrawerSection">
+                <h4>${t("agentDrawer.modes")}</h4>
+                <div class="agentDrawerRow">
+                  <button id="coderToggle" class="coderToggle hidden" type="button" title="${t("topbar.coderTitle")}">🛠 Coder</button>
+                  <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="${t("topbar.hardwareTitle")}">ESP</button>
+                  <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">${t("topbar.pipeline")}</button>
+                </div>
+              </div>
+              <div class="agentDrawerSection">
+                <h4>${t("agentDrawer.memorySkills")}</h4>
+                <div class="agentDrawerRow">
+                  <button id="memoryToggle" class="coderToggle memoryToggle hidden" type="button" title="${t("topbar.memoryTitle")}">${t("topbar.memory")}</button>
+                  <button id="autoSkillToggle" class="coderToggle autoSkillToggle hidden" type="button" title="${t("topbar.autoSkillTitle")}">${t("topbar.autoSkill")}</button>
+                </div>
+                <select id="skillPicker" class="skillPicker hidden" title="${t("topbar.skillTitle")}"></select>
+                <div id="agentDrawerMemoryList" class="agentMiniList"></div>
+              </div>
+              <div class="agentDrawerHint">${t("agentDrawer.hint")}</div>
+            </div>
+          </div>
+          <div class="agentDrawerPanel" data-panel="browser">
+            <iframe id="agentBrowserFrame" class="agentBrowserFrame" tabindex="-1" title="${t("agentDrawer.tabBrowser")}"></iframe>
+          </div>
+        </div>
+      </aside>
       <section id="messages" class="messages">
         <div class="empty">${t("app.createChatHint")}</div>
       </section>
@@ -172,6 +243,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <button type="button" id="attachBtn" class="togglePill attachBtn" title="${t("composer.attachTitle")}">${t("composer.attach")}</button>
             <button type="button" id="voiceBtn" class="togglePill voiceBtn" title="${t("composer.voiceTitle")}">${t("composer.voice")}</button>
             <div class="composerSpacer"></div>
+            <button type="button" id="stopBtn" class="stopBtn hidden" title="${t("composer.stopTitle")}">${t("composer.stop")}</button>
             <button id="sendBtn" class="sendBtn" type="submit" disabled>↑</button>
           </div>
         </form>
@@ -241,6 +313,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const statusEl = document.getElementById("status");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    if (stopBtn) stopBtn.addEventListener("click", () => stopActiveConversation());
     const pipelinePanel = document.getElementById("pipelinePanel");
     const pipelineBody = document.getElementById("pipelineBody");
     const pipelinePanelBtn = document.getElementById("pipelinePanelBtn");
@@ -273,6 +347,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     applySavedComposerHeight();
     setupComposerResize();
 
+    // The update modal is declared near the refresh button, but it must render as a
+    // window-level overlay instead of being clipped by the sidebar.
+    document.body.appendChild(updateConfirmOverlay);
+
     document.getElementById("refreshBtn").addEventListener("click", loadState);
 
     function closeDeleteChatModal(confirmed = false) {
@@ -300,9 +378,39 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     deleteChatOverlay.addEventListener("click", (event) => {
       if (event.target === deleteChatOverlay) closeDeleteChatModal(false);
     });
+
+    let updateConfirmResolver = null;
+    function closeUpdateConfirmModal(confirmed = false) {
+      updateConfirmOverlay.classList.add("hidden");
+      updateConfirmOverlay.setAttribute("aria-hidden", "true");
+      const resolve = updateConfirmResolver;
+      updateConfirmResolver = null;
+      resolve?.(confirmed);
+    }
+
+    function confirmAppUpdate() {
+      if (updateConfirmResolver) closeUpdateConfirmModal(false);
+      updateConfirmOverlay.classList.remove("hidden");
+      updateConfirmOverlay.setAttribute("aria-hidden", "false");
+      updateConfirmRun.focus();
+      return new Promise((resolve) => {
+        updateConfirmResolver = resolve;
+      });
+    }
+
+    updateConfirmRun.addEventListener("click", () => closeUpdateConfirmModal(true));
+    updateConfirmCancel.addEventListener("click", () => closeUpdateConfirmModal(false));
+    updateConfirmClose.addEventListener("click", () => closeUpdateConfirmModal(false));
+    updateConfirmOverlay.addEventListener("click", (event) => {
+      if (event.target === updateConfirmOverlay) closeUpdateConfirmModal(false);
+    });
+
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !deleteChatOverlay.classList.contains("hidden")) {
         closeDeleteChatModal(false);
+      }
+      if (event.key === "Escape" && !updateConfirmOverlay.classList.contains("hidden")) {
+        closeUpdateConfirmModal(false);
       }
     });
 
@@ -325,6 +433,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     async function openNewChatModal() {
       await refreshModelCatalog();
+      await refreshAvailableProviders();
       renderProviderPicker();
       renderModePickerForProvider();
       newFormError.classList.add("hidden");
@@ -983,15 +1092,22 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const label = info.label;
       const providerButton = newChatProviderPicker.querySelector('[data-provider="' + id + '"] .reconnectLink');
       if (providerButton?.disabled) return;
+      const confirmKey = id === "chatgpt" ? "provider.chatgptConnectConfirm" : "provider.connectConfirm";
       if (confirmFirst && !confirm(
-        t("provider.connectConfirm", { label }),
+        t(confirmKey, { label }),
       )) return;
       if (providerButton) providerButton.disabled = true;
       try {
         const r = await fetch("/api/providers/" + id + "/login", { method: "POST" });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-        if (j.loginStarted) {
+        if (j.embedLogin && id === "chatgpt") {
+          setAgentDrawerTab("browser");
+          openAgentDrawer();
+          notifyBrowserTab("chatgpt", { force: true });
+          alert(t("provider.chatgptEmbedLogin"));
+        }
+        if (j.loginStarted || j.embedLogin) {
           for (let attempt = 0; attempt < 120; attempt += 1) {
             await new Promise((resolve) => setTimeout(resolve, 5000));
             await refreshAvailableProviders();
@@ -1004,7 +1120,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
               return;
             }
           }
-          alert(t("provider.tokenMissing", { id }));
+          alert(id === "chatgpt" ? t("provider.chatgptEmbedLoginTimeout", { label }) : t("provider.tokenMissing", { id }));
           return;
         }
         await refreshAvailableProviders();
@@ -1123,9 +1239,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       await refreshModelCatalog();
       await refreshAgentRoles();
       await refreshAvailableProviders();
-      if (!availableProviders.includes(newChatSelectedProvider) && availableProviders.length) {
-        newChatSelectedProvider = availableProviders[0];
-      }
       renderProviderPicker();
       renderModePickerForProvider();
     })();
@@ -1173,6 +1286,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       sending = true;
       setComposerEnabled(false);
+      const sentDraftText = messageInput.value;
       messageInput.value = "";
       // Сбросить авто-рост на исходную высоту (но если юзер тянул руками — оставить).
       if (!userResizedInput) messageInput.style.height = "";
@@ -1183,39 +1297,56 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderConversation(activeConversation);
 
       try {
-        // Сначала заливаем картинки — получаем file_id для каждой.
-        // Загрузка + ожидание обработки (status=PENDING→SUCCESS) может занять
-        // 3-10 секунд на картинку, поэтому показываем индикатор прогресса.
+        // Картинки. ChatGPT обрабатывает их сам через веб-сессию — передаём inline,
+        // НЕ гоняя через DeepSeek. Для DeepSeek/Qwen — старый путь через /api/upload
+        // (получаем file_id для vision-completion).
         const refFileIds = [];
+        let inlineImages = [];
         if (imageFiles.length) {
-          for (let i = 0; i < imageFiles.length; i += 1) {
-            const img = imageFiles[i];
-            const num = imageFiles.length > 1 ? \` (\${i + 1}/\${imageFiles.length})\` : "";
-            setStatus(t("composer.uploadingImage", { num, name: img.name }));
-            const result = await api("/api/upload", {
-              method: "POST",
-              body: {
-                name: img.name,
-                mimeType: img.mimeType,
-                dataBase64: img.dataBase64,
-                chatSessionId: activeConversation.sessionId,
-              },
-            });
-            if (!result.fileId) throw new Error(t("file.uploadMissingId"));
-            refFileIds.push(result.fileId);
+          if (sendProvider === "chatgpt") {
+            inlineImages = imageFiles.map((img) => ({
+              name: img.name,
+              mimeType: img.mimeType,
+              dataBase64: img.dataBase64,
+            }));
+          } else {
+            for (let i = 0; i < imageFiles.length; i += 1) {
+              const img = imageFiles[i];
+              const num = imageFiles.length > 1 ? \` (\${i + 1}/\${imageFiles.length})\` : "";
+              setStatus(t("composer.uploadingImage", { num, name: img.name }));
+              const result = await api("/api/upload", {
+                method: "POST",
+                body: {
+                  name: img.name,
+                  mimeType: img.mimeType,
+                  dataBase64: img.dataBase64,
+                  chatSessionId: activeConversation.sessionId,
+                },
+              });
+              if (!result.fileId) throw new Error(t("file.uploadMissingId"));
+              refFileIds.push(result.fileId);
+            }
           }
         }
 
-        setStatus(t("composer.thinkingStatus"));
+        setStatus(t("composer.writingStatus"));
         const sentConvId = activeConversation.id;
+        const messageBody = {
+          content: contentForApi,
+          thinking: thinkingActive,
+          search: sendProvider === "chatgpt" ? false : searchActive,
+          refFileIds,
+          images: inlineImages,
+        };
+
+        if (sendProvider === "qwen" || sendProvider === "chatgpt" || sendProvider === "deepseek") {
+          await postStreamingMessage(sentConvId, messageBody, sendProvider);
+          return;
+        }
+
         const data = await api("/api/conversations/" + sentConvId + "/messages", {
           method: "POST",
-          body: {
-            content: contentForApi,
-            thinking: thinkingActive,
-            search: searchActive,
-            refFileIds,
-          },
+          body: messageBody,
         });
 
         // Если сервер вернул running:true — это /code в фоне. Отпускаем UI,
@@ -1229,11 +1360,25 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           return; // sending снимет в finally, polling завершит UI
         }
 
+        if (data.needsChatGPTLogin) {
+          activeConversation = data.conversation;
+          renderConversation(activeConversation);
+          setAgentDrawerTab("browser");
+          ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
+          notifyBrowserTab("chatgpt", { force: true });
+          setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
+          return;
+        }
+
         activeConversation = data.conversation;
         await loadState(activeConversation.id);
-        renderConversation(activeConversation);
+        renderConversation(activeConversation, { animateLastAssistant: true });
         setStatus("");
       } catch (error) {
+        if (!messageInput.value.trim()) {
+          messageInput.value = sentDraftText;
+          autoGrowInput();
+        }
         // Возвращаем файлы юзеру — иначе он не поймёт, что они пропали.
         attachments = sentAttachments;
         renderAttachments();
@@ -1289,6 +1434,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       if ((appState.runningTaskIds || []).length > 0) ensurePolling();
       if (activeConversation?.pendingInstallRequest?.status === "running") ensureInstallPolling();
       if (!pipelinePanel.classList.contains("hidden")) renderPipelinePanel();
+      if (agentBrowserFrame.dataset.loaded === "1") {
+        notifyBrowserWorkspace(activeConversation?.workspace || appState.workspaceRoot);
+      }
     }
 
     // Polling для отслеживания фоновых /code-задач. Один setInterval на всю сессию,
@@ -1325,6 +1473,17 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         if (status !== "running") stopInstallPolling();
       } catch {}
     }
+    function formatAgentMetaStatus(meta) {
+      if (!meta) return "";
+      const parts = [];
+      if (meta.memoryUsed > 0) parts.push(t("agent.memoryUsed", { count: meta.memoryUsed }));
+      if (meta.graphUsed > 0) parts.push(t("agent.graphUsed", { count: meta.graphUsed }));
+      if (meta.memoryPending) parts.push(t("agent.memoryPending"));
+      else if (meta.memorySaved > 0) parts.push(t("agent.memorySaved", { count: meta.memorySaved }));
+      if (meta.skillId) parts.push(t("agent.skillUsed", { skill: meta.skillId }));
+      return parts.join(" · ");
+    }
+
     async function pollTick() {
       let nextState;
       try {
@@ -1337,6 +1496,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       appState.conversations = nextState.conversations;
       appState.runningTaskIds = nextState.runningTaskIds;
       renderList();
+      updateStopButton();
 
       // Если активный чат всё ещё в работе — подтягиваем его свежие сообщения
       // (могут добавляться tool-логи во время /code).
@@ -1354,7 +1514,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           const data = await api("/api/conversations/" + activeConversation.id);
           activeConversation = data.conversation;
           renderConversation(activeConversation, { animateLastAssistant: true });
-          setStatus("");
+          setStatus(formatAgentMetaStatus(activeConversation.lastAgentMeta));
         } catch {}
       }
 
@@ -1375,7 +1535,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         button.setAttribute("role", "button");
         button.setAttribute("aria-label", conversation.title);
         button.innerHTML =
-          '<div class="chatTitle"></div><div class="chatFolder"></div><div class="chatMeta"></div><button class="chatDelete" type="button" title="' + t("chat.delete") + '">×</button>';
+          '<div class="chatTitle"></div><div class="chatSubline"><span class="chatFolder"></span><span class="chatMeta"></span></div><button class="chatDelete" type="button" title="' + t("chat.delete") + '">×</button>';
         // Заголовок + спиннер (если задача в работе) + бейдж провайдера.
         const titleEl = button.querySelector(".chatTitle");
         if (isRunning) {
@@ -1443,6 +1603,38 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const coderToggleEl = document.getElementById("coderToggle");
     const hardwareToggleEl = document.getElementById("hardwareToggle");
     const pipelineToggleEl = document.getElementById("pipelineToggle");
+    const memoryToggleEl = document.getElementById("memoryToggle");
+    const autoSkillToggleEl = document.getElementById("autoSkillToggle");
+    const skillPickerEl = document.getElementById("skillPicker");
+    let installedSkills = [];
+
+    async function ensureInstalledSkills() {
+      if (installedSkills.length) return installedSkills;
+      try {
+        const data = await api("/api/skills");
+        installedSkills = Array.isArray(data.skills) ? data.skills : [];
+      } catch {
+        installedSkills = [];
+      }
+      return installedSkills;
+    }
+
+    function renderSkillPicker(conversation) {
+      const current = conversation.skillId || "";
+      skillPickerEl.innerHTML = "";
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = t("topbar.skillNone");
+      if (!current) none.selected = true;
+      skillPickerEl.appendChild(none);
+      for (const skill of installedSkills) {
+        const opt = document.createElement("option");
+        opt.value = skill.id;
+        opt.textContent = skill.name || skill.id;
+        if (skill.id === current) opt.selected = true;
+        skillPickerEl.appendChild(opt);
+      }
+    }
 
     function renderNoConversation() {
       activeTitle.textContent = t("app.noChat");
@@ -1453,6 +1645,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       coderToggleEl.classList.add("hidden");
       hardwareToggleEl.classList.add("hidden");
       pipelineToggleEl.classList.add("hidden");
+      memoryToggleEl.classList.add("hidden");
+      autoSkillToggleEl.classList.add("hidden");
+      skillPickerEl.classList.add("hidden");
+      if (agentDrawerControls) agentDrawerControls.classList.add("disabled");
+      if (agentDrawerMemoryList) agentDrawerMemoryList.innerHTML = "";
       messages.innerHTML = '<div class="empty">' + t("app.createChatHint") + '</div>';
       setComposerEnabled(false);
     }
@@ -1493,6 +1690,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const next = !(activeConversation && activeConversation.pipelineMode === true);
       patchActiveConversation({ pipelineMode: next }).catch((e) => setStatus(e.message, true));
     });
+    memoryToggleEl.addEventListener("click", () => {
+      const next = !(activeConversation && activeConversation.memoryEnabled !== false);
+      patchActiveConversation({ memoryEnabled: next }).catch((e) => setStatus(e.message, true));
+      if (activeConversation) setTimeout(() => refreshAgentDrawerMemory(activeConversation), 300);
+    });
+    autoSkillToggleEl.addEventListener("click", () => {
+      const next = !(activeConversation && activeConversation.autoSkill !== false);
+      patchActiveConversation({ autoSkill: next }).catch((e) => setStatus(e.message, true));
+    });
+    skillPickerEl.addEventListener("change", () => {
+      const skillId = skillPickerEl.value || null;
+      patchActiveConversation({ skillId }).catch((e) => setStatus(e.message, true));
+    });
     pipelinePanelBtn.addEventListener("click", () => {
       pipelinePanel.classList.remove("hidden");
       pipelinePanel.setAttribute("aria-hidden", "false");
@@ -1502,6 +1712,234 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       pipelinePanel.classList.add("hidden");
       pipelinePanel.setAttribute("aria-hidden", "true");
     });
+
+    const AGENT_DRAWER_KEY = "deepseek.agentDrawerOpen";
+    const AGENT_DRAWER_WIDTH_BROWSER_KEY = "deepseek.agentDrawerWidth.browser";
+    const AGENT_DRAWER_WIDTH_CONTROLS_KEY = "deepseek.agentDrawerWidth.controls";
+    const agentDrawerBtn = document.getElementById("agentDrawerBtn");
+    const agentDrawer = document.getElementById("agentDrawer");
+    const agentDrawerBackdrop = document.getElementById("agentDrawerBackdrop");
+    const agentDrawerClose = document.getElementById("agentDrawerClose");
+    const agentDrawerResize = document.getElementById("agentDrawerResize");
+    const agentDrawerControls = document.getElementById("agentDrawerControls");
+    const agentDrawerMemoryList = document.getElementById("agentDrawerMemoryList");
+    const agentBrowserFrame = document.getElementById("agentBrowserFrame");
+    const agentDrawerTabs = agentDrawer.querySelectorAll(".agentDrawerTab");
+    const agentDrawerPanels = agentDrawer.querySelectorAll(".agentDrawerPanel");
+
+    function syncAgentBrowserDrawerLayout() {
+      const browserTab = agentDrawer.querySelector('[data-panel="browser"]')?.classList.contains("active");
+      const open = agentDrawer.classList.contains("open");
+      document.body.classList.toggle("agentBrowserDrawerOpen", open && browserTab);
+      if (open) applyAgentDrawerWidth(isAgentDrawerBrowserMode());
+      if (agentDrawerResize) agentDrawerResize.classList.toggle("visible", open);
+    }
+
+    function isAgentDrawerBrowserMode() {
+      return agentDrawer.classList.contains("browserOpen");
+    }
+
+    function defaultAgentDrawerWidth(browserMode) {
+      return browserMode ? 640 : 480;
+    }
+
+    function clampAgentDrawerWidth(px, browserMode) {
+      const min = browserMode ? 380 : 300;
+      const max = Math.min(window.innerWidth * 0.92, browserMode ? 1280 : 760);
+      return Math.max(min, Math.min(max, Math.round(px)));
+    }
+
+    function applyAgentDrawerWidth(browserMode) {
+      const key = browserMode ? AGENT_DRAWER_WIDTH_BROWSER_KEY : AGENT_DRAWER_WIDTH_CONTROLS_KEY;
+      const saved = Number(localStorage.getItem(key));
+      const width = clampAgentDrawerWidth(
+        Number.isFinite(saved) && saved > 0 ? saved : defaultAgentDrawerWidth(browserMode),
+        browserMode,
+      );
+      document.documentElement.style.setProperty("--agent-drawer-width", width + "px");
+      return width;
+    }
+
+    let agentDrawerResizeDrag = null;
+    function notifyAgentBrowserViewportSync() {
+      try {
+        agentBrowserFrame.contentWindow?.postMessage({ type: "syncLiveViewport" }, "*");
+      } catch {}
+    }
+    if (agentDrawerResize) {
+      agentDrawerResize.addEventListener("pointerdown", (event) => {
+        if (!agentDrawer.classList.contains("open")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const browserMode = isAgentDrawerBrowserMode();
+        const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--agent-drawer-width"), 10)
+          || defaultAgentDrawerWidth(browserMode);
+        agentDrawerResizeDrag = {
+          startX: event.clientX,
+          startW: current,
+          browserMode,
+        };
+        agentDrawerResize.classList.add("dragging");
+        document.body.classList.add("agentDrawerResizing");
+        agentDrawerResize.setPointerCapture(event.pointerId);
+      });
+      agentDrawerResize.addEventListener("pointermove", (event) => {
+        if (!agentDrawerResizeDrag) return;
+        const delta = agentDrawerResizeDrag.startX - event.clientX;
+        const width = clampAgentDrawerWidth(
+          agentDrawerResizeDrag.startW + delta,
+          agentDrawerResizeDrag.browserMode,
+        );
+        document.documentElement.style.setProperty("--agent-drawer-width", width + "px");
+      });
+      const finishDrawerResize = (event) => {
+        if (!agentDrawerResizeDrag) return;
+        const key = agentDrawerResizeDrag.browserMode
+          ? AGENT_DRAWER_WIDTH_BROWSER_KEY
+          : AGENT_DRAWER_WIDTH_CONTROLS_KEY;
+        const width = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--agent-drawer-width"), 10);
+        if (Number.isFinite(width) && width > 0) localStorage.setItem(key, String(width));
+        agentDrawerResizeDrag = null;
+        agentDrawerResize?.classList.remove("dragging");
+        document.body.classList.remove("agentDrawerResizing");
+        try { agentDrawerResize.releasePointerCapture(event.pointerId); } catch {}
+        notifyAgentBrowserViewportSync();
+      };
+      agentDrawerResize.addEventListener("pointerup", finishDrawerResize);
+      agentDrawerResize.addEventListener("pointercancel", finishDrawerResize);
+    }
+    window.addEventListener("resize", () => {
+      if (!agentDrawer.classList.contains("open")) return;
+      applyAgentDrawerWidth(isAgentDrawerBrowserMode());
+      notifyAgentBrowserViewportSync();
+    });
+
+    function setAgentDrawerTab(tabId) {
+      for (const tab of agentDrawerTabs) {
+        tab.classList.toggle("active", tab.dataset.tab === tabId);
+      }
+      for (const panel of agentDrawerPanels) {
+        panel.classList.toggle("active", panel.dataset.panel === tabId);
+      }
+      agentDrawer.classList.toggle("browserOpen", tabId === "browser");
+      syncAgentBrowserDrawerLayout();
+      if (tabId === "browser") {
+        ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
+      }
+    }
+
+    function openAgentDrawer() {
+      agentDrawer.classList.add("open");
+      agentDrawer.setAttribute("aria-hidden", "false");
+      agentDrawerBackdrop.classList.add("open");
+      agentDrawerBackdrop.setAttribute("aria-hidden", "false");
+      agentDrawerBtn.classList.add("active");
+      localStorage.setItem(AGENT_DRAWER_KEY, "1");
+      syncAgentBrowserDrawerLayout();
+      if (activeConversation) {
+        refreshAgentDrawerMemory(activeConversation);
+        const activeTab = agentDrawer.querySelector(".agentDrawerTab.active")?.dataset?.tab;
+        if (activeTab === "browser") {
+          ensureAgentBrowserLoaded(activeConversation.workspace || appState.workspaceRoot);
+        }
+      }
+    }
+
+    function closeAgentDrawer() {
+      agentDrawer.classList.remove("open");
+      agentDrawer.setAttribute("aria-hidden", "true");
+      agentDrawerBackdrop.classList.remove("open");
+      agentDrawerBackdrop.setAttribute("aria-hidden", "true");
+      agentDrawerBtn.classList.remove("active");
+      localStorage.setItem(AGENT_DRAWER_KEY, "0");
+      syncAgentBrowserDrawerLayout();
+    }
+
+    function browserEmbedUrl(workspaceRoot) {
+      const ws = workspaceRoot || appState.workspaceRoot || "";
+      const q = new URLSearchParams();
+      if (ws) q.set("root", ws);
+      return "/embed/browser?" + q.toString();
+    }
+
+    function notifyBrowserWorkspace(workspaceRoot) {
+      const root = workspaceRoot || appState.workspaceRoot || "";
+      try {
+        agentBrowserFrame.contentWindow?.postMessage({ type: "setWorkspaceRoot", root }, "*");
+      } catch {}
+    }
+
+    function notifyBrowserTab(tab, { force = false } = {}) {
+      try {
+        agentBrowserFrame.contentWindow?.postMessage({ type: "focusBrowserTab", tab, force }, "*");
+      } catch {}
+    }
+
+    function ensureAgentBrowserLoaded(workspaceRoot) {
+      const ws = workspaceRoot || appState.workspaceRoot || "";
+      if (agentBrowserFrame.dataset.loaded === "1") {
+        notifyBrowserWorkspace(ws);
+        return;
+      }
+      if (agentBrowserFrame.dataset.loading !== "1") {
+        agentBrowserFrame.dataset.loading = "1";
+        agentBrowserFrame.addEventListener("load", () => {
+          agentBrowserFrame.dataset.loaded = "1";
+          delete agentBrowserFrame.dataset.loading;
+          notifyBrowserWorkspace(ws);
+          if (document.activeElement === agentBrowserFrame && messageInput && !messageInput.disabled) {
+            messageInput.focus();
+          }
+        }, { once: true });
+        agentBrowserFrame.src = browserEmbedUrl(ws);
+      } else {
+        notifyBrowserWorkspace(ws);
+      }
+    }
+
+    function updateAgentBrowserWorkspace(conversation) {
+      const ws = conversation?.workspace || appState.workspaceRoot || "";
+      notifyBrowserWorkspace(ws);
+    }
+
+    async function refreshAgentDrawerMemory(conversation) {
+      if (!agentDrawerMemoryList) return;
+      agentDrawerMemoryList.textContent = t("app.loading");
+      try {
+        const ws = conversation?.workspace || appState.workspaceRoot || "";
+        const query = ws ? ("?workspace=" + encodeURIComponent(ws)) : "";
+        const data = await api("/api/memory" + query);
+        const items = Array.isArray(data.items) ? data.items.slice(0, 5) : [];
+        agentDrawerMemoryList.innerHTML = "";
+        if (!items.length) {
+          agentDrawerMemoryList.textContent = t("settings.memoryEmpty");
+          return;
+        }
+        for (const item of items) {
+          const row = document.createElement("div");
+          row.className = "agentMiniItem";
+          row.textContent = "[" + item.type + "] " + String(item.content || "").slice(0, 100);
+          agentDrawerMemoryList.appendChild(row);
+        }
+      } catch (err) {
+        agentDrawerMemoryList.textContent = t("settings.loadFailed", { message: err.message });
+      }
+    }
+
+    agentDrawerBtn.addEventListener("click", () => {
+      if (agentDrawer.classList.contains("open")) closeAgentDrawer();
+      else openAgentDrawer();
+    });
+    agentDrawerClose.addEventListener("click", closeAgentDrawer);
+    agentDrawerBackdrop.addEventListener("click", () => {
+      const browserTab = agentDrawer.querySelector('[data-panel="browser"]')?.classList.contains("active");
+      if (browserTab) return;
+      closeAgentDrawer();
+    });
+    for (const tab of agentDrawerTabs) {
+      tab.addEventListener("click", () => setAgentDrawerTab(tab.dataset.tab));
+    }
+    if (localStorage.getItem(AGENT_DRAWER_KEY) === "1") openAgentDrawer();
 
     function renderConversation(conversation, options = {}) {
       stopTypewriters();
@@ -1551,9 +1989,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
       rolePickerEl.classList.remove("hidden");
 
-      // Coder toggle — переключает coderMode для текущего чата.
-      // Когда включён, каждое сообщение проходит через runCodeTask (без /code префикса).
+      // Coder/ESP работают для всех провайдеров через общий agent runtime.
       coderToggleEl.classList.remove("hidden");
+      hardwareToggleEl.classList.remove("hidden");
+      if (prov === "chatgpt") {
+        toggleSearch.classList.add("hidden");
+      } else {
+        toggleSearch.classList.remove("hidden");
+      }
       if (conversation.coderMode === true) {
         coderToggleEl.classList.add("active");
         coderToggleEl.textContent = t("topbar.coderOn");
@@ -1561,7 +2004,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         coderToggleEl.classList.remove("active");
         coderToggleEl.textContent = t("topbar.coder");
       }
-      hardwareToggleEl.classList.remove("hidden");
       if (conversation.hardwareMode === true) {
         hardwareToggleEl.classList.add("active");
         hardwareToggleEl.textContent = t("topbar.hardwareOn");
@@ -1578,7 +2020,38 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         pipelineToggleEl.textContent = t("topbar.pipeline");
       }
 
-      // Синхронизация и блокировка "Глубокого мышления" для моделей-рассуждалок (DeepSeek R1 / QwQ)
+      memoryToggleEl.classList.remove("hidden");
+      if (conversation.memoryEnabled !== false) {
+        memoryToggleEl.classList.add("active");
+        memoryToggleEl.textContent = t("topbar.memoryOn");
+      } else {
+        memoryToggleEl.classList.remove("active");
+        memoryToggleEl.textContent = t("topbar.memory");
+      }
+
+      autoSkillToggleEl.classList.remove("hidden");
+      if (conversation.autoSkill !== false) {
+        autoSkillToggleEl.classList.add("active");
+        autoSkillToggleEl.textContent = t("topbar.autoSkillOn");
+      } else {
+        autoSkillToggleEl.classList.remove("active");
+        autoSkillToggleEl.textContent = t("topbar.autoSkill");
+      }
+
+      ensureInstalledSkills().then(() => {
+        renderSkillPicker(conversation);
+        skillPickerEl.classList.remove("hidden");
+      }).catch(() => {
+        skillPickerEl.classList.add("hidden");
+      });
+
+      if (agentDrawerControls) agentDrawerControls.classList.remove("disabled");
+      refreshAgentDrawerMemory(conversation);
+      if (agentDrawer.querySelector('[data-panel="browser"]').classList.contains("active")) {
+        updateAgentBrowserWorkspace(conversation);
+      }
+
+      // Синхронизация и блокировка "Глубокого мышления"
       const currentModel = conversation.model || info.defaultModel || (info.models && info.models[0]?.id);
       const isReasoningModel = findModelInfo(prov, currentModel)?.reasoning === true;
       if (isReasoningModel) {
@@ -1622,26 +2095,49 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         role.textContent = message.role === "user" ? t("chat.you") : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
-        const textEl = document.createElement("div");
-        const progressiveKey = [
-          conversation.id,
-          message.createdAt || index,
-        ].join(":");
-        if (message.streaming) {
-          textEl.className = "streamingText";
-          typeProgressiveText(textEl, message.content || "…", progressiveKey);
-        } else if (index === animateIndex) {
-          progressiveTextState.delete(progressiveKey);
-          typeText(textEl, message.content);
-        } else {
-          textEl.textContent = message.content;
+        if (message.content) {
+          const textEl = document.createElement("div");
+          if (message.streaming) {
+            textEl.className = "streamingText";
+            const progressiveKey = [
+              conversation.id,
+              message.createdAt || index,
+            ].join(":");
+            typeProgressiveText(textEl, message.content || "…", progressiveKey, () => {
+              scrollMessagesToBottomIfFollowing();
+            });
+          } else if (index === animateIndex) {
+            progressiveTextState.delete([
+              conversation.id,
+              message.createdAt || index,
+            ].join(":"));
+            textEl.textContent = "";
+            typeText(textEl, message.content, () => {
+              scrollMessagesToBottomIfFollowing();
+            });
+          } else {
+            textEl.textContent = message.content;
+          }
+          bubble.appendChild(textEl);
         }
-        bubble.appendChild(textEl);
+        // Сгенерированные ChatGPT картинки (data-URL) — рендерим как <img>.
+        if (Array.isArray(message.images) && message.images.length) {
+          for (const src of message.images) {
+            if (typeof src !== "string" || !src) continue;
+            const img = document.createElement("img");
+            img.className = "chatImage";
+            img.src = src;
+            img.loading = "lazy";
+            img.addEventListener("click", () => window.open(src, "_blank"));
+            bubble.appendChild(img);
+          }
+        }
         row.append(role, bubble);
         messages.appendChild(row);
       }
       renderInstallRequest(conversation);
       renderQuestionRequest(conversation);
+      renderPermissionRequest(conversation);
       if (shouldFollow) {
         scrollMessagesToBottomIfFollowing();
       } else {
@@ -1652,7 +2148,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     function findLastTextAssistantIndex(items) {
       if (!Array.isArray(items)) return -1;
       for (let i = items.length - 1; i >= 0; i -= 1) {
-        if (items[i]?.role === "assistant" && String(items[i]?.content || "").trim()) return i;
+        const message = items[i];
+        if (message?.role === "assistant" && String(message.content || "").trim()) return i;
       }
       return -1;
     }
@@ -1662,16 +2159,20 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       typewriterTimers.clear();
     }
 
-    function runTypewriter(target, full, startOffset, onVisible) {
-      let offset = startOffset;
-      const chunkSize = full.length > 5000 ? 32 : full.length > 1800 ? 18 : 8;
-      const delayMs = full.length > 5000 ? 4 : 9;
+    function typeText(target, text, onStep) {
+      const full = String(text || "");
+      if (!full) return;
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        target.textContent = full;
+        return;
+      }
+      const chunkSize = full.length > 5000 ? 28 : full.length > 1800 ? 16 : 7;
+      const delayMs = full.length > 5000 ? 4 : 10;
+      let offset = 0;
       const tick = () => {
         offset = Math.min(full.length, offset + chunkSize);
-        const visible = full.slice(0, offset);
-        onVisible?.(visible);
-        target.textContent = visible;
-        scrollMessagesToBottomIfFollowing();
+        target.textContent = full.slice(0, offset);
+        onStep?.();
         if (offset >= full.length) return;
         const timer = setTimeout(() => {
           typewriterTimers.delete(timer);
@@ -1682,21 +2183,40 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       tick();
     }
 
-    function typeText(target, text) {
+    function typeProgressiveText(target, text, key, onStep) {
       const full = String(text || "");
       if (!full) return;
-      runTypewriter(target, full, 0);
-    }
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        progressiveTextState.set(key, full);
+        target.textContent = full;
+        return;
+      }
 
-    function typeProgressiveText(target, text, key) {
-      const full = String(text || "");
-      if (!full) return;
       const previous = String(progressiveTextState.get(key) || "");
       let commonLength = 0;
       const maxCommon = Math.min(previous.length, full.length);
-      while (commonLength < maxCommon && previous[commonLength] === full[commonLength]) commonLength += 1;
-      target.textContent = full.slice(0, commonLength);
-      runTypewriter(target, full, commonLength, (visible) => progressiveTextState.set(key, visible));
+      while (commonLength < maxCommon && previous[commonLength] === full[commonLength]) {
+        commonLength += 1;
+      }
+      let offset = previous === full ? full.length : commonLength;
+      target.textContent = full.slice(0, offset);
+
+      const chunkSize = full.length > 5000 ? 32 : full.length > 1800 ? 18 : 8;
+      const delayMs = full.length > 5000 ? 4 : 9;
+      const tick = () => {
+        offset = Math.min(full.length, offset + chunkSize);
+        const visible = full.slice(0, offset);
+        progressiveTextState.set(key, visible);
+        target.textContent = visible;
+        onStep?.();
+        if (offset >= full.length) return;
+        const timer = setTimeout(() => {
+          typewriterTimers.delete(timer);
+          tick();
+        }, delayMs);
+        typewriterTimers.add(timer);
+      };
+      tick();
     }
 
     async function updatePipelineEdges(edges) {
@@ -1811,6 +2331,71 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       autoGrowInput();
     }
 
+    function renderPermissionRequest(conversation) {
+      const request = conversation.pendingPermissionRequest;
+      if (!request || request.status !== "pending") return;
+      const existing = document.getElementById("permissionRequestOverlay");
+      if (existing) existing.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "permissionRequestOverlay";
+      overlay.className = "settingsOverlay";
+      overlay.setAttribute("aria-hidden", "false");
+
+      const panel = document.createElement("div");
+      panel.className = "settingsPanel permissionPanel";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+
+      const head = document.createElement("div");
+      head.className = "settingsHead";
+      const title = document.createElement("h2");
+      title.textContent = request.title || t("permission.title");
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "iconBtn";
+      close.setAttribute("aria-label", t("app.close"));
+      close.textContent = "✕";
+      close.addEventListener("click", () => answerPermissionRequest("reject", overlay));
+      head.append(title, close);
+
+      const body = document.createElement("div");
+      body.className = "settingsBody";
+      const text = document.createElement("p");
+      text.className = "settingsHint";
+      text.textContent = request.description || t("permission.description");
+      const hint = document.createElement("div");
+      hint.className = "apiModels";
+      hint.textContent = t("permission.settingsHint");
+      const actions = document.createElement("div");
+      actions.className = "installActions";
+      const approve = document.createElement("button");
+      approve.type = "button";
+      approve.className = "iconBtn primaryBtn";
+      approve.textContent = t("permission.approve");
+      approve.addEventListener("click", () => answerPermissionRequest("approve", overlay));
+      const reject = document.createElement("button");
+      reject.type = "button";
+      reject.className = "iconBtn";
+      reject.textContent = t("permission.reject");
+      reject.addEventListener("click", () => answerPermissionRequest("reject", overlay));
+      actions.append(approve, reject);
+      body.append(text, hint, actions);
+      panel.append(head, body);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+    }
+
+    async function answerPermissionRequest(action, overlay) {
+      if (!activeConversation) return;
+      const data = await api("/api/conversations/" + activeConversation.id + "/permission-request/" + action, { method: "POST" });
+      activeConversation = data.conversation;
+      if (overlay) overlay.remove();
+      renderConversation(activeConversation);
+      renderList();
+      if (action === "approve") setStatus(t("permission.enabled"));
+    }
+
     function renderInstallRequest(conversation) {
       const request = conversation.pendingInstallRequest;
       if (!request || request.status === "rejected" || request.status === "installed") return;
@@ -1882,6 +2467,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         messageInput.placeholder = t("composer.chooseChat");
         return;
       }
+      if (activeConversation.coderMode === true) {
+        messageInput.placeholder = t("composer.coderActive");
+        return;
+      }
       const provider = activeConversation.provider || "deepseek";
       const label = ((PROVIDER_INFO[provider] || {}).label) || ({ deepseek: "DeepSeek", qwen: "Qwen" })[provider] || "AI";
       messageInput.placeholder = t("composer.message", { label });
@@ -1891,6 +2480,45 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       updateMessagePlaceholder();
       messageInput.disabled = !enabled || !activeConversation;
       sendBtn.disabled = !enabled || !activeConversation;
+      updateStopButton();
+    }
+
+    // Кнопка «Стоп» видна, когда в активном чате идёт фоновая задача (code/pipeline).
+    function isActiveConversationRunning() {
+      if (!activeConversation) return false;
+      const running = new Set(appState?.runningTaskIds || []);
+      return running.has(activeConversation.id);
+    }
+
+    function updateStopButton() {
+      if (!stopBtn) return;
+      const running = isActiveConversationRunning();
+      stopBtn.classList.toggle("hidden", !running);
+      if (running) {
+        sendBtn.classList.add("hidden");
+      } else {
+        sendBtn.classList.remove("hidden");
+      }
+    }
+
+    async function stopActiveConversation() {
+      if (!activeConversation) return;
+      const id = activeConversation.id;
+      stopBtn.disabled = true;
+      try {
+        const data = await api("/api/conversations/" + id + "/stop", { method: "POST" });
+        if (data.stopped) setStatus(t("composer.stopTitle"));
+        if (data.conversation && activeConversation && activeConversation.id === id) {
+          activeConversation = data.conversation;
+          renderConversation(activeConversation);
+        }
+        await loadState(id).catch(() => {});
+      } catch (e) {
+        setStatus(e.message, true);
+      } finally {
+        stopBtn.disabled = false;
+        updateStopButton();
+      }
     }
 
     function setupTheme() {
@@ -1932,22 +2560,151 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return data;
     }
 
-    // ---- Heartbeat: закрываем окно, когда CLI остановлен (Ctrl+C / закрыли терминал).
-    // Три промаха подряд → сервер точно мёртв → показываем сообщение и закрываем окно.
-    // Порог в 3 защищает от случайного network blip (например, рестарт сервера юзером).
+    function updateStreamingAssistantBubble(content) {
+      const items = messages.querySelectorAll(".msg.assistant.streaming");
+      const last = items[items.length - 1];
+      if (!last) return;
+      const textEl = last.querySelector(".bubble .streamingText, .bubble > div");
+      if (textEl) textEl.textContent = content || "…";
+      scrollMessagesToBottomIfFollowing();
+    }
+
+    async function postStreamingMessage(convId, body, provider) {
+      activeConversation.messages.push({
+        role: "assistant",
+        content: "",
+        streaming: true,
+        createdAt: new Date().toISOString(),
+      });
+      renderConversation(activeConversation);
+      setStatus(t("composer.writingStatus"));
+
+      const res = await fetch("/api/conversations/" + convId + "/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("ndjson")) {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || t("app.requestFailed"));
+        if (data.running) {
+          activeConversation = data.conversation;
+          await loadState(activeConversation.id);
+          renderConversation(activeConversation);
+          setStatus(t("composer.backgroundTask"));
+          ensurePolling();
+          return;
+        }
+        if (data.needsChatGPTLogin) {
+          activeConversation = data.conversation;
+          renderConversation(activeConversation);
+          setAgentDrawerTab("browser");
+          ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
+          notifyBrowserTab("chatgpt", { force: true });
+          setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
+          return;
+        }
+        activeConversation = data.conversation;
+        await loadState(activeConversation.id);
+        renderConversation(activeConversation, { animateLastAssistant: true });
+        setStatus("");
+        return;
+      }
+
+      const reader = res.body?.getReader?.();
+      if (!reader) throw new Error(t("app.requestFailed"));
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamDone = false;
+      let needsChatGPTLogin = false;
+
+      while (!streamDone) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let lineBreak;
+        while ((lineBreak = buffer.indexOf("\\n")) >= 0) {
+          const line = buffer.slice(0, lineBreak).trim();
+          buffer = buffer.slice(lineBreak + 1);
+          if (!line) continue;
+          let event;
+          try { event = JSON.parse(line); } catch { continue; }
+          if (event.type === "start") {
+            activeConversation = event.conversation;
+            renderConversation(activeConversation);
+          } else if (event.type === "delta") {
+            updateStreamingAssistantBubble(event.content);
+            setStatus(t("composer.writingStatus"));
+          } else if (event.type === "done") {
+            activeConversation = event.conversation;
+            streamDone = true;
+          } else if (event.type === "error") {
+            activeConversation = event.conversation;
+            needsChatGPTLogin = Boolean(event.needsChatGPTLogin);
+            streamDone = true;
+          }
+        }
+      }
+
+      await loadState(activeConversation?.id || convId);
+      renderConversation(activeConversation);
+      if (needsChatGPTLogin && provider === "chatgpt") {
+        setAgentDrawerTab("browser");
+        ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
+        notifyBrowserTab("chatgpt", { force: true });
+        setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
+      } else {
+        setStatus("");
+      }
+    }
+
+    // ---- Heartbeat: закрываем окно при graceful shutdown или когда CLI мёртв (Ctrl+C в терминале).
     let heartbeatFailures = 0;
     let shutdownStarted = false;
+    const shutdownOverlay = document.getElementById("shutdownOverlay");
+    const shutdownTitle = document.getElementById("shutdownTitle");
+    const shutdownSub = document.getElementById("shutdownSub");
+
+    const SHUTDOWN_PHASE_KEYS = {
+      stopping_tasks: "shutdown.stoppingTasks",
+      closing_browsers: "shutdown.closingBrowsers",
+      closing_server: "shutdown.closingServer",
+      stopped: "shutdown.stoppedSub",
+    };
+
+    function showShutdownOverlay(phase) {
+      shutdownOverlay.classList.remove("hidden");
+      shutdownOverlay.setAttribute("aria-hidden", "false");
+      shutdownTitle.textContent = phase === "stopped" ? t("shutdown.stopped") : t("shutdown.gracefulTitle");
+      shutdownSub.textContent = t(SHUTDOWN_PHASE_KEYS[phase] || "shutdown.stoppingTasks");
+    }
+
+    function finishShutdownWindow() {
+      if (shutdownStarted) return;
+      shutdownStarted = true;
+      showShutdownOverlay("stopped");
+      setTimeout(() => {
+        try { window.close(); } catch {}
+      }, 800);
+    }
+
     async function tickHeartbeat() {
       if (shutdownStarted) return;
       try {
         const res = await fetch("/api/heartbeat", { cache: "no-store" });
         if (!res.ok) throw new Error("heartbeat not ok");
+        const data = await res.json().catch(() => ({}));
         heartbeatFailures = 0;
+        if (data.shuttingDown) {
+          showShutdownOverlay(data.phase || "stopping_tasks");
+          if (data.phase === "stopped") finishShutdownWindow();
+        }
       } catch {
         heartbeatFailures += 1;
         if (heartbeatFailures >= 3) {
           shutdownStarted = true;
-          // Показываем чистую заглушку и закрываем.
           document.body.innerHTML =
             '<div style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px;color:#888;font-family:system-ui;background:#0a0a0a;text-align:center;padding:24px">' +
             '<div style="font-size:18px">' + t("shutdown.title") + '</div>' +
@@ -1959,7 +2716,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
       }
     }
-    setInterval(tickHeartbeat, 2000);
+    setInterval(tickHeartbeat, 1000);
+
+    document.getElementById("quitBtn").addEventListener("click", async () => {
+      if (shutdownStarted) return;
+      showShutdownOverlay("stopping_tasks");
+      try {
+        await fetch("/api/shutdown", { method: "POST" });
+      } catch {}
+    });
 
     // ---- Settings modal (разрешённые команды для /code) ----
     const settingsBtn = document.getElementById("settingsBtn");
@@ -1976,13 +2741,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       if (e.key === "Escape" && !settingsOverlay.classList.contains("hidden")) closeSettings();
     });
 
-    async function openSettings() {
+    async function openSettings(initialTab) {
       settingsOverlay.classList.remove("hidden");
       settingsOverlay.setAttribute("aria-hidden", "false");
       settingsBody.textContent = t("app.loading");
       try {
         const data = await api("/api/settings");
-        renderSettings(data);
+        renderSettings(data, initialTab);
       } catch (err) {
         settingsBody.textContent = t("settings.loadFailed", { message: err.message });
       }
@@ -1992,7 +2757,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands, openAICompat, ui }) {
+    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui, telegram }, initialTab) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
@@ -2010,6 +2775,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       content.className = "settingsTabContent";
       const tabs = [
         { id: "language", label: t("settings.tabLanguage") },
+        { id: "agent", label: t("settings.tabAgent") },
+        { id: "telegram", label: t("settings.tabTelegram") },
+        { id: "update", label: t("settings.tabUpdate") },
         { id: "api", label: t("settings.tabApi") },
         { id: "permissions", label: t("settings.tabPermissions") },
       ];
@@ -2035,7 +2803,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsBody.appendChild(shell);
 
       renderUiSettings(panels.language, ui, allowedCommands || []);
+      renderAgentSettings(panels.agent, ui);
+      renderTelegramSettings(panels.telegram, telegram || {});
+      renderUpdateSettings(panels.update);
       renderOpenAISettings(panels.api, openAICompat);
+      renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
       for (const key of order) {
         const items = groups[key];
         if (!items.length) continue;
@@ -2074,8 +2846,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
         panels.permissions.appendChild(groupEl);
       }
-      selectSettingsTab("language");
+      selectSettingsTab(initialTab || "language");
     }
+
+    document.getElementById("sidebarMenuPlugins").addEventListener("click", () => {
+      openSettings("agent");
+    });
+    document.getElementById("sidebarMenuTelegram").addEventListener("click", () => {
+      openSettings("telegram");
+    });
 
     function selectSettingsTab(tabId) {
       const tabs = settingsBody.querySelectorAll(".settingsTab");
@@ -2154,6 +2933,343 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderVoiceSettings(target);
     }
 
+    async function renderAgentSettings(target, ui) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup";
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.agentTitle");
+      groupEl.appendChild(heading);
+
+      const memoryRow = document.createElement("label");
+      memoryRow.className = "settingsItem checkboxRow";
+      const memoryCb = document.createElement("input");
+      memoryCb.type = "checkbox";
+      memoryCb.checked = ui?.memoryDefault !== false;
+      const memoryText = document.createElement("div");
+      const memoryName = document.createElement("div");
+      memoryName.className = "name";
+      memoryName.textContent = t("settings.memoryDefault");
+      const memoryDesc = document.createElement("div");
+      memoryDesc.className = "desc";
+      memoryDesc.textContent = t("settings.memoryDefaultDesc");
+      memoryText.append(memoryName, memoryDesc);
+      memoryCb.addEventListener("change", async () => {
+        try {
+          await saveUiSettings({ memoryDefault: memoryCb.checked }, collectAllowedCommands());
+          setStatus(t("settings.agentSaved"));
+        } catch (err) {
+          memoryCb.checked = !memoryCb.checked;
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        }
+      });
+      memoryRow.append(memoryCb, memoryText);
+      groupEl.appendChild(memoryRow);
+
+      const autoSkillRow = document.createElement("label");
+      autoSkillRow.className = "settingsItem checkboxRow";
+      const autoSkillCb = document.createElement("input");
+      autoSkillCb.type = "checkbox";
+      autoSkillCb.checked = ui?.autoSkillDefault !== false;
+      const autoSkillText = document.createElement("div");
+      const autoSkillName = document.createElement("div");
+      autoSkillName.className = "name";
+      autoSkillName.textContent = t("settings.autoSkillDefault");
+      const autoSkillDesc = document.createElement("div");
+      autoSkillDesc.className = "desc";
+      autoSkillDesc.textContent = t("settings.autoSkillDefaultDesc");
+      autoSkillText.append(autoSkillName, autoSkillDesc);
+      autoSkillCb.addEventListener("change", async () => {
+        try {
+          await saveUiSettings({ autoSkillDefault: autoSkillCb.checked }, collectAllowedCommands());
+          setStatus(t("settings.agentSaved"));
+        } catch (err) {
+          autoSkillCb.checked = !autoSkillCb.checked;
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        }
+      });
+      autoSkillRow.append(autoSkillCb, autoSkillText);
+      groupEl.appendChild(autoSkillRow);
+
+      target.appendChild(groupEl);
+
+      const pluginsGroup = document.createElement("div");
+      pluginsGroup.className = "settingsGroup";
+      const pluginsHeading = document.createElement("h3");
+      pluginsHeading.textContent = t("settings.installedPlugins");
+      pluginsGroup.appendChild(pluginsHeading);
+
+      const pluginsHint = document.createElement("div");
+      pluginsHint.className = "settingsHint";
+      pluginsHint.textContent = t("settings.installPluginHint");
+      pluginsGroup.appendChild(pluginsHint);
+
+      const installRow = document.createElement("div");
+      installRow.className = "settingsItem pluginInstallRow";
+      const repoInput = document.createElement("input");
+      repoInput.type = "text";
+      repoInput.className = "pluginInstallInput";
+      repoInput.placeholder = t("settings.pluginInstallGithub");
+      const installBtn = document.createElement("button");
+      installBtn.type = "button";
+      installBtn.className = "btn";
+      installBtn.textContent = t("settings.installPlugin");
+      installBtn.addEventListener("click", async () => {
+        const repo = repoInput.value.trim();
+        if (!repo) return;
+        installBtn.disabled = true;
+        try {
+          await api("/api/plugins/install", {
+            method: "POST",
+            body: { source: "github", repo },
+          });
+          await refreshPluginsList();
+          installedSkills = [];
+          repoInput.value = "";
+          setStatus(t("settings.pluginInstalled"));
+        } catch (err) {
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        } finally {
+          installBtn.disabled = false;
+        }
+      });
+      installRow.append(repoInput, installBtn);
+      pluginsGroup.appendChild(installRow);
+
+      const pluginsList = document.createElement("div");
+      pluginsList.className = "pluginsSettingsList";
+      pluginsGroup.appendChild(pluginsList);
+
+      async function refreshPluginsList() {
+        pluginsList.textContent = t("app.loading");
+        try {
+          const data = await api("/api/plugins");
+          const plugins = Array.isArray(data.plugins) ? data.plugins : [];
+          pluginsList.innerHTML = "";
+          if (!plugins.length) {
+            pluginsList.textContent = t("settings.noPlugins");
+            return;
+          }
+          for (const plugin of plugins) {
+            const row = document.createElement("div");
+            row.className = "settingsItemRow";
+            const textWrap = document.createElement("div");
+            textWrap.className = "textWrap";
+            const nameEl = document.createElement("div");
+            nameEl.className = "name";
+            nameEl.textContent = (plugin.name || plugin.id) + " · " + (plugin.format || "plugin");
+            const descEl = document.createElement("div");
+            descEl.className = "desc";
+            const skillCount = Array.isArray(plugin.skillIds) ? plugin.skillIds.length : 0;
+            descEl.textContent = (plugin.description || plugin.id) + " · " + t("settings.pluginSkillCount", { count: skillCount });
+            textWrap.append(nameEl, descEl);
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "iconBtn";
+            delBtn.textContent = "✕";
+            delBtn.title = t("settings.uninstallPlugin");
+            delBtn.addEventListener("click", async () => {
+              try {
+                await api("/api/plugins/" + encodeURIComponent(plugin.id), { method: "DELETE" });
+                installedSkills = [];
+                await refreshPluginsList();
+                setStatus(t("settings.pluginRemoved"));
+              } catch (err) {
+                setStatus(t("settings.saveFailed", { message: err.message }), true);
+              }
+            });
+            row.append(textWrap, delBtn);
+            pluginsList.appendChild(row);
+          }
+        } catch (err) {
+          pluginsList.textContent = t("settings.loadFailed", { message: err.message });
+        }
+      }
+
+      await refreshPluginsList();
+      target.appendChild(pluginsGroup);
+
+      const skillsGroup = document.createElement("div");
+      skillsGroup.className = "settingsGroup";
+      const skillsHeading = document.createElement("h3");
+      skillsHeading.textContent = t("settings.installedSkills");
+      skillsGroup.appendChild(skillsHeading);
+
+      const skills = await ensureInstalledSkills();
+      if (!skills.length) {
+        const empty = document.createElement("div");
+        empty.className = "settingsHint";
+        empty.textContent = t("settings.noSkills");
+        skillsGroup.appendChild(empty);
+      } else {
+        for (const skill of skills) {
+          const row = document.createElement("div");
+          row.className = "settingsItemRow";
+          const textWrap = document.createElement("div");
+          textWrap.className = "textWrap";
+          const nameEl = document.createElement("div");
+          nameEl.className = "name";
+          nameEl.textContent = (skill.name || skill.id) + (skill.format ? " · " + skill.format : "");
+          const descEl = document.createElement("div");
+          descEl.className = "desc";
+          const commands = Array.isArray(skill.commands) && skill.commands.length
+            ? skill.commands.join(", ")
+            : "—";
+          descEl.textContent = (skill.description || skill.id) + " · " + t("settings.skillCommands", { commands });
+          textWrap.append(nameEl, descEl);
+          row.appendChild(textWrap);
+          skillsGroup.appendChild(row);
+        }
+      }
+      target.appendChild(skillsGroup);
+
+      const memoryGroup = document.createElement("div");
+      memoryGroup.className = "settingsGroup";
+      const memoryHeading = document.createElement("h3");
+      memoryHeading.textContent = t("settings.recentMemory");
+      memoryGroup.appendChild(memoryHeading);
+
+      const memoryHint = document.createElement("div");
+      memoryHint.className = "settingsHint";
+      memoryHint.textContent = t("settings.recentMemoryHint");
+      memoryGroup.appendChild(memoryHint);
+
+      const backendBadge = document.createElement("div");
+      backendBadge.className = "settingsHint";
+      memoryGroup.appendChild(backendBadge);
+
+      const memoryList = document.createElement("div");
+      memoryList.className = "memorySettingsList";
+      memoryGroup.appendChild(memoryList);
+
+      async function refreshMemoryList() {
+        memoryList.textContent = t("app.loading");
+        try {
+          const workspace = activeConversation?.workspace || appState.workspaceRoot || "";
+          const query = workspace ? ("?workspace=" + encodeURIComponent(workspace)) : "";
+          const data = await api("/api/memory" + query);
+          const items = Array.isArray(data.items) ? data.items.slice(0, 15) : [];
+          backendBadge.textContent = t("settings.memoryBackend", { backend: data.backend || "json" })
+            + (data.graphBackend ? " · graph: " + data.graphBackend : "");
+          memoryList.innerHTML = "";
+          if (!items.length) {
+            memoryList.textContent = t("settings.memoryEmpty");
+            return;
+          }
+          for (const item of items) {
+            const row = document.createElement("div");
+            row.className = "settingsItemRow memorySettingsItem";
+            const textWrap = document.createElement("div");
+            textWrap.className = "textWrap";
+            const nameEl = document.createElement("div");
+            nameEl.className = "name";
+            nameEl.textContent = "[" + item.type + "] " + String(item.content || "").slice(0, 120);
+            const descEl = document.createElement("div");
+            descEl.className = "desc";
+            descEl.textContent = item.workspace || t("settings.memoryNoWorkspace");
+            textWrap.append(nameEl, descEl);
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "iconBtn";
+            delBtn.textContent = "✕";
+            delBtn.title = t("settings.deleteMemory");
+            delBtn.addEventListener("click", async () => {
+              try {
+                await api("/api/memory/" + encodeURIComponent(item.id), { method: "DELETE" });
+                await refreshMemoryList();
+                setStatus(t("settings.memoryDeleted"));
+              } catch (err) {
+                setStatus(t("settings.saveFailed", { message: err.message }), true);
+              }
+            });
+            row.append(textWrap, delBtn);
+            memoryList.appendChild(row);
+          }
+        } catch (err) {
+          memoryList.textContent = t("settings.loadFailed", { message: err.message });
+        }
+      }
+
+      target.appendChild(memoryGroup);
+      refreshMemoryList().catch(() => {});
+    }
+
+    function renderTelegramSettings(target, telegram) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup";
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.telegramTitle");
+      groupEl.appendChild(heading);
+
+      const hint = document.createElement("div");
+      hint.className = "settingsHint";
+      hint.textContent = t("settings.telegramHint");
+      groupEl.appendChild(hint);
+
+      const enabledRow = document.createElement("label");
+      enabledRow.className = "settingsItem";
+      const enabledCb = document.createElement("input");
+      enabledCb.type = "checkbox";
+      enabledCb.checked = telegram.enabled === true;
+      const enabledText = document.createElement("div");
+      const enabledName = document.createElement("div");
+      enabledName.className = "name";
+      enabledName.textContent = t("settings.telegramEnabled");
+      const enabledDesc = document.createElement("div");
+      enabledDesc.className = "desc";
+      enabledDesc.textContent = t("settings.telegramEnabledDesc");
+      enabledText.append(enabledName, enabledDesc);
+      enabledRow.append(enabledCb, enabledText);
+      groupEl.appendChild(enabledRow);
+
+      const tokenField = document.createElement("label");
+      tokenField.className = "formField";
+      tokenField.innerHTML = "<span></span>";
+      tokenField.querySelector("span").textContent = t("settings.telegramBotToken");
+      const tokenInput = document.createElement("input");
+      tokenInput.type = "password";
+      tokenInput.autocomplete = "off";
+      tokenInput.placeholder = "123456789:ABC...";
+      tokenInput.value = telegram.botToken || "";
+      tokenField.appendChild(tokenInput);
+      groupEl.appendChild(tokenField);
+
+      const chatField = document.createElement("label");
+      chatField.className = "formField";
+      chatField.innerHTML = "<span></span>";
+      chatField.querySelector("span").textContent = t("settings.telegramChatId");
+      const chatInput = document.createElement("input");
+      chatInput.type = "text";
+      chatInput.autocomplete = "off";
+      chatInput.placeholder = "123456789";
+      chatInput.value = telegram.chatId || "";
+      chatField.appendChild(chatInput);
+      groupEl.appendChild(chatField);
+
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "iconBtn primaryBtn";
+      saveBtn.textContent = t("settings.telegramSave");
+      saveBtn.addEventListener("click", async () => {
+        try {
+          await api("/api/settings", {
+            method: "PUT",
+            body: {
+              telegram: {
+                enabled: enabledCb.checked,
+                botToken: tokenInput.value.trim(),
+                chatId: chatInput.value.trim(),
+              },
+            },
+          });
+          setStatus(t("settings.telegramSaved"));
+        } catch (err) {
+          setStatus(t("settings.saveFailed", { message: err.message }), true);
+        }
+      });
+      groupEl.appendChild(saveBtn);
+      target.appendChild(groupEl);
+    }
+
     function renderVoiceSettings(target) {
       const groupEl = document.createElement("div");
       groupEl.className = "settingsGroup";
@@ -2181,7 +3297,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const installBtn = document.createElement("button");
       installBtn.type = "button";
       installBtn.className = "apiKeyBtn";
-      installBtn.textContent = t("settings.createKey");
+      installBtn.textContent = t("install.approve");
       installBtn.addEventListener("click", async () => {
         installBtn.disabled = true;
         badge.textContent = "...";
@@ -2206,7 +3322,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const ready = status.helperAvailable && status.modelAvailable;
         badge.textContent = ready ? t("settings.voiceReady") : t("settings.voiceMissing");
         badge.className = "riskBadge " + (ready ? "low" : "medium");
-        installBtn.textContent = ready ? t("settings.keyCreated") : t("settings.createKey");
+        installBtn.textContent = ready ? t("settings.voiceReady") : t("install.approve");
       }
 
       api("/api/voice/status")
@@ -2218,6 +3334,184 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         });
     }
 
+    function renderAgentPermissionSettings(target, commandPermissions) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup";
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.agentPermissions");
+      groupEl.appendChild(heading);
+
+      const rows = [
+        {
+          key: "allowShell",
+          checked: commandPermissions.allowShell !== false,
+          name: t("settings.allowShell"),
+          desc: t("settings.allowShellDesc"),
+          risk: "medium",
+        },
+        {
+          key: "allowPythonModuleAndEval",
+          checked: commandPermissions.allowPythonModuleAndEval !== false,
+          name: t("settings.allowPythonModuleAndEval"),
+          desc: t("settings.allowPythonModuleAndEvalDesc"),
+          risk: "high",
+        },
+      ];
+
+      for (const spec of rows) {
+        const row = document.createElement("label");
+        row.className = "settingsItem";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = spec.checked;
+
+        const textWrap = document.createElement("div");
+        const nameEl = document.createElement("div");
+        nameEl.className = "name";
+        nameEl.textContent = spec.name;
+        const descEl = document.createElement("div");
+        descEl.className = "desc";
+        descEl.textContent = spec.desc;
+        textWrap.append(nameEl, descEl);
+
+        const badge = document.createElement("span");
+        badge.className = "riskBadge " + spec.risk;
+        badge.textContent = spec.risk;
+
+        cb.addEventListener("change", async () => {
+          try {
+            await saveCommandPermissions({ [spec.key]: cb.checked });
+          } catch (err) {
+            cb.checked = !cb.checked;
+            setStatus(t("settings.saveFailed", { message: err.message }), true);
+          }
+        });
+
+        row.append(cb, textWrap, badge);
+        groupEl.appendChild(row);
+      }
+
+      target.appendChild(groupEl);
+    }
+
+    function renderUpdateSettings(target) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup updateSettings";
+
+      const heading = document.createElement("h3");
+      heading.textContent = t("update.title");
+      groupEl.appendChild(heading);
+
+      const status = document.createElement("div");
+      status.className = "updateStatus";
+      status.textContent = t("update.notChecked");
+      groupEl.appendChild(status);
+
+      const meta = document.createElement("div");
+      meta.className = "updateMeta";
+      groupEl.appendChild(meta);
+
+      const actions = document.createElement("div");
+      actions.className = "updateActions";
+
+      const checkBtn = document.createElement("button");
+      checkBtn.type = "button";
+      checkBtn.className = "apiKeyBtn";
+      checkBtn.textContent = t("update.check");
+
+      const installBtn = document.createElement("button");
+      installBtn.type = "button";
+      installBtn.className = "apiKeyBtn primaryUpdateBtn";
+      installBtn.textContent = t("update.install");
+      installBtn.disabled = true;
+
+      actions.append(checkBtn, installBtn);
+      groupEl.appendChild(actions);
+
+      const note = document.createElement("div");
+      note.className = "apiModels";
+      note.textContent = t("update.note");
+      groupEl.appendChild(note);
+
+      let lastCheck = null;
+
+      function renderCheck(data) {
+        lastCheck = data;
+        meta.innerHTML = "";
+        const rows = [
+          [t("update.currentVersion"), data.currentVersion || "-"],
+          [t("update.latestVersion"), data.latestVersion || "-"],
+          [t("update.projectRoot"), data.projectRoot || "-"],
+        ];
+        for (const [label, value] of rows) {
+          const row = document.createElement("div");
+          row.className = "updateMetaRow";
+          const labelEl = document.createElement("span");
+          labelEl.textContent = label;
+          const valueEl = document.createElement("code");
+          valueEl.textContent = value;
+          row.append(labelEl, valueEl);
+          meta.appendChild(row);
+        }
+        if (data.error) {
+          status.textContent = t("update.checkFailed", { message: data.error });
+          status.className = "updateStatus error";
+        } else if (data.updateAvailable) {
+          status.textContent = t("update.available");
+          status.className = "updateStatus ready";
+        } else {
+          status.textContent = t("update.upToDate");
+          status.className = "updateStatus";
+        }
+        installBtn.disabled = !data.updateAvailable || !data.canUpdate;
+        if (data.updateAvailable && !data.canUpdate) {
+          status.textContent = t("update.gitRequired");
+          status.className = "updateStatus error";
+        }
+      }
+
+      async function check() {
+        checkBtn.disabled = true;
+        installBtn.disabled = true;
+        status.textContent = t("update.checking");
+        status.className = "updateStatus";
+        try {
+          renderCheck(await api("/api/update/check"));
+        } catch (err) {
+          status.textContent = t("update.checkFailed", { message: err.message });
+          status.className = "updateStatus error";
+        } finally {
+          checkBtn.disabled = false;
+        }
+      }
+
+      checkBtn.addEventListener("click", check);
+      installBtn.addEventListener("click", async () => {
+        if (!lastCheck?.updateAvailable) return;
+        if (!await confirmAppUpdate()) return;
+        checkBtn.disabled = true;
+        installBtn.disabled = true;
+        status.textContent = t("update.installing");
+        status.className = "updateStatus";
+        try {
+          const result = await api("/api/update/run", { method: "POST" });
+          renderCheck(result.after || lastCheck);
+          status.textContent = result.message || t("update.installed");
+          status.className = "updateStatus ready";
+          setStatus(status.textContent, false);
+        } catch (err) {
+          status.textContent = t("update.installFailed", { message: err.message });
+          status.className = "updateStatus error";
+          setStatus(status.textContent, true);
+        } finally {
+          checkBtn.disabled = false;
+        }
+      });
+
+      target.appendChild(groupEl);
+      check().catch(() => {});
+    }
+
     async function saveUiSettings(uiPatch, allowedCommands) {
       const currentUi = I18N.ui || {};
       const nextUi = { ...currentUi, ...uiPatch };
@@ -2227,6 +3521,16 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       });
       I18N.ui = saved.ui || nextUi;
       return saved;
+    }
+
+    async function saveCommandPermissions(commandPermissions) {
+      return api("/api/settings", {
+        method: "PUT",
+        body: {
+          allowedCommands: collectAllowedCommands(),
+          commandPermissions,
+        },
+      });
     }
 
     function renderOpenAISettings(target, info) {
@@ -2331,10 +3635,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     async function onToggle() {
       // Собираем актуальный список из всех чекбоксов и пушим на сервер.
-      const allCheckboxes = settingsBody.querySelectorAll('input[type="checkbox"][data-cmd]');
-      const selected = Array.from(allCheckboxes)
-        .filter((cb) => cb.checked)
-        .map((cb) => cb.dataset.cmd);
+      const selected = collectAllowedCommands();
       try {
         await api("/api/settings", { method: "PUT", body: { allowedCommands: selected } });
       } catch (err) {
@@ -2343,6 +3644,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         if (data) renderSettings(data);
         alert(t("settings.saveFailed", { message: err.message }));
       }
+    }
+
+    function collectAllowedCommands() {
+      const allCheckboxes = settingsBody.querySelectorAll('input[type="checkbox"][data-cmd]');
+      return Array.from(allCheckboxes)
+        .filter((cb) => cb.checked)
+        .map((cb) => cb.dataset.cmd);
     }
 
     function applySavedSidebarWidth() {

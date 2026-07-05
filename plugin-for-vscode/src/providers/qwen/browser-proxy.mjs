@@ -19,10 +19,6 @@
 import { QWEN_AUTH_FILE, QWEN_BASE_URL, QWEN_BROWSER_PROFILE } from "./config.mjs";
 import { applyQwenCookiesToContext, readQwenAuth } from "./auth-files.mjs";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import url from "node:url";
-import { spawnSync } from "node:child_process";
 
 let proxyPromise = null;
 const QWEN_NAV_TIMEOUT_MS = Number(process.env.QWEN_NAV_TIMEOUT_MS || 90_000);
@@ -31,8 +27,6 @@ const QWEN_FETCH_TIMEOUT_MS = Number(process.env.QWEN_FETCH_TIMEOUT_MS || 120_00
 const QWEN_STREAM_IDLE_TIMEOUT_MS = Number(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS || 45_000);
 const QWEN_PROXY_MAX_ATTEMPTS = Math.max(1, Math.min(5, Number(process.env.QWEN_PROXY_MAX_ATTEMPTS || 3)));
 const QWEN_BROWSER_CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.QWEN_BROWSER_CONCURRENCY || 1)));
-const here = path.dirname(url.fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(here, "../../..");
 
 function isTransientBrowserError(error) {
   const message = String(error?.message || error || "");
@@ -50,25 +44,8 @@ function hashChatId(chatId) {
   return Math.abs(hash);
 }
 
-function shouldInstallPlaywrightBrowser(error) {
-  const message = String(error?.message || "");
-  return /Executable doesn't exist|browserType\.launch|playwright install/i.test(message);
-}
-
-function installPlaywrightChromium() {
-  const cli = path.join(projectRoot, "node_modules", "playwright", "cli.js");
-  if (!fs.existsSync(cli)) return false;
-  console.log("[playwright] Chromium browser is missing. Installing it now...");
-  const result = spawnSync(process.execPath, [cli, "install", "chromium"], {
-    cwd: projectRoot,
-    stdio: "inherit",
-    env: process.env,
-  });
-  return result.status === 0;
-}
-
 // Сброс singleton после re-login / refresh — следующий запрос поднимет прокси с новыми куками.
-export async function resetQwenBrowserProxy() {
+export async function closeQwenBrowserProxy() {
   const current = proxyPromise;
   proxyPromise = null;
   if (!current) return;
@@ -76,6 +53,10 @@ export async function resetQwenBrowserProxy() {
     const proxy = await current;
     await proxy.close?.();
   } catch {}
+}
+
+export function resetQwenBrowserProxy() {
+  return closeQwenBrowserProxy();
 }
 
 // Возвращает singleton-инстанс прокси. Все вызовы делят один Chromium.
@@ -91,11 +72,12 @@ export function getQwenBrowserProxy({ debug = false } = {}) {
 }
 
 async function createProxy({ debug }) {
-  const { chromium } = await import("playwright");
+  const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
+  const chromium = await getChatGPTChromium();
 
   if (debug) console.log("[qwen-proxy] launching headless Chromium with profile…");
 
-  const launchOptions = {
+  const context = await chromium.launchPersistentContext(QWEN_BROWSER_PROFILE, {
     headless: true,
     viewport: { width: 1280, height: 800 },
     locale: "ru-RU",
@@ -103,17 +85,7 @@ async function createProxy({ debug }) {
       "--disable-blink-features=AutomationControlled",
       "--disable-features=site-per-process",
     ],
-  };
-  let context;
-  try {
-    context = await chromium.launchPersistentContext(QWEN_BROWSER_PROFILE, launchOptions);
-  } catch (error) {
-    if (shouldInstallPlaywrightBrowser(error) && installPlaywrightChromium()) {
-      context = await chromium.launchPersistentContext(QWEN_BROWSER_PROFILE, launchOptions);
-    } else {
-      throw error;
-    }
-  }
+  });
 
   // Стелс — те же меры, что в browser-login.mjs.
   await context.addInitScript(() => {
@@ -151,11 +123,24 @@ async function createProxy({ debug }) {
 
   attachPageDiagnostics(firstPage, "page0");
 
+  let rawStreamHandler = null;
+  await context.exposeFunction("__qwenRawStreamChunk", async (chunk) => {
+    if (typeof rawStreamHandler === "function") rawStreamHandler(chunk);
+  });
+
   // auth.json может быть свежее профиля (import-qwen, silent refresh). Подмешиваем куки до goto.
   const savedAuth = readQwenAuth(QWEN_AUTH_FILE);
+  const authToken = savedAuth?.token || "";
   if (savedAuth?.cookies?.length) {
     const n = await applyQwenCookiesToContext(context, savedAuth.cookies);
     if (debug) console.log(`[qwen-proxy] injected ${n} cookies from auth.json`);
+  }
+
+  async function primeQwenPageAuth(page) {
+    if (!authToken) return;
+    await page.evaluate((token) => {
+      try { localStorage.setItem("token", token); } catch {}
+    }, authToken);
   }
 
   if (debug) {
@@ -197,6 +182,7 @@ async function createProxy({ debug }) {
 
   await Promise.all(workers.map(async (worker) => {
     await worker.page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: QWEN_NAV_TIMEOUT_MS });
+    await primeQwenPageAuth(worker.page);
     // Даём JS-бандлу проинициализировать перехватчик fetch / bx-ua (на слабых сетях 1-2 сек мало).
     await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
   }));
@@ -213,8 +199,6 @@ async function createProxy({ debug }) {
     } catch {}
   };
   process.once("exit", () => { close(); });
-  process.once("SIGINT", () => { close().then(() => process.exit(0)); });
-  process.once("SIGTERM", () => { close().then(() => process.exit(0)); });
 
   // Навигация на /c/<chatId>. Это, похоже, ЕДИНСТВЕННЫЙ способ зарегистрировать
   // chat_id на сервере Qwen — после goto JS-бандл сам делает скрытую синхронизацию
@@ -226,6 +210,7 @@ async function createProxy({ debug }) {
       waitUntil: "domcontentloaded",
       timeout: QWEN_NAV_TIMEOUT_MS,
     });
+    await primeQwenPageAuth(worker.page);
     // Подождём, пока SPA доделает свою регистрацию и поднимет антибот-перехватчики.
     await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
     worker.currentChatId = chatId;
@@ -238,6 +223,7 @@ async function createProxy({ debug }) {
       waitUntil: "domcontentloaded",
       timeout: QWEN_NAV_TIMEOUT_MS,
     });
+    await primeQwenPageAuth(worker.page);
     await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
     worker.currentChatId = "new-chat";
   }
@@ -275,6 +261,7 @@ async function createProxy({ debug }) {
   async function reloadWorker(worker) {
     worker.currentChatId = null;
     await worker.page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: QWEN_NAV_TIMEOUT_MS });
+    await primeQwenPageAuth(worker.page);
     await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
   }
 
@@ -295,97 +282,109 @@ async function createProxy({ debug }) {
           : "application/json, text/plain, */*";
         result = await Promise.race([
           worker.page.evaluate(
-          async ({ url, body, fetchTimeoutMs, streamIdleTimeoutMs, requestId, accept, isCompletionRequest }) => {
-            const requestUrl = new URL(url);
-            const sameOrigin = requestUrl.origin === window.location.origin;
-            const fetchUrl = sameOrigin ? `${requestUrl.pathname}${requestUrl.search}` : url;
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort("qwen_fetch_timeout"), fetchTimeoutMs);
-            const readWithTimeout = (reader, timeoutMs) =>
-              Promise.race([
-                reader.read(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("qwen_stream_idle_timeout")), timeoutMs)),
-              ]);
-            const readTextBody = async (res) => {
-              const contentType = res.headers.get("content-type") || "";
-              if (!res.body?.getReader) {
-                return { text: await res.text(), contentType };
-              }
-              const isStreamingResponse = /text\/event-stream|application\/x-ndjson|stream/i.test(contentType);
-              const isHtmlResponse = /text\/html/i.test(contentType);
-              const reader = res.body.getReader();
-              const decoder = new TextDecoder();
-              let text = "";
-              try {
-                while (true) {
-                  let chunk;
-                  try {
-                    chunk = await readWithTimeout(reader, streamIdleTimeoutMs);
-                  } catch (error) {
-                    if (String(error?.message || error) === "qwen_stream_idle_timeout" && text) break;
-                    throw error;
-                  }
-                  const { done, value } = chunk;
-                  if (done) break;
-                  text += decoder.decode(value, { stream: true });
-                  if (isHtmlResponse && text) {
-                    try { await reader.cancel(); } catch {}
-                    break;
-                  }
-                  if (isStreamingResponse && /(^|\n)data:\s*\[DONE\](\n|$)/.test(text)) {
-                    try { await reader.cancel(); } catch {}
-                    break;
-                  }
+            async ({ url, body, fetchTimeoutMs, streamIdleTimeoutMs, requestId, accept, isCompletionRequest, authToken }) => {
+              const requestUrl = new URL(url);
+              const sameOrigin = requestUrl.origin === window.location.origin;
+              const fetchUrl = sameOrigin ? `${requestUrl.pathname}${requestUrl.search}` : url;
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort("qwen_fetch_timeout"), fetchTimeoutMs);
+              const readWithTimeout = (reader, timeoutMs) =>
+                Promise.race([
+                  reader.read(),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error("qwen_stream_idle_timeout")), timeoutMs)),
+                ]);
+              const readTextBody = async (res) => {
+                const contentType = res.headers.get("content-type") || "";
+                if (!res.body?.getReader) {
+                  return { text: await res.text(), contentType };
                 }
-                text += decoder.decode();
+                const isStreamingResponse = /text\/event-stream|application\/x-ndjson|stream/i.test(contentType);
+                const isHtmlResponse = /text\/html/i.test(contentType);
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let text = "";
+                try {
+                  while (true) {
+                    let chunk;
+                    try {
+                      chunk = await readWithTimeout(reader, streamIdleTimeoutMs);
+                    } catch (error) {
+                      if (String(error?.message || error) === "qwen_stream_idle_timeout" && text) break;
+                      throw error;
+                    }
+                    const { done, value } = chunk;
+                    if (done) break;
+                    text += decoder.decode(value, { stream: true });
+                    if (isHtmlResponse && text) {
+                      try { await reader.cancel(); } catch {}
+                      break;
+                    }
+                    if (isStreamingResponse && /(^|\n)data:\s*\[DONE\](\n|$)/.test(text)) {
+                      try { await reader.cancel(); } catch {}
+                      break;
+                    }
+                  }
+                  text += decoder.decode();
+                } finally {
+                  try { reader.releaseLock(); } catch {}
+                }
+                return { text, contentType };
+              };
+              try {
+                const headers = {
+                  "Content-Type": "application/json",
+                  Accept: accept,
+                  source: "web",
+                  "bx-v": "2.5.36",
+                  "x-request-id": requestId,
+                  Referer: window.location.href,
+                  timezone: new Date().toString().replace(/\s*\(.+\)$/, ""),
+                };
+                const clientScript = Array.from(document.scripts)
+                  .map((script) => script.src)
+                  .find((src) => /\/qwen-chat-fe\/[^/]+\/js\/main\.js(?:$|\?)/.test(src));
+                const clientVersion = clientScript?.match(/\/qwen-chat-fe\/([^/]+)\//)?.[1];
+                if (clientVersion) headers.version = clientVersion;
+                if (isCompletionRequest) headers["x-accel-buffering"] = "no";
+                try {
+                  const token = localStorage.getItem("token") || authToken || "";
+                  if (token) headers.Authorization = `Bearer ${token}`;
+                } catch {}
+                const umidMatch = document.cookie.match(/(?:^|;\\s*)lswusea=([^;]+)/);
+                if (umidMatch) {
+                  const raw = decodeURIComponent(umidMatch[1]);
+                  const at = raw.indexOf("@@");
+                  headers["bx-umidtoken"] = at >= 0 ? raw.slice(0, at) : raw;
+                }
+                const res = await fetch(fetchUrl, {
+                  method: "POST",
+                  headers,
+                  body,
+                  credentials: "include",
+                  signal: controller.signal,
+                });
+                const { text, contentType } = await readTextBody(res);
+                return {
+                  ok: res.ok,
+                  status: res.status,
+                  contentType,
+                  text,
+                };
+              } catch (e) {
+                return {
+                  ok: false,
+                  status: 0,
+                  contentType: "",
+                  text:
+                    `__fetch_error__: ${e.name || "Error"}: ${e.message}\n` +
+                    `page=${window.location.href}\n` +
+                    `request=${fetchUrl}`,
+                };
               } finally {
-                try { reader.releaseLock(); } catch {}
+                clearTimeout(timeoutId);
               }
-              return { text, contentType };
-            };
-            try {
-              const headers = {
-                "Content-Type": "application/json",
-                Accept: accept,
-                source: "web",
-                timezone: new Date().toString().replace(/\s*\(.+\)$/, ""),
-                "x-request-id": requestId,
-              };
-              const clientScript = Array.from(document.scripts)
-                .map((script) => script.src)
-                .find((src) => /\/qwen-chat-fe\/[^/]+\/js\/main\.js(?:$|\?)/.test(src));
-              const clientVersion = clientScript?.match(/\/qwen-chat-fe\/([^/]+)\//)?.[1];
-              if (clientVersion) headers.version = clientVersion;
-              if (isCompletionRequest) headers["x-accel-buffering"] = "no";
-              const res = await fetch(fetchUrl, {
-                method: "POST",
-                headers,
-                body,
-                credentials: "include",
-                signal: controller.signal,
-              });
-              const { text, contentType } = await readTextBody(res);
-              return {
-                ok: res.ok,
-                status: res.status,
-                contentType,
-                text,
-              };
-            } catch (e) {
-              return {
-                ok: false,
-                status: 0,
-                contentType: "",
-                text:
-                  `__fetch_error__: ${e.name || "Error"}: ${e.message}\n` +
-                  `page=${window.location.href}\n` +
-                  `request=${fetchUrl}`,
-              };
-            } finally {
-              clearTimeout(timeoutId);
-            }
-          },
-          { url, body, fetchTimeoutMs, streamIdleTimeoutMs: idleTimeoutMs, requestId, accept, isCompletionRequest },
+            },
+            { url, body, fetchTimeoutMs, streamIdleTimeoutMs: idleTimeoutMs, requestId, accept, isCompletionRequest, authToken },
           ),
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error("qwen_page_evaluate_timeout")), fetchTimeoutMs + 5000),
@@ -417,6 +416,170 @@ async function createProxy({ debug }) {
     return result;
   }
 
+  async function runProxyFetchStream(worker, { url, body, chatId, onRawChunk, timeoutMs, streamIdleTimeoutMs, maxAttempts }) {
+    let result = null;
+    let lastError = null;
+    const fetchTimeoutMs = Number(timeoutMs || QWEN_FETCH_TIMEOUT_MS);
+    const idleTimeoutMs = Number(streamIdleTimeoutMs || QWEN_STREAM_IDLE_TIMEOUT_MS);
+    const attempts = Math.max(1, Math.min(5, Number(maxAttempts || QWEN_PROXY_MAX_ATTEMPTS)));
+    rawStreamHandler = typeof onRawChunk === "function" ? onRawChunk : null;
+    try {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          if (chatId) await ensureChatPage(worker, chatId);
+          else if (/\/api\/v2\/chats\/new(?:$|\?)/.test(url)) await ensureNewChatPage(worker);
+          const requestId = randomUUID();
+          const isCompletionRequest = /\/api\/v2\/chat\/completions(?:$|\?)/.test(url);
+          const accept = isCompletionRequest
+            ? "application/json"
+            : "application/json, text/plain, */*";
+          result = await Promise.race([
+            worker.page.evaluate(
+              async ({ url, body, fetchTimeoutMs, streamIdleTimeoutMs, requestId, accept, isCompletionRequest, authToken }) => {
+                const requestUrl = new URL(url);
+                const sameOrigin = requestUrl.origin === window.location.origin;
+                const fetchUrl = sameOrigin ? `${requestUrl.pathname}${requestUrl.search}` : url;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort("qwen_fetch_timeout"), fetchTimeoutMs);
+                const readWithTimeout = (reader, timeoutMs) =>
+                  Promise.race([
+                    reader.read(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("qwen_stream_idle_timeout")), timeoutMs)),
+                  ]);
+                const readTextBody = async (res) => {
+                  const contentType = res.headers.get("content-type") || "";
+                  if (!res.body?.getReader) {
+                    const text = await res.text();
+                    if (text) await window.__qwenRawStreamChunk(text);
+                    return { text, contentType };
+                  }
+                  const isStreamingResponse = /text\/event-stream|application\/x-ndjson|stream/i.test(contentType);
+                  const isHtmlResponse = /text\/html/i.test(contentType);
+                  const reader = res.body.getReader();
+                  const decoder = new TextDecoder();
+                  let text = "";
+                  try {
+                    while (true) {
+                      let chunk;
+                      try {
+                        chunk = await readWithTimeout(reader, streamIdleTimeoutMs);
+                      } catch (error) {
+                        if (String(error?.message || error) === "qwen_stream_idle_timeout" && text) break;
+                        throw error;
+                      }
+                      const { done, value } = chunk;
+                      if (done) break;
+                      const piece = decoder.decode(value, { stream: true });
+                      text += piece;
+                      if (piece) await window.__qwenRawStreamChunk(piece);
+                      if (isHtmlResponse && text) {
+                        try { await reader.cancel(); } catch {}
+                        break;
+                      }
+                      if (isStreamingResponse && /(^|\n)data:\s*\[DONE\](\n|$)/.test(text)) {
+                        try { await reader.cancel(); } catch {}
+                        break;
+                      }
+                    }
+                    const tail = decoder.decode();
+                    if (tail) {
+                      text += tail;
+                      await window.__qwenRawStreamChunk(tail);
+                    }
+                  } finally {
+                    try { reader.releaseLock(); } catch {}
+                  }
+                  return { text, contentType };
+                };
+                try {
+                  const headers = {
+                    "Content-Type": "application/json",
+                    Accept: accept,
+                    source: "web",
+                    "bx-v": "2.5.36",
+                    "x-request-id": requestId,
+                    Referer: window.location.href,
+                    timezone: new Date().toString().replace(/\s*\(.+\)$/, ""),
+                  };
+                  const clientScript = Array.from(document.scripts)
+                    .map((script) => script.src)
+                    .find((src) => /\/qwen-chat-fe\/[^/]+\/js\/main\.js(?:$|\?)/.test(src));
+                  const clientVersion = clientScript?.match(/\/qwen-chat-fe\/([^/]+)\//)?.[1];
+                  if (clientVersion) headers.version = clientVersion;
+                  if (isCompletionRequest) headers["x-accel-buffering"] = "no";
+                  try {
+                    const token = localStorage.getItem("token") || authToken || "";
+                    if (token) headers.Authorization = `Bearer ${token}`;
+                  } catch {}
+                  const umidMatch = document.cookie.match(/(?:^|;\\s*)lswusea=([^;]+)/);
+                  if (umidMatch) {
+                    const raw = decodeURIComponent(umidMatch[1]);
+                    const at = raw.indexOf("@@");
+                    headers["bx-umidtoken"] = at >= 0 ? raw.slice(0, at) : raw;
+                  }
+                  const res = await fetch(fetchUrl, {
+                    method: "POST",
+                    headers,
+                    body,
+                    credentials: "include",
+                    signal: controller.signal,
+                  });
+                  const { text, contentType } = await readTextBody(res);
+                  return {
+                    ok: res.ok,
+                    status: res.status,
+                    contentType,
+                    text,
+                  };
+                } catch (e) {
+                  return {
+                    ok: false,
+                    status: 0,
+                    contentType: "",
+                    text:
+                      `__fetch_error__: ${e.name || "Error"}: ${e.message}\n` +
+                      `page=${window.location.href}\n` +
+                      `request=${fetchUrl}`,
+                  };
+                } finally {
+                  clearTimeout(timeoutId);
+                }
+              },
+              { url, body, fetchTimeoutMs, streamIdleTimeoutMs: idleTimeoutMs, requestId, accept, isCompletionRequest, authToken },
+            ),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("qwen_page_evaluate_timeout")), fetchTimeoutMs + 5000),
+            ),
+          ]);
+          if (result.status !== 0 || attempt === attempts - 1) break;
+          if (debug) console.log(`[qwen-proxy:${worker.label}] stream fetch failed before HTTP response; reloading page and retrying`);
+          await reloadWorker(worker);
+        } catch (error) {
+          lastError = error;
+          if (!isTransientBrowserError(error) || attempt === attempts - 1) throw error;
+          if (debug) console.log(`[qwen-proxy:${worker.label}] transient browser error during stream; reloading: ${error.message}`);
+          try {
+            if (isClosedBrowserError(error)) await recreateWorkerPage(worker);
+            else await reloadWorker(worker);
+          } catch (recoverError) {
+            proxyPromise = null;
+            throw recoverError;
+          }
+        }
+      }
+    } finally {
+      rawStreamHandler = null;
+    }
+    if (!result && lastError) throw lastError;
+    if (result.status === 0) {
+      const failure = latestFailureFor(url);
+      if (failure) {
+        result.text += `\nnetwork=${failure.errorText}\nnetworkMethod=${failure.method}`;
+      }
+    }
+    return result;
+  }
+
   return {
     // Прокинуть fetch через контекст страницы. Перед запросом обязательно
     // переходим на /c/<chatId>, чтобы чат был зарегистрирован SPA-роутером.
@@ -427,6 +590,18 @@ async function createProxy({ debug }) {
         url,
         body,
         chatId,
+        timeoutMs,
+        streamIdleTimeoutMs,
+        maxAttempts,
+      }));
+    },
+    async proxyFetchStream({ url, body, chatId, onRawChunk, timeoutMs, streamIdleTimeoutMs, maxAttempts }) {
+      const worker = pickWorker(chatId);
+      return enqueue(worker, () => runProxyFetchStream(worker, {
+        url,
+        body,
+        chatId,
+        onRawChunk,
         timeoutMs,
         streamIdleTimeoutMs,
         maxAttempts,

@@ -3,45 +3,31 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import url from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 
-const here = path.dirname(url.fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(here, "../..");
-
-function shouldInstallPlaywrightBrowser(error) {
-  const message = String(error?.message || "");
-  return /Executable doesn't exist|browserType\.launch|playwright install/i.test(message);
-}
-
-function installPlaywrightChromium() {
-  const cli = path.join(projectRoot, "node_modules", "playwright", "cli.js");
-  if (!fs.existsSync(cli)) return false;
-  console.log("[playwright] Chromium browser is missing. Installing it now...");
-  const result = spawnSync(process.execPath, [cli, "install", "chromium"], {
-    cwd: projectRoot,
-    stdio: "inherit",
-    env: process.env,
-  });
-  return result.status === 0;
-}
-
-// Поднять persistent Chromium-профиль для DeepSeek. headless=false — видимое окно,
-// true — для тихого refresh из профиля. Чистит stale SingletonLock-файлы от падений.
-export async function launchPersistentDeepSeekContext(chromium, profileDir, headless) {
+// Поднять persistent Chromium-профиль для DeepSeek/Qwen/ChatGPT. headless=false —
+// видимое окно, true — для тихого refresh из профиля. Чистит stale SingletonLock-файлы от падений.
+export async function launchPersistentDeepSeekContext(chromium, profileDir, headless, overrides = {}) {
   fs.mkdirSync(profileDir, { recursive: true });
   const options = {
     headless,
     viewport: null,
     args: ["--disable-blink-features=AutomationControlled"],
+    ...overrides,
   };
+  const preferredChannel = Object.prototype.hasOwnProperty.call(overrides, "channel")
+    ? overrides.channel
+    : "chrome";
 
   const tryLaunch = async () => {
     try {
-      return await chromium.launchPersistentContext(profileDir, {
-        ...options,
-        channel: "chrome",
-      });
+      if (preferredChannel) {
+        return await chromium.launchPersistentContext(profileDir, {
+          ...options,
+          channel: preferredChannel,
+        });
+      }
+      return await chromium.launchPersistentContext(profileDir, options);
     } catch (chromeError) {
       try {
         return await chromium.launchPersistentContext(profileDir, options);
@@ -72,37 +58,18 @@ export async function launchPersistentDeepSeekContext(chromium, profileDir, head
         );
       }
     }
-    if (shouldInstallPlaywrightBrowser(error) && installPlaywrightChromium()) {
-      try {
-        return await tryLaunch();
-      } catch (retryError) {
-        throw new Error(`Could not open browser profile after installing Chromium. ${retryError.message}`);
-      }
-    }
-    throw new Error(`Could not open browser profile. ${error.message}`);
+    throw new Error(
+      `Could not open browser profile. Install Google Chrome or run "npx playwright install chromium". ${error.message}`,
+    );
   }
 }
 
-// Открыть URL в новом окне-приложении. На macOS — через `open -na "Google Chrome" --app=`.
-// На Win/Linux — сами ищем chrome.exe / google-chrome и запускаем с --app.
-// Fallback: дефолтный браузер обычной вкладкой.
+// Открыть URL в окне-приложении (--app): без вкладок и адресной строки.
 export function openAppWindow(url) {
-  if (process.platform === "darwin") {
-    const chrome = spawn("open", ["-na", "Google Chrome", "--args", `--app=${url}`], {
-      detached: true,
-      stdio: "ignore",
-    });
-    chrome.on("error", () => {
-      spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
-    });
-    chrome.unref();
-    return;
-  }
-
   const chromeBinary = findChromeBinary();
   if (chromeBinary) {
     try {
-      const proc = spawn(chromeBinary, [`--app=${url}`, "--new-window"], {
+      const proc = spawn(chromeBinary, [`--app=${url}`, "--new-window", "--disable-blink-features=AutomationControlled"], {
         detached: true,
         stdio: "ignore",
       });
@@ -114,12 +81,36 @@ export function openAppWindow(url) {
     }
   }
 
+  if (process.platform === "darwin") {
+    const chrome = spawn("open", ["-na", "Google Chrome", "--args", `--app=${url}`], {
+      detached: true,
+      stdio: "ignore",
+    });
+    chrome.on("error", () => fallbackOpen(url));
+    chrome.unref();
+    return;
+  }
+
   fallbackOpen(url);
 }
 
 // Поиск Chrome/Chromium/Edge на Win/Linux. Возвращает абсолютный путь или null.
 // Порядок: настоящий Chrome → Chromium → Edge.
 export function findChromeBinary() {
+  if (process.platform === "darwin") {
+    const candidates = [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      path.join(osHomedirSafe(), "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      path.join(osHomedirSafe(), "Applications", "Chromium.app", "Contents", "MacOS", "Chromium"),
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    ];
+    for (const candidate of candidates) {
+      try { if (fs.existsSync(candidate)) return candidate; } catch {}
+    }
+    return null;
+  }
+
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA || "";
     const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
@@ -157,6 +148,14 @@ export function findChromeBinary() {
     } catch {}
   }
   return null;
+}
+
+function osHomedirSafe() {
+  try {
+    return process.env.HOME || "";
+  } catch {
+    return "";
+  }
 }
 
 export function fallbackOpen(url) {

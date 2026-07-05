@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 import { AI_FREE_VERSION } from "./config.mjs";
@@ -172,4 +172,40 @@ export async function runUpdate() {
     after,
     logs: logs.filter(Boolean),
   };
+}
+
+export function scheduleWindowRestart({ port = 4317, workspaceRoot = process.cwd(), delayMs = 1800 } = {}) {
+  const root = projectRoot();
+  const entry = path.join(root, "bin", "deepseek.mjs");
+  const payload = Buffer.from(JSON.stringify({
+    node: process.execPath,
+    args: [
+      entry,
+      "--window",
+      "--port",
+      String(port),
+      "--workspace",
+      workspaceRoot,
+    ],
+    cwd: root,
+    env: {
+      ...process.env,
+      AI_FREE_RESTARTED_AFTER_UPDATE: "1",
+    },
+    delayMs,
+  }), "utf8").toString("base64");
+  const code = [
+    'const { spawn } = require("node:child_process");',
+    'const payload = JSON.parse(Buffer.from(process.argv[1], "base64").toString("utf8"));',
+    'setTimeout(() => {',
+    '  const child = spawn(payload.node, payload.args, { cwd: payload.cwd, env: payload.env, detached: true, stdio: "ignore" });',
+    '  child.unref();',
+    '}, payload.delayMs);',
+  ].join("\n");
+  const launcher = spawn(process.execPath, ["-e", code, payload], {
+    cwd: root,
+    detached: true,
+    stdio: "ignore",
+  });
+  launcher.unref();
 }

@@ -12,7 +12,8 @@ import { AuthManager } from "../auth/manager.mjs";
 import { loginAndSaveAuth, refreshAuthFromProfile } from "../browser/login.mjs";
 import { DeepSeekChatClient } from "../providers/deepseek/client.mjs";
 import { executeWorkspaceTool } from "../code-agent/executor.mjs";
-import { runCodeTask } from "../code-agent/run.mjs";
+import { runAgentTask } from "../agent-orchestrator/index.mjs";
+import { parseAgentTaskPrompt } from "../code-agent/task-input.mjs";
 import { runWindowApp } from "../window-app/server.mjs";
 import { askLine, printAssistantMessage, printWelcome } from "./repl.mjs";
 
@@ -40,6 +41,18 @@ export async function run() {
   if (args.importQwenFile) {
     const { importQwenFromJson } = await import("../providers/qwen/browser-login.mjs");
     await importQwenFromJson(path.resolve(args.importQwenFile));
+    return;
+  }
+
+  if (args.loginChatGPT) {
+    const { loginChatGPTAndSave } = await import("../providers/chatgpt/browser-login.mjs");
+    await loginChatGPTAndSave();
+    return;
+  }
+
+  if (args.importChatGPTFile) {
+    const { importChatGPTFromJson } = await import("../providers/chatgpt/browser-login.mjs");
+    await importChatGPTFromJson(path.resolve(args.importChatGPTFile));
     return;
   }
 
@@ -86,7 +99,7 @@ export async function run() {
     const fresh = await authManager.refresh({ forceVisible: true });
     client._applyAuth(fresh);
   } else if (!auth.token && args.window) {
-    console.log("⚠️ DeepSeek token missing — окно откроется, авторизация через интерфейс.");
+    console.log("⚠️ DeepSeek token missing — окно откроется, авторизация через Settings.");
   }
 
   if (args.window) {
@@ -110,14 +123,17 @@ export async function run() {
   }
 
   if (args.prompt) {
+    const skillParsed = parseAgentTaskPrompt(args.prompt);
     const directCodePrefix = "/code ";
-    if (args.prompt.startsWith(directCodePrefix)) {
-      await runCodeTask(client, {
+    if (args.prompt.startsWith(directCodePrefix) || skillParsed) {
+      const task = skillParsed ? skillParsed.task : args.prompt.slice(directCodePrefix.length).trim();
+      await runAgentTask(client, {
         sessionId,
         modelType: args.model,
         thinkingEnabled: args.thinking,
         searchEnabled: args.search,
-      }, workspaceRoot, args.prompt.slice(directCodePrefix.length).trim(), null, {
+      }, workspaceRoot, task, null, {
+        skillId: skillParsed?.skillId || null,
         onTool: (_call, _result, log) => console.log(log),
         onAssistant: (message) => printAssistantMessage(message),
       });
@@ -170,13 +186,17 @@ export async function run() {
       }
       continue;
     }
-    if (prompt.startsWith("/code ")) {
-      const codeResult = await runCodeTask(client, {
+    if (prompt.startsWith("/code ") || prompt.startsWith("/skill ")) {
+      const parsed = parseAgentTaskPrompt(prompt);
+      const task = parsed?.task || prompt.slice(6).trim();
+      const codeResult = await runAgentTask(client, {
         sessionId,
         modelType: args.model,
         thinkingEnabled: args.thinking,
         searchEnabled: args.search,
-      }, workspaceRoot, prompt.slice(6).trim(), parentMessageId, {
+      }, workspaceRoot, task, parentMessageId, {
+        skillId: parsed?.skillId || null,
+        autoSkill: !parsed?.skillId,
         onTool: (_call, _result, log) => console.log(log),
         onAssistant: (message) => printAssistantMessage(message),
       });

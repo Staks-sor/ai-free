@@ -11,27 +11,32 @@ export function conversationList(state) {
     model: conversation.model || "",
     roleId: conversation.roleId || "assistant",
     pipelineMode: conversation.pipelineMode === true,
-    agentMode: conversation.agentMode === true,
+    coderMode: conversation.coderMode === true,
     hardwareMode: conversation.hardwareMode === true,
+    memoryEnabled: conversation.memoryEnabled !== false,
+    autoSkill: conversation.autoSkill !== false,
+    skillId: conversation.skillId || null,
     updatedAt: conversation.updatedAt,
     messageCount: conversation.messages.length,
   }));
 }
 
 // Из первого сообщения юзера делаем компактный title для чата.
-// Схлопываем пробелы, режем до 64 символов.
+// Убираем "/code " префикс, схлопываем пробелы, режем до 64 символов.
 export function makeConversationTitle(prompt) {
   const clean = String(prompt || "")
+    .replace(/^\/code\s+/i, "")
+    .replace(/^\/skill\s+[a-z0-9_-]+\s+/i, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (!clean) return "Agent";
+  if (!clean) return "New chat";
 
   const withoutTrailingPunctuation = clean.replace(/[.!?;:,\s]+$/u, "");
   const title = withoutTrailingPunctuation.slice(0, 64).trim();
-  if (!title) return "Agent";
+  if (!title) return "New chat";
   return title.length < withoutTrailingPunctuation.length ? `${title}...` : title;
 }
 
 export function shouldAutoTitle(conversation) {
-  return conversation.autoTitle !== false && (!conversation.title || conversation.title === "New chat" || conversation.title === "Agent");
+  return conversation.autoTitle !== false && (!conversation.title || conversation.title === "New chat");
 }

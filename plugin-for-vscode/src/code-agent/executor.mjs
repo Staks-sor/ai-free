@@ -16,6 +16,8 @@ export class WorkspaceToolError extends Error {
   }
 }
 
+import { executeBrowserTool } from "../browser/service.mjs";
+
 export async function executeWorkspaceTool(workspaceRoot, call) {
   const tool = call.tool;
 
@@ -106,6 +108,10 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
 
   if (tool === "run_shell") {
     return await runWorkspaceShell(workspaceRoot, call);
+  }
+
+  if (String(tool || "").startsWith("browser_")) {
+    return executeBrowserTool(call);
   }
 
   throw new Error(`Unknown tool: ${tool}`);

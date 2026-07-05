@@ -260,6 +260,13 @@ export function loadSettings() {
     ui: {
       language: normalizeLanguage(process.env.AI_FREE_LANG || DEFAULT_LANGUAGE),
       webSearchDefault: true,
+      memoryDefault: true,
+      autoSkillDefault: true,
+    },
+    telegram: {
+      enabled: false,
+      botToken: "",
+      chatId: "",
     },
   };
   if (!fs.existsSync(SETTINGS_FILE)) return fallback;
@@ -279,11 +286,22 @@ export function loadSettings() {
       ui: {
         language: normalizeLanguage(raw?.ui?.language || fallback.ui.language),
         webSearchDefault: raw?.ui?.webSearchDefault !== false,
+        memoryDefault: raw?.ui?.memoryDefault !== false,
+        autoSkillDefault: raw?.ui?.autoSkillDefault !== false,
       },
+      telegram: normalizeTelegramSettings(raw?.telegram),
     };
   } catch {
     return fallback;
   }
+}
+
+function normalizeTelegramSettings(raw) {
+  return {
+    enabled: raw?.enabled === true,
+    botToken: typeof raw?.botToken === "string" ? raw.botToken : "",
+    chatId: typeof raw?.chatId === "string" ? raw.chatId : "",
+  };
 }
 
 export function saveSettings(settings) {
@@ -316,7 +334,16 @@ export function saveSettings(settings) {
       webSearchDefault: settings?.ui?.webSearchDefault === undefined
         ? current.ui?.webSearchDefault !== false
         : settings.ui.webSearchDefault !== false,
+      memoryDefault: settings?.ui?.memoryDefault === undefined
+        ? current.ui?.memoryDefault !== false
+        : settings.ui.memoryDefault !== false,
+      autoSkillDefault: settings?.ui?.autoSkillDefault === undefined
+        ? current.ui?.autoSkillDefault !== false
+        : settings.ui.autoSkillDefault !== false,
     },
+    telegram: settings?.telegram
+      ? normalizeTelegramSettings(settings.telegram)
+      : normalizeTelegramSettings(current.telegram),
     savedAt: new Date().toISOString(),
   };
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(payload, null, 2));

@@ -39,27 +39,46 @@ function getFreshTask(conversationId) {
 }
 
 // Запускает задачу в фоне. Если задача для этого conversationId уже идёт — бросает.
+// taskFn получает AbortSignal — задача должна проверять signal.aborted и корректно
+// завершаться при отмене (кнопка «Стоп»).
 export function startTask(conversationId, kind, taskFn, label = "") {
   const existing = getFreshTask(conversationId);
   if (existing) {
     throw new Error(`Task ${existing.kind} already running for ${conversationId}`);
   }
+  const controller = new AbortController();
   runningTasks.set(conversationId, {
     startedAt: Date.now(),
     kind,
     label,
     staleAfterMs: resolveStaleTaskMs(),
+    controller,
   });
 
   // Fire-and-forget. .finally() гарантирует очистку даже при throw.
   Promise.resolve()
-    .then(() => taskFn())
+    .then(() => taskFn(controller.signal))
     .catch((err) => {
       console.error(`[task-runner] task ${kind} for ${conversationId} crashed:`, err);
     })
     .finally(() => {
       runningTasks.delete(conversationId);
     });
+}
+
+// Останавливает задачу: посылает abort и снимает её из списка активных.
+// Возвращает true, если задача была и её отменили.
+export function stopTask(conversationId) {
+  const task = runningTasks.get(conversationId);
+  if (!task) return false;
+  try { task.controller?.abort(); } catch {}
+  runningTasks.delete(conversationId);
+  return true;
+}
+
+// AbortSignal текущей задачи (или null) — для проброса в долгие операции.
+export function getTaskSignal(conversationId) {
+  return getFreshTask(conversationId)?.controller?.signal || null;
 }
 
 // true если для conversationId есть задача в работе.
@@ -75,4 +94,12 @@ export function getTaskInfo(conversationId) {
 // Список ID всех активных задач — для UI чтобы показать индикаторы.
 export function getRunningIds() {
   return [...runningTasks.keys()].filter((id) => Boolean(getFreshTask(id)));
+}
+
+export function stopAllTasks() {
+  let count = 0;
+  for (const id of [...runningTasks.keys()]) {
+    if (stopTask(id)) count += 1;
+  }
+  return count;
 }

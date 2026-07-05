@@ -1,11 +1,17 @@
-// Главная петля /code-агента. Шлёт system prompt → парсит ответ → если это tool-call,
-// исполняет → формирует следующий prompt с результатом → повторяет до finish.
-// Лимит шагов защищает от бесконечных циклов модели, но должен быть достаточным
-// для больших задач с несколькими файлами.
+// Главная петля /code-агента. Шлёт system prompt → tool loop → execution → memory.
 
 import { createCodeSystemPrompt } from "./prompt.mjs";
+import { createBrowserSystemPrompt } from "./browser-prompt.mjs";
 import { parseToolCall } from "./parser.mjs";
 import { executeWorkspaceTool } from "./executor.mjs";
+import { enqueueCodeExperienceSave } from "../memory/async-queue.mjs";
+import { isToolAllowed } from "../skills/permissions.mjs";
+import { formatToolLog } from "./tool-log.mjs";
+import {
+  buildContinuationPrompt,
+  buildNoToolCorrectionPrompt,
+  shouldRejectTextOnlyCodeResult,
+} from "./loop-helpers.mjs";
 
 export async function runCodeTask(
   client,
@@ -15,20 +21,52 @@ export async function runCodeTask(
   parentMessageId = null,
   options = {},
 ) {
-  let prompt = createCodeSystemPrompt(workspaceRoot, task, options.systemPrompt, {
-    searchEnabled: baseOptions?.searchEnabled === true,
-  });
+  const browserOnly = options.browserOnly === true;
+  const skillId = options.skillId || null;
+  const skillPrompt = options.skillPrompt || null;
+  const memoryContext = options.memoryContext || "";
+  const browserContext = options.browserContext || "";
+  const allowedTools = options.allowedTools || null;
+
+  let prompt = browserOnly
+    ? createBrowserSystemPrompt(task, { browserContext })
+    : createCodeSystemPrompt(workspaceRoot, task, options.systemPrompt, {
+        searchEnabled: baseOptions?.searchEnabled === true,
+        skillId,
+        skillPrompt,
+        memoryContext,
+        browserContext,
+        allowedTools,
+      });
+
   let parent = parentMessageId;
   const toolLogs = [];
   const maxToolSteps = resolveMaxToolSteps(options.maxToolSteps);
-  const maxTransientTextRetries = resolveTransientTextRetries(options.transientTextRetries);
+  const maxTransientRetries = resolveTransientTextRetries(options.transientTextRetries);
+  const maxNoToolRetries = resolveNoToolTextRetries(options.noToolTextRetries);
+  let noToolRetries = 0;
+
+  const memoryUsedCount = Number(options.memoryUsedCount) || 0;
+  const graphUsedCount = Number(options.graphUsedCount) || 0;
+  const finish = (payload) => completeRunResult(payload, {
+    task,
+    toolLogs,
+    workspaceRoot,
+    memoryEnabled: options.memoryEnabled,
+    memoryUsedCount,
+    graphUsedCount,
+    skillId,
+    onMemorySaved: options.onMemorySaved,
+    browserOnly,
+  });
 
   for (let step = 0; step < maxToolSteps; step += 1) {
     if (options.signal?.aborted) {
       const message = "⏹ Остановлено пользователем.";
       options.onAssistant?.(message);
-      return { parentMessageId: parent, message, toolLogs, stopped: true };
+      return finish({ parentMessageId: parent, message, toolLogs, stopped: true });
     }
+
     let transientTextRetries = 0;
 
     for (;;) {
@@ -38,22 +76,56 @@ export async function runCodeTask(
         parentMessageId: parent,
       });
       const nextParent = result.lastAssistantMessageId ?? parent;
-
       const call = parseToolCall(result.text);
+
       if (!call) {
         if (
-          transientTextRetries < maxTransientTextRetries
+          transientTextRetries < maxTransientRetries
           && isTransientUpstreamTextError(result.text)
         ) {
           transientTextRetries += 1;
           await sleep(750 * transientTextRetries);
           continue;
         }
+
         parent = nextParent;
+
+        if (shouldRejectTextOnlyCodeResult(task, result.text, toolLogs)) {
+          if (noToolRetries >= maxNoToolRetries) {
+            const message = "Error: model keeps responding without using workspace tools.";
+            options.onAssistant?.(message);
+            return finish({ parentMessageId: parent, message, toolLogs });
+          }
+          noToolRetries += 1;
+          prompt = buildNoToolCorrectionPrompt(workspaceRoot, task, result.text, { browserOnly });
+          continue;
+        }
+
         options.onAssistant?.(result.text);
-        return { parentMessageId: parent, message: result.text, toolLogs };
+        return finish({ parentMessageId: parent, message: result.text, toolLogs });
       }
+
       parent = nextParent;
+
+      if (!isToolAllowed(call.tool, allowedTools)) {
+        const blocked = {
+          ok: false,
+          error: `Tool "${call.tool}" is not allowed by the active skill.`,
+          fatal: false,
+        };
+        const log = formatToolLog(call, blocked);
+        toolLogs.push(log);
+        options.onTool?.(call, blocked, log);
+        prompt = buildContinuationPrompt({
+          skillId,
+          skillPrompt,
+          memoryContext,
+          tool: call.tool,
+          toolResult: blocked,
+          browserOnly,
+        });
+        break;
+      }
 
       let toolResult;
       try {
@@ -75,19 +147,19 @@ export async function runCodeTask(
 
       if (toolResult.done) {
         options.onAssistant?.(toolResult.message);
-        return { parentMessageId: parent, message: toolResult.message, toolLogs };
+        return finish({ parentMessageId: parent, message: toolResult.message, toolLogs });
       }
 
       if (toolResult.awaitingUser) {
         const message = `Нужно уточнение: ${toolResult.userQuestion?.question || "ответ пользователя"}`;
         options.onAssistant?.(message);
-        return { parentMessageId: parent, message, toolLogs, awaitingUser: true };
+        return finish({ parentMessageId: parent, message, toolLogs, awaitingUser: true });
       }
 
       if (toolResult.fatal) {
         const message = `Error: ${toolResult.error}`;
         options.onAssistant?.(message);
-        return { parentMessageId: parent, message, toolLogs };
+        return finish({ parentMessageId: parent, message, toolLogs });
       }
 
       const clarifications = typeof options.takeInterrupts === "function"
@@ -99,18 +171,55 @@ export async function runCodeTask(
           .join("\n")}\nUpdate your plan and next action to follow this clarification.`
         : "";
 
-      prompt = `Tool result for ${call.tool}:
-${JSON.stringify(toolResult, null, 2)}
-${clarificationText}
-
-Continue the task. If more file access is needed, request one tool call as JSON. If finished, call finish.`;
+      prompt = buildContinuationPrompt({
+        skillId,
+        skillPrompt,
+        memoryContext,
+        tool: call.tool,
+        toolResult,
+        clarifications: clarificationText,
+        browserOnly,
+      });
       break;
     }
   }
 
   const message = `Error: /code reached the tool-step limit (${maxToolSteps}). Split the task into smaller parts or increase DSCLI_CODE_MAX_STEPS.`;
   options.onAssistant?.(message);
-  return { parentMessageId: parent, message, toolLogs };
+  return finish({ parentMessageId: parent, message, toolLogs });
+}
+
+function completeRunResult(payload, {
+  task,
+  toolLogs,
+  workspaceRoot,
+  memoryEnabled,
+  memoryUsedCount,
+  graphUsedCount,
+  skillId,
+  onMemorySaved,
+  browserOnly = false,
+}) {
+  let memoryPending = false;
+  if (memoryEnabled !== false && !browserOnly) {
+    memoryPending = enqueueCodeExperienceSave({
+      task,
+      toolLogs,
+      workspaceRoot,
+      onComplete: onMemorySaved,
+    });
+  }
+
+  return {
+    ...payload,
+    agentMeta: {
+      skillId: skillId || null,
+      memoryUsed: memoryEnabled === false ? 0 : memoryUsedCount,
+      graphUsed: memoryEnabled === false ? 0 : graphUsedCount,
+      memorySaved: 0,
+      memoryPending: memoryEnabled !== false && memoryPending,
+    },
+  };
 }
 
 export function resolveMaxToolSteps(value) {
@@ -126,6 +235,12 @@ export function resolveTransientTextRetries(value) {
   return Math.min(Math.max(Math.floor(parsed), 0), 5);
 }
 
+export function resolveNoToolTextRetries(value) {
+  const parsed = Number(value ?? process.env.DSCLI_CODE_NO_TOOL_RETRIES ?? 2);
+  if (!Number.isFinite(parsed)) return 2;
+  return Math.min(Math.max(Math.floor(parsed), 0), 5);
+}
+
 export function isTransientUpstreamTextError(text) {
   return /allocated quota exceeded|quota\/token-limit|token-limit|too many requests|rate limit/i.test(String(text || ""));
 }
@@ -134,73 +249,5 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function formatToolLog(call, result) {
-  const target = call.path || call.cmd || "";
-  const header = `[tool] ${call.tool} ${target}`.trim();
-
-  if (call.tool === "list_files") {
-    const lines = [header];
-    if (result.error) {
-      lines.push(`error: ${result.error}`);
-      return lines.join("\n");
-    }
-    const entries = Array.isArray(result.entries) ? result.entries : [];
-    lines.push(`entries: ${entries.length}${result.truncated ? " (truncated)" : ""}`);
-    if (entries.length) {
-      lines.push(entries.slice(0, 80).join("\n"));
-      if (entries.length > 80) lines.push(`[${entries.length - 80} more omitted from log]`);
-    } else {
-      lines.push("[empty]");
-    }
-    return lines.join("\n");
-  }
-
-  if (call.tool === "list_serial_ports") {
-    const lines = [header];
-    if (result.error) {
-      lines.push(`error: ${result.error}`);
-      return lines.join("\n");
-    }
-    const ports = Array.isArray(result.ports) ? result.ports : [];
-    lines.push(`ports: ${ports.length}`);
-    if (ports.length) {
-      lines.push(ports.join("\n"));
-    } else {
-      lines.push("[none]");
-    }
-    return lines.join("\n");
-  }
-
-  if (call.tool === "ask_user") {
-    const lines = [header];
-    if (result.error) lines.push(`error: ${result.error}`);
-    if (result.userQuestion?.question) lines.push(result.userQuestion.question);
-    return lines.join("\n");
-  }
-
-  if (call.tool !== "run_command" && call.tool !== "run_shell") return header;
-
-  const lines = [
-    header,
-  ];
-  if (call.tool === "run_shell" && call.command) {
-    lines.push(`command: ${call.command}`);
-  }
-  if (result.status !== undefined) {
-    lines.push(`status: ${result.status}${result.timedOut ? " (timed out)" : ""}`);
-  } else if (result.error) {
-    lines.push(`error: ${result.error}`);
-  }
-  if (result.installRequest) {
-    lines.push(`install request: ${result.installRequest.title}`);
-  }
-  if (result.permissionRequest) {
-    lines.push(`permission request: ${result.permissionRequest.title}`);
-  }
-
-  if (result.stdout) lines.push(`stdout:\n${result.stdout.trimEnd()}`);
-  if (result.stderr) lines.push(`stderr:\n${result.stderr.trimEnd()}`);
-  if (!result.stdout && !result.stderr && !result.error) lines.push("[no output]");
-
-  return lines.join("\n");
-}
+export { formatToolLog } from "./tool-log.mjs";
+export { shouldRejectTextOnlyCodeResult } from "./loop-helpers.mjs";

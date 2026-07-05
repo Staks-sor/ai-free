@@ -14,8 +14,12 @@ Aider, Cline, ChatGPTBox, custom scripts), может работать чере�
 
 ## Что НЕ реализовано (TODO)
 
+- Streaming (`stream: true`) — нужно SSE.
+- API-ключи и Bearer-аутентификация.
+- DeepSeek-провайдер (заготовка есть, не подключён).
 - Multi-turn через persistent sessionId. Сейчас вся история сжимается в один prompt
   на каждый запрос — это работает, но контекст хуже.
+- Tools / function calling.
 - Usage tokens (всегда 0 в ответе).
 
 ## Запуск
@@ -62,8 +66,8 @@ curl http://127.0.0.1:4318/v1/chat/completions \
 | Поле | Значение |
 |------|----------|
 | `baseURL` | `http://127.0.0.1:4318/v1` |
-| `apiKey` | Bearer API key из настроек AI Free |
-| `model` | `qwen3.7-max`, `qwen3.6-plus`, `qwen3-max`, `deepseek-v4-pro` и т.д. |
+| `apiKey` | любое непустое значение (в прототипе не проверяется) |
+| `model` | `qwen3.6-plus`, `qwen3-max`, `qwq-32b` и т.д. |
 
 Пример для Continue.dev (`~/.continue/config.json`):
 
@@ -71,9 +75,9 @@ curl http://127.0.0.1:4318/v1/chat/completions \
 {
   "models": [
     {
-      "title": "Qwen3.7 MAX (local proxy)",
+      "title": "Qwen 3.6 Plus (local proxy)",
       "provider": "openai",
-      "model": "qwen3.7-max",
+      "model": "qwen3.6-plus",
       "apiBase": "http://127.0.0.1:4318/v1",
       "apiKey": "local"
     }
@@ -83,21 +87,17 @@ curl http://127.0.0.1:4318/v1/chat/completions \
 
 ## Доступные модели
 
-Список берётся из единого каталога `src/providers/model-catalog.mjs`.
+См. `models.mjs`. На момент прототипа:
 
 | `model` в запросе | Провайдер | Внутреннее имя |
 |-------------------|-----------|----------------|
-| `qwen3.7-max`     | qwen      | qwen3.7-max    |
 | `qwen3.6-plus`    | qwen      | qwen3.6-plus   |
 | `qwen3-max`       | qwen      | qwen3-max      |
 | `qwen2.5-plus`    | qwen      | qwen2.5-plus   |
 | `qwq-32b`         | qwen      | qwq-32b        |
 | `qwen-vl-max`     | qwen      | qwen-vl-max    |
-| `deepseek-v4-flash` | deepseek | DEFAULT        |
-| `deepseek-v4-pro` | deepseek  | expert         |
-| `deepseek-v4-vision` | deepseek | vision        |
-| `deepseek-chat`   | deepseek  | DEFAULT        |
-| `deepseek-reasoner` | deepseek | expert        |
+| `deepseek-chat`   | deepseek  | (не подключён) |
+| `deepseek-reasoner` | deepseek | (не подключён) |
 
 ## Ограничения
 
@@ -115,7 +115,7 @@ curl http://127.0.0.1:4318/v1/chat/completions \
 api/
 ├── server.mjs            # HTTP-сервер на 4318
 ├── openai-handler.mjs    # /v1/* endpoint-логика, перевод формата
-├── models.mjs            # re-export единого каталога моделей
+├── models.mjs            # таблица моделей
 └── README.md             # ты сейчас читаешь
 ```
 

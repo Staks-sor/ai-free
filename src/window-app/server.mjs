@@ -77,7 +77,8 @@ import { createCodeMemorySavedHandler, scheduleChatMemorySave } from "./memory-h
 import { warmMemoryBackend } from "../memory/store.mjs";
 import { warmGraphBackend } from "../memory/graph/store.mjs";
 import { getVoiceStatus, installSttRuntime, transcribeAudio } from "../stt/service.mjs";
-import { checkForUpdate, runUpdate } from "../updater.mjs";
+import { checkForUpdate, runUpdate, scheduleWindowRestart } from "../updater.mjs";
+import { collectDiagnostics } from "./diagnostics.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
 import { setOpenAICorsHeaders } from "../../api/server.mjs";
 import {
@@ -1060,7 +1061,18 @@ export async function runWindowApp({
       }
 
       if (req.method === "POST" && url.pathname === "/api/update/run") {
-        return sendJson(res, await runUpdate());
+        const body = await readJsonBody(req).catch(() => ({}));
+        const result = await runUpdate();
+        if (body.restart === true && result.updated) {
+          scheduleWindowRestart({ port, workspaceRoot });
+          setTimeout(() => {
+            requestAppShutdown({ source: "update-restart" }).finally(() => {
+              setTimeout(() => process.exit(0), 200).unref();
+            });
+          }, 250).unref();
+          return sendJson(res, { ...result, restarting: true });
+        }
+        return sendJson(res, result);
       }
 
       if (await handleMemoryRoute(req, url, res)) return;
@@ -1104,6 +1116,14 @@ export async function runWindowApp({
             providers,
           },
         });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/diagnostics") {
+        return sendJson(res, await collectDiagnostics({
+          workspaceRoot,
+          state,
+          runningTaskIds: getRunningIds(),
+        }));
       }
 
       if (req.method === "POST" && url.pathname === "/api/settings/openai-key") {
@@ -1398,6 +1418,14 @@ export async function runWindowApp({
 
         const prompt = String(body.content || "").trim();
         if (!prompt) return sendJson(res, { error: "Message is empty" }, 400);
+        const userMessageSource = body.source === "telegram" ? "telegram" : "";
+        const createUserMessage = (extra = {}) => ({
+          role: "user",
+          content: prompt,
+          createdAt: new Date().toISOString(),
+          ...(userMessageSource ? { source: userMessageSource } : {}),
+          ...extra,
+        });
         conversation.pendingQuestion = null;
 
         if (body.pipeline === true || conversation.pipelineMode === true) {
@@ -1411,12 +1439,7 @@ export async function runWindowApp({
             saveWindowState(workspaceRoot, state);
             return sendJson(res, { conversation, running: true });
           }
-          conversation.messages.push({
-            role: "user",
-            content: prompt,
-            createdAt: new Date().toISOString(),
-            pipelineRun: true,
-          });
+          conversation.messages.push(createUserMessage({ pipelineRun: true }));
           conversation.messages.push({
             role: "assistant",
             content: "Pipeline started. Передаю задачу по связям...",
@@ -1440,11 +1463,7 @@ export async function runWindowApp({
           // Пушим user-сообщение СРАЗУ, до запроса к Qwen, чтобы оно отображалось
           // в UI пока ждём ответ (4-5 сек). Иначе пользовательское сообщение
           // «исчезает» с экрана до момента, как придёт ответ.
-          conversation.messages.push({
-            role: "user",
-            content: prompt,
-            createdAt: new Date().toISOString(),
-          });
+          conversation.messages.push(createUserMessage());
           conversation.updatedAt = new Date().toISOString();
           saveWindowState(workspaceRoot, state);
 
@@ -1690,6 +1709,7 @@ export async function runWindowApp({
             role: "user",
             content: prompt,
             createdAt: now,
+            ...(userMessageSource ? { source: userMessageSource } : {}),
           });
           conversation.updatedAt = now;
           state.activeConversationId = conversation.id;
@@ -1978,7 +1998,12 @@ export async function runWindowApp({
         if (isFirstUserMessage && shouldAutoTitle(conversation)) {
           conversation.title = makeConversationTitle(prompt);
         }
-        conversation.messages.push({ role: "user", content: prompt, createdAt: now });
+        conversation.messages.push({
+          role: "user",
+          content: prompt,
+          createdAt: now,
+          ...(userMessageSource ? { source: userMessageSource } : {}),
+        });
         conversation.updatedAt = now;
         state.activeConversationId = conversation.id;
         saveWindowState(workspaceRoot, state);
@@ -2176,6 +2201,20 @@ export async function runWindowApp({
   });
 
   const url = `http://127.0.0.1:${port}`;
+  let telegramBot = null;
+  if (process.env.AI_FREE_DISABLE_TELEGRAM !== "1") {
+    import("../telegram/bot.mjs")
+      .then((m) => m.startTelegramBot({
+        port,
+        workspaceRoot,
+        log: (message) => logConsole(message),
+      }))
+      .then((bot) => {
+        telegramBot = bot;
+      })
+      .catch((error) => logConsole(`[telegram] failed to start: ${error.message}`));
+  }
+
   if (openWindow) {
     console.log(`Workspace window: ${url}`);
     console.log("Tip: Agent panel (memory/skills/browser) is in the 🧠 drawer inside the app.");
@@ -2207,6 +2246,7 @@ export async function runWindowApp({
   };
 
   registerShutdownServerCloser((done) => {
+    telegramBot?.stop?.();
     server.close(() => done());
     setTimeout(done, 2000).unref();
   });

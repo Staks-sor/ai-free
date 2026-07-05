@@ -112,6 +112,7 @@ export const STYLES = `
     }
     .sidebar {
       background: var(--sidebar);
+      position: relative;
       display: flex;
       flex-direction: column;
       height: 100%;
@@ -203,6 +204,76 @@ export const STYLES = `
       display: grid;
       gap: 8px;
       align-content: start;
+    }
+    .updateToast {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      top: 104px;
+      z-index: 25;
+      border: 1px solid rgba(34, 197, 94, 0.45);
+      background: color-mix(in srgb, var(--panel) 92%, #16a34a);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      gap: 7px;
+      animation: updateToastPop 260ms ease-out;
+    }
+    .updateToast.hidden { display: none; }
+    .updateToastTitle {
+      padding-right: 24px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.25;
+    }
+    .updateToastMeta,
+    .updateToastStatus {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .updateToastStatus:empty { display: none; }
+    .updateToastClose {
+      position: absolute;
+      top: 7px;
+      right: 7px;
+      width: 26px;
+      height: 26px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .updateToastClose:hover {
+      color: var(--text);
+      background: var(--button-hover);
+      border-color: var(--line);
+    }
+    .updateToastDownload {
+      height: 34px;
+      border: 1px solid rgba(34, 197, 94, 0.58);
+      background: rgba(34, 197, 94, 0.18);
+      color: #86efac;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .updateToastDownload:hover:not(:disabled) {
+      background: rgba(34, 197, 94, 0.26);
+      border-color: rgba(34, 197, 94, 0.78);
+    }
+    .updateToastDownload:disabled {
+      cursor: default;
+      opacity: 0.74;
+    }
+    @keyframes updateToastPop {
+      from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
     }
     .newForm input {
       width: 100%;
@@ -799,6 +870,106 @@ export const STYLES = `
       flex-wrap: wrap;
       gap: 8px;
       margin-bottom: 10px;
+    }
+    .healthSettings {
+      display: grid;
+      gap: 12px;
+    }
+    .healthHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .healthHeader h3 {
+      margin: 0;
+    }
+    .healthActions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .healthSummary {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 6px;
+      padding: 9px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .healthGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 8px;
+    }
+    .healthCard {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 7px;
+      padding: 9px;
+      min-width: 0;
+    }
+    .healthCard.ok {
+      border-color: rgba(34, 197, 94, 0.25);
+    }
+    .healthCard.warn {
+      border-color: rgba(234, 179, 8, 0.28);
+    }
+    .healthCardTop {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+      margin-bottom: 6px;
+    }
+    .healthCardTitle {
+      min-width: 0;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .healthBadge {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .healthBadge.ok {
+      color: #22c55e;
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.28);
+    }
+    .healthBadge.warn {
+      color: #eab308;
+      background: rgba(234, 179, 8, 0.12);
+      border: 1px solid rgba(234, 179, 8, 0.28);
+    }
+    .healthCardDesc {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .healthReport {
+      width: 100%;
+      min-height: 190px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      background: var(--code-bg, #1e1e1e);
+      color: var(--text);
+      border-radius: 7px;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.45;
     }
     .apiModels {
       color: var(--muted);

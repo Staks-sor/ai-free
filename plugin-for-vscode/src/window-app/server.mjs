@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { openAppWindow } from "../browser/launch.mjs";
 import { AGENT_ROLES, getAgentRole, normalizeRoleId } from "../agent-runtime/roles.mjs";
 import { getCommandExecutionEnv } from "../code-agent/executor.mjs";
-import { runCodeTask } from "../code-agent/run.mjs";
+import { runAgentTask } from "../agent-orchestrator/index.mjs";
 import { CODE_AGENT_PROMPT_VERSION } from "../code-agent/prompt.mjs";
 import {
   COMMAND_CATALOG,
@@ -22,15 +22,62 @@ import {
   saveSettings,
 } from "../state/settings.mjs";
 import { conversationList, makeConversationTitle, shouldAutoTitle } from "../state/conversations.mjs";
-import { startTask, isRunning, getRunningIds } from "./task-runner.mjs";
+import { startTask, isRunning, getRunningIds, stopTask } from "./task-runner.mjs";
+import { getShutdownStatus, registerShutdownServerCloser, requestAppShutdown } from "../app-shutdown.mjs";
 import { getStateFile, loadWindowState, saveWindowState } from "../state/window-state.mjs";
 import { LANGUAGES, getLanguageMeta } from "../i18n/index.mjs";
 import { getLocalizedAgentRoles } from "../i18n/agent-roles.mjs";
 import { getCommandDescription } from "../i18n/command-descriptions.mjs";
 import { listBrowseDirectories } from "./browse-fs.mjs";
-import { readJsonBody, sendHtml, sendJson } from "./http.mjs";
+import {
+  beginNdjsonStream,
+  endNdjsonStream,
+  readJsonBody,
+  sendHtml,
+  sendJson,
+  writeNdjsonLine,
+} from "./http.mjs";
 import { renderWindowHtml } from "./ui-html.mjs";
+import { renderEmbedWorkspaceHtml } from "./embed-workspace.mjs";
+import { renderEmbedBrowserHtml } from "./embed-browser.mjs";
+import {
+  handleChatGPTLiveInput,
+  handleChatGPTLiveStream,
+  handleChatGPTSyncSession,
+  reloadChatGPTLivePage,
+  resetChatGPTLiveSession,
+  renderEmbedChatGPTLiveHtml,
+  setChatGPTPanelViewport,
+  warmChatGPTInAppBrowser,
+} from "./chatgpt-live-panel.mjs";
+import {
+  handleAppBrowserLiveInput,
+  handleAppBrowserLiveStream,
+  handleAppBrowserNavigate,
+  handleAppBrowserReset,
+  handleAppBrowserSnapshot,
+  renderEmbedAppBrowserLiveHtml,
+  setAppBrowserLiveViewport,
+} from "./app-browser-live.mjs";
+import {
+  handleChatGPTFrameProxy,
+  handleChatGPTFrameUpgrade,
+  isChatGPTFramePath,
+} from "./provider-frame-chatgpt.mjs";
+import {
+  AGENT_TASK_EMPTY_HELP,
+  buildAgentTaskOptions,
+  finalizeCodeTaskMessage,
+  resolveConversationAgentTask,
+} from "./agent-task.mjs";
+import { handleMemoryRoute } from "./routes/memory.mjs";
+import { handleSkillsRoute } from "./routes/skills.mjs";
+import { handlePluginsRoute } from "./routes/plugins.mjs";
+import { createCodeMemorySavedHandler, scheduleChatMemorySave } from "./memory-hooks.mjs";
+import { warmMemoryBackend } from "../memory/store.mjs";
+import { warmGraphBackend } from "../memory/graph/store.mjs";
 import { getVoiceStatus, installSttRuntime, transcribeAudio } from "../stt/service.mjs";
+import { checkForUpdate, runUpdate } from "../updater.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
 import { setOpenAICorsHeaders } from "../../api/server.mjs";
 import {
@@ -50,7 +97,28 @@ export async function runWindowApp({
   openWindow = true,
   consoleLog = false,
 }) {
+  // ChatGPT UI в боковой панели drawer, без отдельного окна Chrome.
+  if (process.env.CHATGPT_EMBED_IN_UI == null) {
+    process.env.CHATGPT_EMBED_IN_UI = "1";
+  }
+
+  {
+    const { ensureChatGPTProfileReady, cleanupStaleBrowserProfiles } = await import("../providers/chatgpt/browser-login.mjs");
+    const { APP_BROWSER_PROFILE } = await import("./app-browser.mjs");
+    const { APP_WINDOW_PROFILE } = await import("./app-window.mjs");
+    const { CHATGPT_BROWSER_PROFILE } = await import("../providers/chatgpt/config.mjs");
+    const { QWEN_BROWSER_PROFILE } = await import("../providers/qwen/config.mjs");
+    await ensureChatGPTProfileReady(CHATGPT_BROWSER_PROFILE);
+    cleanupStaleBrowserProfiles([APP_BROWSER_PROFILE, APP_WINDOW_PROFILE, QWEN_BROWSER_PROFILE]);
+  }
+
   const state = loadWindowState(workspaceRoot);
+
+  setImmediate(() => {
+    warmMemoryBackend().catch(() => {});
+    warmGraphBackend().catch(() => {});
+    import("./web-browser.mjs").then((m) => m.warmWebBrowser()).catch(() => {});
+  });
 
   function logConsole(message) {
     if (consoleLog) console.log(message);
@@ -66,6 +134,7 @@ export async function runWindowApp({
   // Lazy init Qwen-клиента + авто-relogin (как DeepSeek AuthManager).
   let qwenClient = null;
   let qwenAuthManager = null;
+  let chatGPTClient = null;
   const providerLoginJobs = new Map();
 
   async function getQwenAuthManager() {
@@ -104,6 +173,135 @@ export async function runWindowApp({
     return qwenClient;
   }
 
+  async function refreshChatGPTAuthFromOpenBrowser() {
+    const { isChatGPTBrowserProxyActive, syncChatGPTAuthFromActiveProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+    if (!isChatGPTBrowserProxyActive()) return;
+    try {
+      await syncChatGPTAuthFromActiveProxy();
+    } catch {}
+  }
+
+  async function ensureChatGPTAuth({ forceVisible = false } = {}) {
+    const { CHATGPT_AUTH_FILE } = await import("../providers/chatgpt/config.mjs");
+    const { readChatGPTAuth, isChatGPTAuthUsable } = await import("../providers/chatgpt/auth-files.mjs");
+    const embedUi = process.env.CHATGPT_EMBED_IN_UI === "1";
+    const existing = readChatGPTAuth(CHATGPT_AUTH_FILE);
+    if (isChatGPTAuthUsable(existing) && !forceVisible) {
+      return existing;
+    }
+    if (!forceVisible) {
+      try {
+        const { ensureBrowserBinaries } = await import("../browser/ensure-binaries.mjs");
+        await ensureBrowserBinaries();
+        const { getChatGPTBrowserProxy, syncChatGPTAuthFromActiveProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+        await getChatGPTBrowserProxy();
+        const synced = await syncChatGPTAuthFromActiveProxy();
+        if (isChatGPTAuthUsable(synced)) return synced;
+        const cached = readChatGPTAuth(CHATGPT_AUTH_FILE);
+        if (isChatGPTAuthUsable(cached)) return cached;
+      } catch (error) {
+        if (/Executable doesn't exist|playwright install|patchright install/i.test(String(error?.message || error))) {
+          throw new Error("Chromium не установлен. В терминале: npx patchright install chromium");
+        }
+      }
+    }
+    if (embedUi) {
+      const err = new Error(
+        "ChatGPT: войдите через 🧠 → Браузер → ChatGPT. После входа нажмите «Синхронизировать» — drawer можно закрыть.",
+      );
+      err.needsChatGPTLogin = true;
+      throw err;
+    }
+    const { loginChatGPTAndSave } = await import("../providers/chatgpt/browser-login.mjs");
+    await loginChatGPTAndSave(CHATGPT_AUTH_FILE);
+    const fresh = readChatGPTAuth(CHATGPT_AUTH_FILE);
+    if (!isChatGPTAuthUsable(fresh)) {
+      throw new Error("ChatGPT authorization did not return an access token. Войди заново и дождись открытия обычного чата ChatGPT.");
+    }
+    return fresh;
+  }
+
+  async function buildChatGPTClientFromAuth(auth) {
+    const { ChatGPTChatClient } = await import("../providers/chatgpt/client.mjs");
+    return new ChatGPTChatClient({
+      accessToken: auth.accessToken,
+      cookies: auth.cookies,
+      cookieHeader: auth.cookieHeader,
+      userAgent: auth.userAgent,
+      debug: Boolean(process.env.DEEPSEEK_DEBUG_CHATGPT),
+    });
+  }
+
+  async function getOrCreateChatGPTClient({ forceRebuild = false } = {}) {
+    if (chatGPTClient && !forceRebuild) return chatGPTClient;
+    const auth = await ensureChatGPTAuth();
+    chatGPTClient = await buildChatGPTClientFromAuth(auth);
+    return chatGPTClient;
+  }
+
+  function isChatGPTAuthError(error) {
+    const message = String(error?.message || error || "");
+    if (/unusual activity/i.test(message)) return false;
+    return /access token is missing|HTTP 401|unauthorized|not logged in|сессия истекла|session expired/i.test(message);
+  }
+
+  function isChatGPTTransportError(error) {
+    const message = String(error?.message || error || "");
+    return /Execution context was destroyed|Target page, context or browser has been closed|Target closed|Page closed|Context closed|Browser has been closed|page\.waitForTimeout|Failed to fetch|request is finished/i.test(message);
+  }
+
+  async function chatGPTApiCall(fn) {
+    let client = await getOrCreateChatGPTClient();
+    let transportResetDone = false;
+    try {
+      return await fn(client);
+    } catch (error) {
+      if (isChatGPTTransportError(error) && !transportResetDone) {
+        console.log(`[chatgpt] browser transport error, resetting proxy: ${error.message}`);
+        const { resetChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+        resetChatGPTBrowserProxy();
+        chatGPTClient = null;
+        client = await getOrCreateChatGPTClient({ forceRebuild: true });
+        transportResetDone = true;
+        return fn(client);
+      }
+      if (!isChatGPTAuthError(error)) throw error;
+      console.log("[chatgpt] auth error, reloading browser session…");
+      const { resetChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+      resetChatGPTBrowserProxy();
+      chatGPTClient = null;
+      client = await getOrCreateChatGPTClient({ forceRebuild: true });
+      try {
+        return await fn(client);
+      } catch (retryError) {
+        if (!isChatGPTAuthError(retryError)) throw retryError;
+        console.log("[chatgpt] reload failed, re-auth required…");
+        resetChatGPTBrowserProxy();
+        chatGPTClient = null;
+        if (process.env.CHATGPT_EMBED_IN_UI === "1") {
+          throw new Error(
+            "ChatGPT: сессия истекла. Откройте 🧠 → «Браузер» и войдите в ChatGPT снова.",
+          );
+        }
+        const fresh = await ensureChatGPTAuth({ forceVisible: true });
+        client = await buildChatGPTClientFromAuth(fresh);
+        chatGPTClient = client;
+        return fn(client);
+      }
+    }
+  }
+
+  // Прогрев веб-сессии перед длительной фоновой задачей (code-agent). Если сессия
+  // слетела, chatGPTApiCall сам откроет окно входа и обновит её — иначе агент упал бы
+  // с "not logged in" посреди работы, без шанса переавторизоваться.
+  async function ensureChatGPTSessionReady() {
+    await chatGPTApiCall(async () => {
+      const { getChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+      const proxy = await getChatGPTBrowserProxy({ debug: Boolean(process.env.DEEPSEEK_DEBUG_CHATGPT) });
+      await proxy.ensureReady();
+    });
+  }
+
   function isQwenTransportError(error) {
     const message = String(error?.message || error || "");
     return /Execution context was destroyed|Target page, context or browser has been closed|Target closed|Page closed|Context closed|Failed to fetch|request is finished/i.test(message);
@@ -111,19 +309,23 @@ export async function runWindowApp({
 
   function formatQwenError(error) {
     const message = String(error?.message || error || "");
+    if (error?.isQwenSessionExpired || /сессия qwen устарела/i.test(message)) {
+      return message.includes("🔒") ? message : `🔒 Сессия Qwen устарела\n\n${message}`;
+    }
     if (/qwen_page_evaluate_timeout/i.test(message)) {
       return (
         "Qwen browser transport timed out while creating/sending the request. " +
         "Это происходит до ответа модели: chat.qwen.ai не отдаёт API JSON для создания чата. " +
-        "Обычно причина в web anti-bot/session challenge на стороне Qwen."
+        "Обычно причина в web anti-bot/session challenge на стороне Qwen.\n\n" +
+        "Попробуй подключить Qwen заново в окне ai-free (кнопка у провайдера)."
       );
     }
     return message;
   }
 
-  // Вызов Qwen API с авто-refresh сессии при auth-ошибке (до 2 попыток).
-  async function qwenApiCall(fn) {
-    const { isQwenAuthError } = await import("../providers/qwen/auth-manager.mjs");
+  // Вызов Qwen API: relogin только при реально протухшей сессии (401/HTML), не при Bad_Request anti-bot.
+  async function qwenApiCall(fn, { onRelogin = null } = {}) {
+    const { isQwenSessionExpiredError } = await import("../providers/qwen/session-errors.mjs");
     let client = await getOrCreateQwenClient();
     let transportResetDone = false;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -139,10 +341,19 @@ export async function runWindowApp({
           transportResetDone = true;
           continue;
         }
-        if (!isQwenAuthError(error) || attempt >= 1) throw error;
-        console.log("[qwen] auth error, refreshing session…");
+        if (!isQwenSessionExpiredError(error) || attempt >= 2) throw error;
+        const status = error.status || error.httpStatus;
+        const clearSession = status === 401 || status === 403;
+        console.log("[qwen] session expired — opening in-app login window…");
         const manager = await getQwenAuthManager();
-        const fresh = await manager.refresh({ forceVisible: attempt > 0 });
+        const fresh = await manager.refresh({
+          forceVisible: true,
+          skipSilent: true,
+          clearSession,
+          onReloginStart: () => {
+            if (typeof onRelogin === "function") onRelogin();
+          },
+        });
         client = await buildQwenClientFromAuth(fresh);
         qwenClient = client;
       }
@@ -176,7 +387,7 @@ export async function runWindowApp({
       : getProviderDefaultModel(provider, mode);
   }
 
-  async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}) {
+  async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}, signal = null) {
     const edges = state.pipeline?.edges || [];
     const queue = [{ conversationId: startConversationId, input: initialPrompt, sourceTitle: "User", depth: 0 }];
     const visited = new Set();
@@ -184,6 +395,7 @@ export async function runWindowApp({
     let steps = 0;
 
     while (queue.length && steps < maxSteps) {
+      if (signal?.aborted) break;
       const item = queue.shift();
       const conversation = state.conversations.find((candidate) => candidate.id === item.conversationId);
       if (!conversation) continue;
@@ -287,6 +499,22 @@ export async function runWindowApp({
       return cleanText || "[empty]";
     }
 
+    if (provider === "chatgpt") {
+      // Шаг цепочки — в свежем веб-диалоге (conversationId: null), чтобы не тянуть
+      // старый контекст чата. ChatGPT сам создаст новый разговор под этот шаг.
+      const result = await chatGPTApiCall((c) => c.complete({ prompt, conversationId: null }));
+      const cleanText = extractPipelineResult(String(result.text || "").trim());
+      conversation.messages.push({
+        role: "assistant",
+        content: cleanText,
+        createdAt: new Date().toISOString(),
+        roleId: role.id,
+        pipelineRun: true,
+      });
+      conversation.updatedAt = new Date().toISOString();
+      return cleanText;
+    }
+
     if (provider !== "deepseek") {
       throw new Error(`Pipeline provider is not supported: ${provider}`);
     }
@@ -360,6 +588,179 @@ export async function runWindowApp({
         }));
       }
 
+      if (req.method === "GET" && url.pathname === "/embed/workspace") {
+        const root = url.searchParams.get("root") || workspaceRoot || os.homedir();
+        return sendHtml(res, renderEmbedWorkspaceHtml({ root, title: "Workspace" }));
+      }
+
+      if (req.method === "GET" && url.pathname === "/embed/browser") {
+        const root = url.searchParams.get("root") || workspaceRoot || os.homedir();
+        return sendHtml(res, renderEmbedBrowserHtml({ root }));
+      }
+
+      if (req.method === "GET" && url.pathname === "/embed/chatgpt") {
+        return sendHtml(res, renderEmbedBrowserHtml({
+          root: workspaceRoot || os.homedir(),
+        }));
+      }
+
+      if (req.method === "GET" && url.pathname === "/embed/chatgpt-live") {
+        return sendHtml(res, renderEmbedChatGPTLiveHtml());
+      }
+
+      if (req.method === "GET" && url.pathname === "/embed/web-live") {
+        return sendHtml(res, renderEmbedAppBrowserLiveHtml());
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/browser/live-stream") {
+        return handleAppBrowserLiveStream(req, res);
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/browser/live-input") {
+        try {
+          const body = await readJsonBody(req, 64_000);
+          const result = await handleAppBrowserLiveInput(body);
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/browser/live-viewport") {
+        try {
+          const body = await readJsonBody(req, 4096);
+          const result = await setAppBrowserLiveViewport(body);
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/browser/navigate") {
+        try {
+          const body = await readJsonBody(req, 16_000);
+          const result = await handleAppBrowserNavigate(body);
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/browser/snapshot") {
+        try {
+          const result = await handleAppBrowserSnapshot();
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/browser/reset") {
+        try {
+          const result = await handleAppBrowserReset();
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/browser/warm") {
+        try {
+          const { warmAppBrowser } = await import("./app-browser.mjs");
+          const result = await warmAppBrowser();
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chatgpt/warm") {
+        try {
+          const result = await warmChatGPTInAppBrowser();
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/chatgpt/live-stream") {
+        return handleChatGPTLiveStream(req, res);
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chatgpt/live-input") {
+        try {
+          const body = await readJsonBody(req, 64_000);
+          const result = await handleChatGPTLiveInput(body);
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chatgpt/live-viewport") {
+        try {
+          const body = await readJsonBody(req, 4096);
+          const result = await setChatGPTPanelViewport(body);
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chatgpt/sync-session") {
+        try {
+          const result = await handleChatGPTSyncSession();
+          if (result.hasAuth) chatGPTClient = null;
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chatgpt/reload-live") {
+        try {
+          const result = await reloadChatGPTLivePage();
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/chatgpt/reset-live") {
+        try {
+          const result = await resetChatGPTLiveSession();
+          chatGPTClient = null;
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
+      // Устарело: больше не открываем внешний Chrome (конфликт профиля).
+      if (req.method === "POST" && url.pathname === "/api/chatgpt/visible-login") {
+        return sendJson(res, {
+          error: "Внешний Chrome отключён. Используйте 🧠 → Браузер → ChatGPT или npm run login-chatgpt",
+        }, 400);
+      }
+
+      // Старые абсолютные пути ChatGPT SPA без префикса прокси → редирект.
+      if (
+        req.method === "GET"
+        && (
+          url.pathname.startsWith("/_next/")
+          || url.pathname.startsWith("/backend-api/")
+          || url.pathname.startsWith("/cdn/")
+        )
+      ) {
+        res.writeHead(302, { Location: `/provider-frame/chatgpt${url.pathname}${url.search}` });
+        res.end();
+        return;
+      }
+
+      if (isChatGPTFramePath(url.pathname)) {
+        return handleChatGPTFrameProxy(req, res, url);
+      }
+
       // OpenAI-compatible API is also available on the window server:
       // http://127.0.0.1:<window-port>/v1/...
       if (url.pathname.startsWith("/v1/")) {
@@ -381,11 +782,29 @@ export async function runWindowApp({
 
       // Lifeline для фронта. Если этот endpoint не отвечает 3 раза подряд → окно закрывается.
       if (req.method === "GET" && url.pathname === "/api/heartbeat") {
+        const shutdown = getShutdownStatus();
+        if (shutdown.active) {
+          return sendJson(res, {
+            ok: true,
+            shuttingDown: true,
+            phase: shutdown.phase,
+          });
+        }
         return sendJson(res, { ok: true, ts: Date.now() });
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/shutdown") {
+        if (!getShutdownStatus().active) {
+          requestAppShutdown({ source: "ui" }).finally(() => {
+            setTimeout(() => process.exit(0), 200).unref();
+          });
+        }
+        return sendJson(res, { ok: true, ...getShutdownStatus() });
       }
 
       // Список провайдеров + статус auth. UI рисует picker по этому ответу.
       if (req.method === "GET" && url.pathname === "/api/providers") {
+        await refreshChatGPTAuthFromOpenBrowser();
         const { listProviders } = await import("../providers/registry.mjs");
         const providers = listProviders().map((p) => ({
           id: p.id,
@@ -415,6 +834,16 @@ export async function runWindowApp({
           return sendJson(res, { error: `Unknown provider: ${providerId}` }, 404);
         }
         try {
+          if (providerId === "chatgpt" && process.env.CHATGPT_EMBED_IN_UI === "1") {
+            const { resetChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+            resetChatGPTBrowserProxy();
+            chatGPTClient = null;
+            return sendJson(res, {
+              ok: true,
+              embedLogin: true,
+              hasAuth: provider.hasAuth(),
+            });
+          }
           if (providerLoginJobs.has(providerId)) {
             return sendJson(res, {
               ok: true,
@@ -429,6 +858,9 @@ export async function runWindowApp({
               const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
               await resetQwenBrowserProxy();
               qwenClient = null;
+            }
+            if (providerId === "chatgpt") {
+              chatGPTClient = null;
             }
           })();
           providerLoginJobs.set(providerId, loginJob);
@@ -623,6 +1055,18 @@ export async function runWindowApp({
         return sendJson(res, { projects, defaultWorkspace: workspaceRoot, home: os.homedir() });
       }
 
+      if (req.method === "GET" && url.pathname === "/api/update/check") {
+        return sendJson(res, await checkForUpdate());
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/update/run") {
+        return sendJson(res, await runUpdate());
+      }
+
+      if (await handleMemoryRoute(req, url, res)) return;
+      if (await handleSkillsRoute(req, url, res)) return;
+      if (await handlePluginsRoute(req, url, res)) return;
+
       // ===== Settings (whitelist команд для /code) =====
 
       if (req.method === "GET" && url.pathname === "/api/settings") {
@@ -641,11 +1085,15 @@ export async function runWindowApp({
         }));
         return sendJson(res, {
           allowedCommands: current.allowedCommands,
+          commandPermissions: current.commandPermissions || {},
           ui: {
             language: current.ui?.language || "ru",
             webSearchDefault: current.ui?.webSearchDefault !== false,
+            memoryDefault: current.ui?.memoryDefault !== false,
+            autoSkillDefault: current.ui?.autoSkillDefault !== false,
             languages: Object.values(LANGUAGES).map((language) => getLanguageMeta(language.code)),
           },
+          telegram: current.telegram || { enabled: false, botToken: "", chatId: "" },
           catalog,
           openAICompat: {
             embeddedBaseUrl: `http://127.0.0.1:${port}/v1`,
@@ -669,9 +1117,16 @@ export async function runWindowApp({
         const body = await readJsonBody(req);
         const saved = saveSettings({
           allowedCommands: body.allowedCommands,
+          commandPermissions: body.commandPermissions,
           ui: body.ui,
+          telegram: body.telegram,
         });
-        return sendJson(res, { allowedCommands: saved.allowedCommands, ui: saved.ui });
+        return sendJson(res, {
+          allowedCommands: saved.allowedCommands,
+          commandPermissions: saved.commandPermissions,
+          ui: saved.ui,
+          telegram: saved.telegram,
+        });
       }
 
       // ===== Conversations =====
@@ -712,30 +1167,27 @@ export async function runWindowApp({
           return sendJson(res, { error: `Путь существует, но это не папка: ${workspace}` }, 400);
         }
 
-        // Сессию DeepSeek создаём только для DeepSeek-чатов. У Qwen своя модель чатов,
-        // там нет понятия "сессии перед сообщением" в том же виде.
-        const _provider = String(body.provider || "deepseek");
+        const allowedProviders = new Set(["deepseek", "qwen", "chatgpt"]);
+        const requestedProvider = String(body.provider || "deepseek");
+        if (!allowedProviders.has(requestedProvider)) {
+          return sendJson(res, { error: `Провайдер "${requestedProvider}" не поддерживается.` }, 400);
+        }
+        const provider = requestedProvider;
+        // Сессию DeepSeek создаём только для DeepSeek-чатов. У Qwen и ChatGPT свои
+        // web-диалоги, которые появляются при первом сообщении.
         const sessionId = null;
         const now = new Date().toISOString();
         const rawTitle = String(body.title || "").trim();
-        // Провайдер и режим фиксируются при создании чата.
-        const allowedProviders = new Set(["deepseek", "qwen"]);
-        const provider = allowedProviders.has(String(body.provider)) ? String(body.provider) : "deepseek";
         // Допустимые режимы per-provider. Если режим не из набора — fallback на дефолт провайдера.
-        const PROVIDER_MODES = {
-          deepseek: {
-            allowed: getProviderCatalog("deepseek").modes.map((item) => item.id),
-            default: getProviderCatalog("deepseek").defaultMode,
-          },
-          qwen: {
-            allowed: getProviderCatalog("qwen").modes.map((item) => item.id),
-            default: getProviderCatalog("qwen").defaultMode,
-          },
+        const providerCatalog = getProviderCatalog(provider);
+        const modeCfg = {
+          allowed: providerCatalog.modes.map((item) => item.id),
+          default: providerCatalog.defaultMode,
         };
-        const modeCfg = PROVIDER_MODES[provider];
         const mode = modeCfg.allowed.includes(String(body.mode)) ? String(body.mode) : modeCfg.default;
         const requestedModel = String(body.model || "").trim();
         const model = await resolveProviderModel(provider, requestedModel, mode);
+        const appSettings = loadSettings();
         const conversation = {
           id: randomUUID(),
           sessionId,
@@ -747,6 +1199,11 @@ export async function runWindowApp({
           model,
           roleId: normalizeRoleId(body.roleId),
           pipelineMode: body.pipelineMode === true,
+          coderMode: body.coderMode === true || body.hardwareMode === true,
+          hardwareMode: body.hardwareMode === true,
+          memoryEnabled: appSettings.ui?.memoryDefault !== false,
+          autoSkill: appSettings.ui?.autoSkillDefault !== false,
+          skillId: typeof body.skillId === "string" && body.skillId ? body.skillId : null,
           parentMessageId: null,
           // Отдельный chain для /code, чтобы Coding Agent system-prompt не загрязнял обычный чат.
           codeParentMessageId: null,
@@ -793,6 +1250,15 @@ export async function runWindowApp({
         if (typeof body.hardwareMode === "boolean") {
           conversation.hardwareMode = body.hardwareMode;
           if (body.hardwareMode) conversation.coderMode = true;
+        }
+        if (typeof body.memoryEnabled === "boolean") {
+          conversation.memoryEnabled = body.memoryEnabled;
+        }
+        if (typeof body.autoSkill === "boolean") {
+          conversation.autoSkill = body.autoSkill;
+        }
+        if (body.skillId === null || typeof body.skillId === "string") {
+          conversation.skillId = body.skillId ? String(body.skillId) : null;
         }
         conversation.updatedAt = new Date().toISOString();
         saveWindowState(workspaceRoot, state);
@@ -856,6 +1322,35 @@ export async function runWindowApp({
         return sendJson(res, { conversation, runningInstall: true });
       }
 
+      const permissionMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/permission-request\/(approve|reject)$/);
+      if (req.method === "POST" && permissionMatch) {
+        const conversation = state.conversations.find((item) => item.id === permissionMatch[1]);
+        if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
+        const request = conversation.pendingPermissionRequest;
+        if (!request || request.status !== "pending") {
+          return sendJson(res, { error: "No pending permission request" }, 400);
+        }
+        if (permissionMatch[2] === "reject") {
+          conversation.pendingPermissionRequest = { ...request, status: "rejected", updatedAt: new Date().toISOString() };
+          saveWindowState(workspaceRoot, state);
+          return sendJson(res, { conversation });
+        }
+        const current = loadSettings();
+        const key = request.permissionKey;
+        const commandPermissions = { ...(current.commandPermissions || {}) };
+        if (key === "allowPythonModuleAndEval") {
+          commandPermissions.allowPythonModuleAndEval = true;
+        } else if (key === "allowShell") {
+          commandPermissions.allowShell = true;
+        } else {
+          return sendJson(res, { error: `Unknown permission: ${key}` }, 400);
+        }
+        saveSettings({ allowedCommands: current.allowedCommands, commandPermissions });
+        conversation.pendingPermissionRequest = { ...request, status: "enabled", updatedAt: new Date().toISOString() };
+        saveWindowState(workspaceRoot, state);
+        return sendJson(res, { conversation });
+      }
+
       if (req.method === "DELETE" && conversationMatch) {
         const id = conversationMatch[1];
         const beforeCount = state.conversations.length;
@@ -884,9 +1379,20 @@ export async function runWindowApp({
         });
       }
 
+      // Остановка выполнения чата (фоновая задача: /code-агент или pipeline).
+      const stopMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/stop$/);
+      if (req.method === "POST" && stopMatch) {
+        const conversation = state.conversations.find((item) => item.id === stopMatch[1]);
+        if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
+        const stopped = stopTask(conversation.id);
+        if (stopped) logConsole(`[stop] task stopped for ${conversation.id}`);
+        return sendJson(res, { conversation, stopped, running: isRunning(conversation.id) });
+      }
+
       const messageMatch = url.pathname.match(/^\/api\/conversations\/([^/]+)\/messages$/);
       if (req.method === "POST" && messageMatch) {
-        const body = await readJsonBody(req);
+        // 30 МБ: ChatGPT-картинки приходят inline (base64) прямо в теле сообщения.
+        const body = await readJsonBody(req, 30_000_000);
         const conversation = state.conversations.find((item) => item.id === messageMatch[1]);
         if (!conversation) return sendJson(res, { error: "Conversation not found" }, 404);
 
@@ -920,8 +1426,8 @@ export async function runWindowApp({
           conversation.updatedAt = new Date().toISOString();
           state.activeConversationId = conversation.id;
           saveWindowState(workspaceRoot, state);
-          startTask(conversation.id, "pipeline", async () => {
-            await runPipelineFromConversation(conversation.id, prompt, body);
+          startTask(conversation.id, "pipeline", async (signal) => {
+            await runPipelineFromConversation(conversation.id, prompt, body, signal);
           }, "Pipeline");
           return sendJson(res, { conversation, running: true });
         }
@@ -957,15 +1463,15 @@ export async function runWindowApp({
             // /code-режим или Coder-mode (per-chat toggle) → запускаем code-agent.
             // ASYNC: задача идёт в фоне через task-runner. Возвращаем conversation
             // сразу с running:true, UI делает polling до завершения.
-            const slashCode = prompt === "/code" || prompt.startsWith("/code ");
-            const coderMode = conversation.coderMode === true;
+            const agentModes = await resolveAgentModes(prompt);
+            const agentInput = resolveConversationAgentTask(prompt, conversation, agentModes);
             const hardwareMode = conversation.hardwareMode === true;
-            if (slashCode || coderMode || hardwareMode) {
-              const task = slashCode ? prompt.slice(5).trim() : prompt;
-              if (!task) {
+            if (agentInput.run) {
+              const task = agentInput.task;
+              if (agentInput.empty) {
                 conversation.messages.push({
                   role: "assistant",
-                  content: "Напиши задачу после /code. Например: /code создай файл notes.txt с текстом hello",
+                  content: AGENT_TASK_EMPTY_HELP,
                   createdAt: new Date().toISOString(),
                 });
                 conversation.updatedAt = new Date().toISOString();
@@ -974,42 +1480,70 @@ export async function runWindowApp({
               }
 
               if (isRunning(conversation.id)) {
-                conversation.messages.push({
-                  role: "assistant",
-                  content: "⏳ В этом чате уже выполняется задача. Подожди завершения.",
-                  createdAt: new Date().toISOString(),
-                });
+                captureRunningClarification(conversation, prompt);
                 conversation.updatedAt = new Date().toISOString();
                 saveWindowState(workspaceRoot, state);
                 return sendJson(res, { conversation, running: true });
               }
 
               const { createQwenAgentAdapter } = await import("../providers/qwen/agent-adapter.mjs");
-              const adapter = createQwenAgentAdapter(qwenClient);
+              const { QWEN_RELOGIN_IN_PROGRESS_MESSAGE } = await import("../providers/qwen/session-errors.mjs");
+              const progressLogs = [];
+              const progressMessage = createCodeProgressMessage(task, { browserOnly: agentInput.browserOnly });
+              conversation.messages.push(progressMessage);
+              const adapter = createQwenAgentAdapter({
+                complete: (opts) =>
+                  qwenApiCall((c) => c.complete(opts), {
+                    onRelogin: () => {
+                      progressMessage.content = [
+                        QWEN_RELOGIN_IN_PROGRESS_MESSAGE,
+                        "",
+                        summarizeForLog(task, 240),
+                      ].join("\n");
+                      progressMessage.updatedAt = new Date().toISOString();
+                      conversation.updatedAt = progressMessage.updatedAt;
+                      saveWindowState(workspaceRoot, state);
+                    },
+                  }),
+              });
               const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
-              const qwenCodeUseSearch = body.search === true || (body.search !== false && searchEnabled);
+              await prepareBrowserAgentTask(task);
+              const qwenCodeUseSearch = await resolveProviderSearchEnabled(task, body, searchEnabled);
               const baseOptions = {
                 sessionId: conversation.sessionId,
                 thinkingEnabled: body.thinking === true,
                 searchEnabled: qwenCodeUseSearch,
+                model: conversation.model || undefined,
               };
               const parentId = getCodeParentMessageId(conversation);
-              const progressLogs = [];
-              const progressMessage = createCodeProgressMessage(conversation, task);
-              conversation.messages.push(progressMessage);
               conversation.updatedAt = new Date().toISOString();
               saveWindowState(workspaceRoot, state);
 
-              startTask(conversation.id, "code", async () => {
+              startTask(conversation.id, "code", async (signal) => {
+                const memorySavedHandler = createCodeMemorySavedHandler({
+                  conversation,
+                  progressMessage,
+                  workspaceRoot,
+                  state,
+                  saveWindowState,
+                });
                 try {
                   logConsole(`[code] qwen started: ${summarizeForLog(task)}`);
-                  const codeResult = await runCodeTask(adapter, baseOptions, workspacePath, task, parentId, {
-                    systemPrompt: hardwareMode ? createHardwareAgentPrompt() : "",
+                  const codeResult = await runAgentTask(adapter, baseOptions, workspacePath, task, parentId, {
+                    signal,
+                    ...buildAgentTaskOptions(conversation, body, {
+                      hardwareMode,
+                      systemPrompt: hardwareMode ? createHardwareAgentPrompt() : "",
+                      agentInput,
+                    }),
+                    onMemorySaved: memorySavedHandler,
+                    takeInterrupts: () => takeRunningClarifications(conversation),
                     onTool: (_call, result, log) => {
                       captureInstallRequest(conversation, result);
                       captureQuestionRequest(conversation, result);
+                      capturePermissionRequest(conversation, result);
                       progressLogs.push(log);
-                      progressMessage.content = formatCodeProgressMessage(task, progressLogs);
+                      progressMessage.content = formatCodeProgressMessage(task, progressLogs, { browserOnly: agentInput.browserOnly });
                       progressMessage.updatedAt = new Date().toISOString();
                       conversation.updatedAt = progressMessage.updatedAt;
                       saveWindowState(workspaceRoot, state);
@@ -1018,7 +1552,9 @@ export async function runWindowApp({
                   conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
                   conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
                   const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
-                  progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+                  const finalized = finalizeCodeTaskMessage(codeResult);
+                  conversation.lastAgentMeta = finalized.agentMeta;
+                  progressMessage.content = `${toolText}${finalized.content}`.trimEnd();
                   delete progressMessage.streaming;
                   progressMessage.updatedAt = new Date().toISOString();
                   if (toolText) logConsoleBlock("code tools", toolText);
@@ -1038,31 +1574,100 @@ export async function runWindowApp({
             }
 
             const isQwenReasoning = findProviderModel("qwen", conversation.model)?.reasoning === true;
-            const qwenUseSearch = body.search === true || (body.search !== false && searchEnabled);
-            const qwenPrompt = qwenUseSearch ? withWebSearchInstruction(prompt) : prompt;
-            const result = await qwenApiCall((c) =>
-              c.complete({
-                chatId: conversation.sessionId,
-                prompt: qwenPrompt,
-                parentId: conversation.parentMessageId,
-                thinking: isQwenReasoning ? true : (body.thinking === true),
-                search: qwenUseSearch,
-                model: conversation.model || undefined,
-              }),
-            );
-            conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
-            const finalText = result.thinkingText
-              ? `🧠 ${result.thinkingText.trim()}\n\n---\n\n${result.text.trim()}`
-              : result.text.trim();
-            conversation.messages.push({
+            const qwenUseSearch = await resolveProviderSearchEnabled(prompt, body, searchEnabled);
+            let qwenPrompt = qwenUseSearch ? withWebSearchInstruction(prompt) : prompt;
+
+            if (isRunning(conversation.id)) {
+              return sendJson(res, { error: "Дождитесь завершения текущего ответа Qwen." }, 409);
+            }
+
+            const { formatQwenStreamDisplay } = await import("../providers/qwen/client.mjs");
+            const streamMessage = {
               role: "assistant",
-              content: finalText || "[empty]",
+              content: "…",
+              streaming: true,
               createdAt: new Date().toISOString(),
-            });
+            };
+            conversation.messages.push(streamMessage);
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
-            logConsoleBlock("assistant", finalText || "[empty]");
-            logConsole(`[chat] qwen assistant response: ${finalText.length} char(s)`);
+
+            beginNdjsonStream(res);
+            writeNdjsonLine(res, { type: "start", conversation });
+
+            let answerText = "";
+            let thinkingText = "";
+            let lastSave = 0;
+            const pushStreamDelta = () => {
+              streamMessage.content = formatQwenStreamDisplay(thinkingText, answerText);
+              streamMessage.updatedAt = new Date().toISOString();
+              conversation.updatedAt = streamMessage.updatedAt;
+              const now = Date.now();
+              if (now - lastSave >= 180) {
+                lastSave = now;
+                saveWindowState(workspaceRoot, state);
+              }
+              writeNdjsonLine(res, { type: "delta", content: streamMessage.content });
+            };
+
+            try {
+              const { QWEN_RELOGIN_IN_PROGRESS_MESSAGE } = await import("../providers/qwen/session-errors.mjs");
+              const result = await qwenApiCall(
+                (c) =>
+                  c.complete({
+                    chatId: conversation.sessionId,
+                    prompt: qwenPrompt,
+                    parentId: conversation.parentMessageId,
+                    thinking: isQwenReasoning ? true : (body.thinking === true),
+                    search: qwenUseSearch,
+                    model: conversation.model || undefined,
+                    onText: (chunk) => {
+                      answerText += chunk;
+                      pushStreamDelta();
+                    },
+                    onThinking: (chunk) => {
+                      thinkingText += chunk;
+                      pushStreamDelta();
+                    },
+                  }),
+                {
+                  onRelogin: () => {
+                    streamMessage.content = QWEN_RELOGIN_IN_PROGRESS_MESSAGE;
+                    streamMessage.updatedAt = new Date().toISOString();
+                    pushStreamDelta();
+                  },
+                },
+              );
+              conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
+              const finalText = result.thinkingText
+                ? formatQwenStreamDisplay(result.thinkingText, result.text)
+                : String(result.text || "").trim();
+              delete streamMessage.streaming;
+              streamMessage.content = finalText || "[empty]";
+              streamMessage.updatedAt = new Date().toISOString();
+              conversation.updatedAt = streamMessage.updatedAt;
+              saveWindowState(workspaceRoot, state);
+              scheduleChatMemorySave({
+                conversation,
+                body,
+                workspacePath: path.resolve(conversation.workspace || workspaceRoot),
+                userPrompt: prompt,
+                assistantText: finalText,
+              });
+              logConsoleBlock("assistant", finalText || "[empty]");
+              logConsole(`[chat] qwen assistant response: ${finalText.length} char(s)`);
+              writeNdjsonLine(res, { type: "done", conversation });
+            } catch (error) {
+              delete streamMessage.streaming;
+              streamMessage.content = `⚠️ Qwen error: ${formatQwenError(error)}`;
+              streamMessage.updatedAt = new Date().toISOString();
+              conversation.updatedAt = streamMessage.updatedAt;
+              saveWindowState(workspaceRoot, state);
+              logConsole(`[chat] qwen failed: ${error.message}`);
+              writeNdjsonLine(res, { type: "error", conversation, message: error.message });
+            }
+            endNdjsonStream(res);
+            return;
           } catch (error) {
             conversation.messages.push({
               role: "assistant",
@@ -1074,6 +1679,251 @@ export async function runWindowApp({
             logConsole(`[chat] qwen failed: ${error.message}`);
           }
           return sendJson(res, { conversation });
+        }
+        if (convProvider === "chatgpt") {
+          const now = new Date().toISOString();
+          const isFirstUserMessage = !conversation.messages.some((message) => message.role === "user");
+          if (isFirstUserMessage && shouldAutoTitle(conversation)) {
+            conversation.title = makeConversationTitle(prompt);
+          }
+          conversation.messages.push({
+            role: "user",
+            content: prompt,
+            createdAt: now,
+          });
+          conversation.updatedAt = now;
+          state.activeConversationId = conversation.id;
+          saveWindowState(workspaceRoot, state);
+
+          const agentModes = await resolveAgentModes(prompt);
+          const agentInput = resolveConversationAgentTask(prompt, conversation, agentModes);
+          const runChatGPTCodeAgent = agentInput.run;
+          const hardwareMode = conversation.hardwareMode === true;
+          if (runChatGPTCodeAgent) {
+            const task = agentInput.task;
+            if (agentInput.empty) {
+              conversation.messages.push({
+                role: "assistant",
+                content: AGENT_TASK_EMPTY_HELP,
+                createdAt: new Date().toISOString(),
+              });
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+              return sendJson(res, { conversation });
+            }
+
+            if (isRunning(conversation.id)) {
+              captureRunningClarification(conversation, prompt);
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+              return sendJson(res, { conversation, running: true });
+            }
+
+            try {
+              // Гарантируем живую веб-сессию: при слетевшей сессии откроется окно входа.
+              await ensureChatGPTSessionReady();
+              const chatGPTClient = await getOrCreateChatGPTClient();
+              // Картинки прикрепляются к первому шагу агента (через веб-композер ChatGPT).
+              const chatGPTCodeImages = Array.isArray(body.images)
+                ? body.images.filter((img) => img && img.dataBase64 && img.name)
+                : [];
+              const { createChatGPTAgentAdapter } = await import("../providers/chatgpt/agent-adapter.mjs");
+              const adapter = createChatGPTAgentAdapter(chatGPTClient, {
+                conversationId: conversation.sessionId || null,
+                images: chatGPTCodeImages,
+                onConversationId: (id) => {
+                  conversation.sessionId = id;
+                  saveWindowState(workspaceRoot, state);
+                },
+              });
+              const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
+              await prepareBrowserAgentTask(task);
+              const chatGPTCodeUseSearch = await resolveProviderSearchEnabled(task, body, searchEnabled);
+              const baseOptions = {
+                sessionId: conversation.sessionId,
+                searchEnabled: chatGPTCodeUseSearch,
+              };
+              const parentId = getCodeParentMessageId(conversation);
+              const progressLogs = [];
+              const progressMessage = createCodeProgressMessage(task, { browserOnly: agentInput.browserOnly });
+              conversation.messages.push(progressMessage);
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+
+              startTask(conversation.id, "code", async (signal) => {
+                const memorySavedHandler = createCodeMemorySavedHandler({
+                  conversation,
+                  progressMessage,
+                  workspaceRoot,
+                  state,
+                  saveWindowState,
+                });
+                try {
+                  logConsole(`[code] chatgpt started: ${summarizeForLog(task)}`);
+                  const codeResult = await runAgentTask(adapter, baseOptions, workspacePath, task, parentId, {
+                    signal,
+                    ...buildAgentTaskOptions(conversation, body, {
+                      hardwareMode,
+                      systemPrompt: hardwareMode ? createHardwareAgentPrompt() : "",
+                      agentInput,
+                    }),
+                    onMemorySaved: memorySavedHandler,
+                    takeInterrupts: () => takeRunningClarifications(conversation),
+                    onTool: (_call, result, log) => {
+                      captureInstallRequest(conversation, result);
+                      captureQuestionRequest(conversation, result);
+                      capturePermissionRequest(conversation, result);
+                      progressLogs.push(log);
+                      progressMessage.content = formatCodeProgressMessage(task, progressLogs, { browserOnly: agentInput.browserOnly });
+                      progressMessage.updatedAt = new Date().toISOString();
+                      conversation.updatedAt = progressMessage.updatedAt;
+                      saveWindowState(workspaceRoot, state);
+                    },
+                  });
+                  conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
+                  conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
+                  conversation.sessionId = adapter.getConversationId() || conversation.sessionId;
+                  const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
+                  const finalized = finalizeCodeTaskMessage(codeResult);
+                  conversation.lastAgentMeta = finalized.agentMeta;
+                  progressMessage.content = `${toolText}${finalized.content}`.trimEnd();
+                  delete progressMessage.streaming;
+                  progressMessage.updatedAt = new Date().toISOString();
+                  if (toolText) logConsoleBlock("code tools", toolText);
+                  logConsoleBlock("assistant", codeResult.message);
+                  logConsole(`[code] chatgpt completed: ${codeResult.toolLogs.length} tool log(s)`);
+                } catch (err) {
+                  progressMessage.content = `⚠️ /code error: ${err.message}`;
+                  delete progressMessage.streaming;
+                  progressMessage.updatedAt = new Date().toISOString();
+                  logConsole(`[code] chatgpt failed: ${err.message}`);
+                }
+                conversation.updatedAt = new Date().toISOString();
+                saveWindowState(workspaceRoot, state);
+              }, agentInput.slash ? "ChatGPT /code" : "ChatGPT auto-code");
+
+              return sendJson(res, { conversation, running: true });
+            } catch (error) {
+              conversation.messages.push({
+                role: "assistant",
+                content: `⚠️ ChatGPT /code error: ${error.message}`,
+                createdAt: new Date().toISOString(),
+              });
+              conversation.updatedAt = new Date().toISOString();
+              saveWindowState(workspaceRoot, state);
+              logConsole(`[code] chatgpt failed to start: ${error.message}`);
+              return sendJson(res, { conversation });
+            }
+          }
+
+          try {
+            await ensureChatGPTSessionReady();
+            const chatGPTClient = await getOrCreateChatGPTClient();
+            const modelInfo = findProviderModel("chatgpt", conversation.model);
+            const chatGPTImages = Array.isArray(body.images)
+              ? body.images.filter((img) => img && img.dataBase64 && img.name)
+              : [];
+
+            const streamMessage = {
+              role: "assistant",
+              content: "…",
+              streaming: true,
+              createdAt: new Date().toISOString(),
+            };
+            conversation.messages.push(streamMessage);
+            conversation.updatedAt = streamMessage.createdAt;
+            saveWindowState(workspaceRoot, state);
+
+            beginNdjsonStream(res);
+            writeNdjsonLine(res, { type: "start", conversation });
+
+            let answerText = "";
+            let lastSave = 0;
+            const pushStreamDelta = () => {
+              streamMessage.content = answerText || "…";
+              streamMessage.updatedAt = new Date().toISOString();
+              conversation.updatedAt = streamMessage.updatedAt;
+              const now = Date.now();
+              if (now - lastSave >= 180) {
+                lastSave = now;
+                saveWindowState(workspaceRoot, state);
+              }
+              writeNdjsonLine(res, { type: "delta", content: streamMessage.content });
+            };
+
+            try {
+              const result = await chatGPTApiCall((c) =>
+                c.complete({
+                  prompt,
+                  model: modelInfo?.apiModel || conversation.model || undefined,
+                  conversationId: conversation.sessionId,
+                  parentMessageId: conversation.parentMessageId,
+                  images: chatGPTImages,
+                  onText: (chunk) => {
+                    answerText = String(chunk || "");
+                    pushStreamDelta();
+                  },
+                }),
+              );
+              conversation.sessionId = result.conversationId ?? conversation.sessionId;
+              conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
+              const generatedImages = Array.isArray(result.images) ? result.images.filter(Boolean) : [];
+              const apiText = String(result.text || "").trimEnd();
+              const streamed = String(answerText || "").trimEnd();
+              const finalText = (apiText.length >= streamed.length ? apiText : streamed)
+                || (generatedImages.length ? "" : "[empty]");
+              delete streamMessage.streaming;
+              streamMessage.content = finalText || (generatedImages.length ? "" : "[empty]");
+              if (generatedImages.length) streamMessage.images = generatedImages;
+              streamMessage.updatedAt = new Date().toISOString();
+              conversation.updatedAt = streamMessage.updatedAt;
+              saveWindowState(workspaceRoot, state);
+              scheduleChatMemorySave({
+                conversation,
+                body,
+                workspacePath: path.resolve(conversation.workspace || workspaceRoot),
+                userPrompt: prompt,
+                assistantText: finalText,
+              });
+              logConsoleBlock("assistant", finalText || "[empty]");
+              logConsole(`[chat] chatgpt assistant response: ${finalText.length} char(s)`);
+              writeNdjsonLine(res, { type: "done", conversation });
+            } catch (error) {
+              const needsChatGPTLogin = Boolean(error?.needsChatGPTLogin)
+                || /сессия истекла|session expired|not logged in|HTTP 401|unauthorized/i.test(String(error?.message || error));
+              const browserNotReady = /cloudflare|поле ввода|интерфейс|composer|проверку/i.test(
+                String(error?.message || error),
+              );
+              delete streamMessage.streaming;
+              streamMessage.content = needsChatGPTLogin
+                ? "⚠️ Нужен вход в ChatGPT: 🧠 → Браузер → вкладка ChatGPT. Войдите, нажмите «Синхронизировать», drawer можно закрыть — сессия сохранится."
+                : browserNotReady
+                  ? "⚠️ Внутренний ChatGPT ещё не готов. Откройте 🧠 → Браузер → ChatGPT и дождитесь статуса «ChatGPT готов». При зависании нажмите ↻."
+                  : `⚠️ ChatGPT error: ${error.message}`;
+              streamMessage.updatedAt = new Date().toISOString();
+              conversation.updatedAt = streamMessage.updatedAt;
+              saveWindowState(workspaceRoot, state);
+              logConsole(`[chat] chatgpt failed: ${error.message}`);
+              writeNdjsonLine(res, {
+                type: "error",
+                conversation,
+                needsChatGPTLogin,
+                message: error.message,
+              });
+            }
+            endNdjsonStream(res);
+            return;
+          } catch (error) {
+            conversation.messages.push({
+              role: "assistant",
+              content: `⚠️ ChatGPT error: ${error.message}`,
+              createdAt: new Date().toISOString(),
+            });
+            conversation.updatedAt = new Date().toISOString();
+            saveWindowState(workspaceRoot, state);
+            logConsole(`[chat] chatgpt failed: ${error.message}`);
+            return sendJson(res, { conversation });
+          }
         }
         if (convProvider !== "deepseek") {
           conversation.messages.push({
@@ -1103,7 +1953,7 @@ export async function runWindowApp({
         if (messageMode === "expert") {
           useThinking = true;
         }
-        let useSearch = body.search === true || (body.search !== false && searchEnabled);
+        let useSearch = await resolveProviderSearchEnabled(prompt, body, searchEnabled);
         // file_id'ы загруженных картинок для vision-режима. Фронт сначала зальёт
         // файлы через /api/upload, потом шлёт их id здесь.
         const refFileIds = Array.isArray(body.refFileIds)
@@ -1133,15 +1983,15 @@ export async function runWindowApp({
         state.activeConversationId = conversation.id;
         saveWindowState(workspaceRoot, state);
 
-        const dsSlashCode = prompt === "/code" || prompt.startsWith("/code ");
-        const dsCoderMode = conversation.coderMode === true;
+        const agentModes = await resolveAgentModes(prompt);
+        const agentInput = resolveConversationAgentTask(prompt, conversation, agentModes);
         const dsHardwareMode = conversation.hardwareMode === true;
-        if (dsSlashCode || dsCoderMode || dsHardwareMode) {
-          const task = dsSlashCode ? prompt.slice(5).trim() : prompt;
-          if (!task) {
+        if (agentInput.run) {
+          const task = agentInput.task;
+          if (agentInput.empty) {
             conversation.messages.push({
               role: "assistant",
-              content: "Напиши задачу после /code. Например: /code создай файл notes.txt с текстом hello",
+              content: AGENT_TASK_EMPTY_HELP,
               createdAt: new Date().toISOString(),
             });
             conversation.updatedAt = new Date().toISOString();
@@ -1150,11 +2000,7 @@ export async function runWindowApp({
           }
 
           if (isRunning(conversation.id)) {
-            conversation.messages.push({
-              role: "assistant",
-              content: "⏳ В этом чате уже выполняется задача. Подожди завершения.",
-              createdAt: new Date().toISOString(),
-            });
+            captureRunningClarification(conversation, prompt);
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
             return sendJson(res, { conversation, running: true });
@@ -1168,29 +2014,46 @@ export async function runWindowApp({
           // параллельно запустить /code в других чатах. Возвращаем conversation сразу,
           // фронт делает polling /api/state до завершения.
           const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
+          await prepareBrowserAgentTask(task);
+          const dsCodeUseSearch = await resolveProviderSearchEnabled(task, body, searchEnabled);
           const baseOptions = {
             sessionId: conversation.sessionId,
             modelType: effectiveModelType,
             thinkingEnabled: useThinking,
-            searchEnabled: useSearch,
+            searchEnabled: dsCodeUseSearch,
           };
           const parentId = getCodeParentMessageId(conversation);
           const progressLogs = [];
-          const progressMessage = createCodeProgressMessage(conversation, task);
+          const progressMessage = createCodeProgressMessage(task, { browserOnly: agentInput.browserOnly });
           conversation.messages.push(progressMessage);
           conversation.updatedAt = new Date().toISOString();
           saveWindowState(workspaceRoot, state);
 
-          startTask(conversation.id, "code", async () => {
+          startTask(conversation.id, "code", async (signal) => {
+            const memorySavedHandler = createCodeMemorySavedHandler({
+              conversation,
+              progressMessage,
+              workspaceRoot,
+              state,
+              saveWindowState,
+            });
             try {
               logConsole(`[code] deepseek started: ${summarizeForLog(task)}`);
-              const codeResult = await runCodeTask(client, baseOptions, workspacePath, task, parentId, {
-                systemPrompt: dsHardwareMode ? createHardwareAgentPrompt() : "",
+              const codeResult = await runAgentTask(client, baseOptions, workspacePath, task, parentId, {
+                signal,
+                ...buildAgentTaskOptions(conversation, body, {
+                  hardwareMode: dsHardwareMode,
+                  systemPrompt: dsHardwareMode ? createHardwareAgentPrompt() : "",
+                  agentInput,
+                }),
+                onMemorySaved: memorySavedHandler,
+                takeInterrupts: () => takeRunningClarifications(conversation),
                 onTool: (_call, result, log) => {
                   captureInstallRequest(conversation, result);
                   captureQuestionRequest(conversation, result);
+                  capturePermissionRequest(conversation, result);
                   progressLogs.push(log);
-                  progressMessage.content = formatCodeProgressMessage(task, progressLogs);
+                  progressMessage.content = formatCodeProgressMessage(task, progressLogs, { browserOnly: agentInput.browserOnly });
                   progressMessage.updatedAt = new Date().toISOString();
                   conversation.updatedAt = progressMessage.updatedAt;
                   saveWindowState(workspaceRoot, state);
@@ -1199,7 +2062,9 @@ export async function runWindowApp({
               conversation.codeParentMessageId = codeResult.parentMessageId ?? conversation.codeParentMessageId;
               conversation.codeAgentPromptVersion = CODE_AGENT_PROMPT_VERSION;
               const toolText = codeResult.toolLogs.length ? `${codeResult.toolLogs.join("\n")}\n\n` : "";
-              progressMessage.content = `${toolText}${codeResult.message}`.trimEnd();
+              const finalized = finalizeCodeTaskMessage(codeResult);
+              conversation.lastAgentMeta = finalized.agentMeta;
+              progressMessage.content = `${toolText}${finalized.content}`.trimEnd();
               delete progressMessage.streaming;
               progressMessage.updatedAt = new Date().toISOString();
               if (toolText) logConsoleBlock("code tools", toolText);
@@ -1213,33 +2078,83 @@ export async function runWindowApp({
             }
             conversation.updatedAt = new Date().toISOString();
             saveWindowState(workspaceRoot, state);
-          }, "DeepSeek /code");
+          }, agentInput.slash ? "DeepSeek /code" : "DeepSeek auto-code");
 
           return sendJson(res, { conversation, running: true });
         }
 
-        const result = await client.complete({
-          sessionId: conversation.sessionId,
-          prompt: useSearch ? withWebSearchInstruction(prompt) : prompt,
-          parentMessageId: conversation.parentMessageId,
-          modelType: effectiveModelType,
-          thinkingEnabled: useThinking,
-          searchEnabled: useSearch,
-          refFileIds,
-        });
+        let deepseekPrompt = useSearch ? withWebSearchInstruction(prompt) : prompt;
 
-        conversation.parentMessageId = result.lastAssistantMessageId ?? conversation.parentMessageId;
-        conversation.messages.push({
+        const streamMessage = {
           role: "assistant",
-          content: result.text.trimEnd(),
+          content: "…",
+          streaming: true,
           createdAt: new Date().toISOString(),
-        });
-        conversation.updatedAt = new Date().toISOString();
+        };
+        conversation.messages.push(streamMessage);
+        conversation.updatedAt = streamMessage.createdAt;
         saveWindowState(workspaceRoot, state);
-        logConsoleBlock("assistant", result.text);
-        logConsole(`[chat] deepseek assistant response: ${result.text.length} char(s)`);
 
-        return sendJson(res, { conversation });
+        beginNdjsonStream(res);
+        writeNdjsonLine(res, { type: "start", conversation });
+
+        let answerText = "";
+        let lastSave = 0;
+        const pushStreamDelta = () => {
+          streamMessage.content = answerText || "…";
+          streamMessage.updatedAt = new Date().toISOString();
+          conversation.updatedAt = streamMessage.updatedAt;
+          const now = Date.now();
+          if (now - lastSave >= 180) {
+            lastSave = now;
+            saveWindowState(workspaceRoot, state);
+          }
+          writeNdjsonLine(res, { type: "delta", content: streamMessage.content });
+        };
+
+        try {
+          const result = await client.complete({
+            sessionId: conversation.sessionId,
+            prompt: deepseekPrompt,
+            parentMessageId: conversation.parentMessageId,
+            modelType: effectiveModelType,
+            thinkingEnabled: useThinking,
+            searchEnabled: useSearch,
+            refFileIds,
+            onText: (chunk) => {
+              answerText += chunk;
+              pushStreamDelta();
+            },
+          });
+
+          conversation.parentMessageId = result.lastAssistantMessageId ?? conversation.parentMessageId;
+          const finalText = String(result.text || answerText || "").trimEnd();
+          delete streamMessage.streaming;
+          streamMessage.content = finalText || "[empty]";
+          streamMessage.updatedAt = new Date().toISOString();
+          conversation.updatedAt = streamMessage.updatedAt;
+          saveWindowState(workspaceRoot, state);
+          scheduleChatMemorySave({
+            conversation,
+            body,
+            workspacePath: path.resolve(conversation.workspace || workspaceRoot),
+            userPrompt: prompt,
+            assistantText: finalText,
+          });
+          logConsoleBlock("assistant", finalText);
+          logConsole(`[chat] deepseek assistant response: ${finalText.length} char(s)`);
+          writeNdjsonLine(res, { type: "done", conversation });
+        } catch (error) {
+          delete streamMessage.streaming;
+          streamMessage.content = `⚠️ DeepSeek error: ${error.message}`;
+          streamMessage.updatedAt = new Date().toISOString();
+          conversation.updatedAt = streamMessage.updatedAt;
+          saveWindowState(workspaceRoot, state);
+          logConsole(`[chat] deepseek failed: ${error.message}`);
+          writeNdjsonLine(res, { type: "error", conversation, message: error.message });
+        }
+        endNdjsonStream(res);
+        return;
       }
 
       return sendJson(res, { error: "Not found" }, 404);
@@ -1248,31 +2163,69 @@ export async function runWindowApp({
     }
   });
 
+  server.on("upgrade", (req, socket, head) => {
+    try {
+      if (handleChatGPTFrameUpgrade(req, socket, head)) return;
+    } catch {}
+    socket.destroy();
+  });
+
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
 
   const url = `http://127.0.0.1:${port}`;
+  let telegramBot = null;
+  if (process.env.AI_FREE_DISABLE_TELEGRAM !== "1") {
+    import("../telegram/bot.mjs")
+      .then((m) => m.startTelegramBot({
+        port,
+        workspaceRoot,
+        log: (message) => logConsole(message),
+      }))
+      .then((bot) => {
+        telegramBot = bot;
+      })
+      .catch((error) => logConsole(`[telegram] failed to start: ${error.message}`));
+  }
+
   if (openWindow) {
     console.log(`Workspace window: ${url}`);
-    openAppWindow(url);
+    console.log("Tip: Agent panel (memory/skills/browser) is in the 🧠 drawer inside the app.");
+    const { openAppWindowInternal } = await import("./app-window.mjs");
+    openAppWindowInternal(url).catch((error) => {
+      console.log(`⚠️ Не удалось открыть внутреннее окно: ${error.message}`);
+      console.log(`   Пробую окно-приложение (--app) без вкладок…`);
+      try {
+        openAppWindow(url);
+      } catch {
+        console.log(`   Откройте вручную: ${url}`);
+      }
+    });
   } else {
     console.log(`Workspace server: ${url}`);
     console.log(`OpenAI-compatible API: ${url}/v1`);
     console.log("Window opening disabled. Console logging is enabled. Press Ctrl+C to stop.");
   }
 
-  // Graceful shutdown: Ctrl+C / kill / закрытие терминала.
-  // Сервер закрывается → фронт через heartbeat видит мёртвый CLI → окно закрывается.
+  // Graceful shutdown: Ctrl+C, кнопка «Выход» в UI, POST /api/shutdown.
   let shuttingDown = false;
   const shutdown = (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    if (signal) console.log(`\nReceived ${signal}, stopping window server...`);
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1500).unref();
+    if (signal === "SIGINT") process.stdout.write("\n");
+    requestAppShutdown({ source: signal || "signal" }).finally(() => {
+      process.exit(0);
+    });
   };
+
+  registerShutdownServerCloser((done) => {
+    telegramBot?.stop?.();
+    server.close(() => done());
+    setTimeout(done, 2000).unref();
+  });
+
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGHUP", () => shutdown("SIGHUP"));
@@ -1284,6 +2237,42 @@ function withWebSearchInstruction(prompt) {
     "",
     prompt,
   ].join("\n");
+}
+
+async function resolveAgentModes(prompt) {
+  const autoBrowserMode = await resolveAutoBrowserMode(prompt);
+  const autoCodeMode = !autoBrowserMode && shouldAutoRunCodeTask(prompt);
+  return { autoBrowserMode, autoCodeMode };
+}
+
+async function resolveAutoBrowserMode(prompt) {
+  try {
+    const { shouldAutoRunBrowserTask, shouldAutoRunBrowserTaskWithSnapshot } = await import("./browser-snapshot.mjs");
+    if (shouldAutoRunBrowserTask(prompt)) return true;
+    if (await shouldAutoRunBrowserTaskWithSnapshot(prompt)) return true;
+  } catch {}
+  return false;
+}
+
+async function resolveAutoCodeMode(prompt) {
+  return shouldAutoRunCodeTask(prompt);
+}
+
+async function resolveProviderSearchEnabled(prompt, body, globalDefault) {
+  const userOn = body.search === true || (body.search !== false && globalDefault);
+  if (!userOn) return false;
+  try {
+    const { shouldPreferBrowserOverProviderSearch } = await import("./browser-snapshot.mjs");
+    if (await shouldPreferBrowserOverProviderSearch(prompt)) return false;
+  } catch {}
+  return true;
+}
+
+async function prepareBrowserAgentTask(task) {
+  try {
+    const { warmBrowserForAgentTask } = await import("./browser-snapshot.mjs");
+    await warmBrowserForAgentTask(task);
+  } catch {}
 }
 
 function summarizeForLog(value, maxLength = 160) {
@@ -1344,6 +2333,42 @@ function captureQuestionRequest(conversation, toolResult) {
     choices: Array.isArray(question.choices) ? question.choices : [],
     createdAt: new Date().toISOString(),
   };
+}
+
+function capturePermissionRequest(conversation, toolResult) {
+  const permission = toolResult?.permissionRequest;
+  if (!permission || !permission.id || !permission.permissionKey) return;
+  conversation.pendingPermissionRequest = {
+    requestId: randomUUID(),
+    status: "pending",
+    ...permission,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function captureRunningClarification(conversation, prompt) {
+  const now = new Date().toISOString();
+  conversation.messages.push({ role: "user", content: prompt, createdAt: now, interrupt: true });
+  conversation.messages.push({
+    role: "assistant",
+    content: "⚠️ Уточнение принято. Агент учтёт его на следующем шаге текущей задачи.",
+    createdAt: now,
+    interruptAck: true,
+  });
+  const pending = Array.isArray(conversation.pendingInterrupts) ? conversation.pendingInterrupts : [];
+  pending.push({ content: prompt, createdAt: now });
+  conversation.pendingInterrupts = pending.slice(-10);
+  conversation.updatedAt = now;
+}
+
+function takeRunningClarifications(conversation) {
+  const pending = Array.isArray(conversation.pendingInterrupts) ? conversation.pendingInterrupts : [];
+  if (!pending.length) return [];
+  conversation.pendingInterrupts = [];
+  return pending
+    .map((item) => String(item?.content || "").trim())
+    .filter(Boolean);
 }
 
 function approvedInstallRecipes() {
@@ -1465,11 +2490,12 @@ function createHardwareAgentPrompt() {
 - Only upload/flash when the user explicitly asks to прошить/upload/flash. For analysis tasks, stop after reporting the plan and required commands.`;
 }
 
-function createCodeProgressMessage(task) {
+function createCodeProgressMessage(task, { browserOnly = false } = {}) {
   const now = new Date().toISOString();
+  const label = browserOnly ? "🌐 Браузер" : "⏳ Выполняю задачу";
   return {
     role: "assistant",
-    content: `⏳ Выполняю задачу...\n\n${summarizeForLog(task, 240)}`,
+    content: `${label}...\n\n${summarizeForLog(task, 240)}`,
     streaming: true,
     createdAt: now,
     updatedAt: now,
@@ -1485,17 +2511,49 @@ function getCodeParentMessageId(conversation) {
   return conversation.codeParentMessageId || null;
 }
 
-function formatCodeProgressMessage(task, logs) {
+function formatCodeProgressMessage(task, logs, { browserOnly = false } = {}) {
   const visibleLogs = logs.slice(-8).join("\n\n");
   const hiddenCount = Math.max(0, logs.length - 8);
   const prefix = hiddenCount > 0 ? `...ещё ${hiddenCount} предыдущих tool-call(ов)\n\n` : "";
+  const label = browserOnly ? "🌐 Браузер" : "⏳ Выполняю задачу";
   return [
-    `⏳ Выполняю задачу... tool-call ${logs.length}`,
+    `${label}... tool-call ${logs.length}`,
     summarizeForLog(task, 240),
     "```text",
     `${prefix}${visibleLogs}`.trimEnd(),
     "```",
   ].join("\n\n");
+}
+
+export function shouldAutoRunCodeTask(prompt) {
+  const text = String(prompt || "").trim();
+  if (!text || text === "/code" || text.startsWith("/code ") || text.startsWith("/skill ")) return false;
+  const normalized = text.toLowerCase();
+  const hasAny = (terms) => terms.some((term) => normalized.includes(term));
+
+  if (/^(как|что|почему|зачем|объясни|расскажи|покажи пример|можешь объяснить)\b/u.test(normalized)) {
+    return false;
+  }
+  if (/^(how|what|why|explain|tell me|can you explain)\b/u.test(normalized)) {
+    return false;
+  }
+
+  const directAction =
+    hasAny(["добавь", "добавить", "сделай", "сделать", "измени", "изменить", "исправь", "исправить", "почини", "починить", "обнови", "обновить", "удали", "удалить", "переименуй", "переименовать", "реализуй", "реализовать", "напиши", "написать", "создай", "создать", "встрой", "встраивай", "встроить", "подключи", "подключить", "проверь", "проверить", "запусти", "запустить", "собери", "собрать", "протестируй", "протестировать", "переведи", "перевести"])
+    || /\b(add|create|make|edit|update|change|fix|repair|remove|delete|rename|implement|write|modify|install|run|test|verify|check|build|refactor|wire|integrate)\b/u.test(normalized);
+
+  if (!directAction) return false;
+
+  const strongCodeAction =
+    hasAny(["добавь", "измени", "исправь", "почини", "обнови", "удали", "переименуй", "реализуй", "встрой", "встраивай", "встроить", "подключи", "проверь", "запусти", "собери", "протестируй", "переведи"])
+    || /\b(add|edit|update|change|fix|repair|remove|delete|rename|implement|modify|install|run|test|verify|build|refactor|wire|integrate)\b/u.test(normalized);
+  const projectSignal =
+    hasAny(["проект", "код", "файл", "папк", "репозитор", "интерфейс", "плагин", "десктоп", "настройк", "чат", "агент", "модель", "функц", "компонент"])
+    || /\b(api|memory|loop|ui|src|test|package|repo|repository|workspace|plugin|desktop|settings|agent|provider)\b/u.test(normalized)
+    || /\.(mjs|js|ts|tsx|jsx|json|css|html|md|py|sh|yml|yaml)\b/u.test(normalized)
+    || /[/\\]/u.test(normalized);
+
+  return strongCodeAction || projectSignal;
 }
 
 // Маппинг режима из UI в значение model_type для DeepSeek API.

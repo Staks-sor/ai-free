@@ -218,7 +218,12 @@ async function activate(context) {
     outputChannel.appendLine("Spawning background Node.js server...");
     
     // Передаем переменные окружения, чтобы сохранить настройки пользователя
-    const env = { ...process.env, AI_FREE_VSCODE: "1", AI_FREE_VSCODE_WORKSPACE: workspacePath };
+    const env = {
+        ...process.env,
+        AI_FREE_VSCODE: "1",
+        AI_FREE_VSCODE_WORKSPACE: workspacePath,
+        AI_FREE_DISABLE_TELEGRAM: "1",
+    };
     
     serverProcess = spawn('node', [
         serverPath,

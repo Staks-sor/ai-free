@@ -8,6 +8,9 @@
 import fs from "node:fs";
 import { DEFAULT_AUTH_FILE } from "../config.mjs";
 import { QWEN_AUTH_FILE } from "./qwen/config.mjs";
+import { CHATGPT_AUTH_FILE } from "./chatgpt/config.mjs";
+import { isChatGPTAuthUsable, readChatGPTAuth } from "./chatgpt/auth-files.mjs";
+import { isChatGPTBrowserProxyActive } from "./chatgpt/browser-proxy.mjs";
 
 export const PROVIDERS = {
   deepseek: {
@@ -30,6 +33,17 @@ export const PROVIDERS = {
     async login() {
       const { loginQwenAndSave } = await import("./qwen/browser-login.mjs");
       await loginQwenAndSave();
+    },
+  },
+  chatgpt: {
+    id: "chatgpt",
+    name: "ChatGPT",
+    description: "chatgpt.com — бесплатный веб-интерфейс OpenAI",
+    authFile: CHATGPT_AUTH_FILE,
+    hasAuth: () => isChatGPTAuthUsable(readChatGPTAuth(CHATGPT_AUTH_FILE)) || isChatGPTBrowserProxyActive(),
+    async login() {
+      const { loginChatGPTAndSave } = await import("./chatgpt/browser-login.mjs");
+      await loginChatGPTAndSave();
     },
   },
 };

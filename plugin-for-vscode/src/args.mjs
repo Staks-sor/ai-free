@@ -27,6 +27,8 @@ export function parseArgs(argv) {
     saveCreds: false,
     loginQwen: false,
     importQwenFile: null,
+    loginChatGPT: false,
+    importChatGPTFile: null,
     forceWelcome: false,
     prompt: [],
   };
@@ -55,6 +57,8 @@ export function parseArgs(argv) {
     else if (arg === "--save-creds") args.saveCreds = true;
     else if (arg === "--login-qwen") args.loginQwen = true;
     else if (arg === "--import-qwen") args.importQwenFile = argv[++i];
+    else if (arg === "--login-chatgpt") args.loginChatGPT = true;
+    else if (arg === "--import-chatgpt") args.importChatGPTFile = argv[++i];
     else if (arg === "--welcome") args.forceWelcome = true;
     else if (arg === "--port") args.port = Number(argv[++i]);
     else if (arg === "--api-port") args.apiPort = Number(argv[++i]);
@@ -111,6 +115,8 @@ Options:
   --login             Open a remembered browser profile and save cookies/token
   --login-qwen        Same but for chat.qwen.ai (separate profile, separate auth)
   --import-qwen FILE  Import Qwen cookies from a Chrome JSON export (bypasses anti-bot)
+  --login-chatgpt     Same but for chatgpt.com (separate profile, separate auth)
+  --import-chatgpt FILE Import ChatGPT session from a JSON export (containing accessToken/sessionToken)
   --welcome           Force show welcome screen (for adding new provider or testing)
   --save-creds        Save email + password for autofill on re-login
   --thinking          Enable thinking mode

@@ -137,6 +137,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           </div>
         </div>
       </div>
+      <div id="updateToast" class="updateToast hidden" aria-hidden="true">
+        <button id="updateToastDismiss" class="updateToastClose" type="button" aria-label="${t("app.close")}">✕</button>
+        <div class="updateToastTitle">Появилось новое обновление</div>
+        <div id="updateToastMeta" class="updateToastMeta">${t("update.available")}</div>
+        <div id="updateToastStatus" class="updateToastStatus"></div>
+        <button id="updateToastDownload" class="updateToastDownload" type="button">Скачать</button>
+      </div>
       <div id="chatList" class="chatList"></div>
     </aside>
       <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
@@ -311,6 +318,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const activeTitle = document.getElementById("activeTitle");
     const workspace = document.getElementById("workspace");
     const statusEl = document.getElementById("status");
+    const updateToast = document.getElementById("updateToast");
+    const updateToastDismiss = document.getElementById("updateToastDismiss");
+    const updateToastDownload = document.getElementById("updateToastDownload");
+    const updateToastMeta = document.getElementById("updateToastMeta");
+    const updateToastStatus = document.getElementById("updateToastStatus");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
     const stopBtn = document.getElementById("stopBtn");
@@ -322,11 +334,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
     const THEME_KEY = "deepseek.theme";
+    const EXTERNAL_STATE_POLL_MS = 2500;
     const THEMES = [
       { id: "dark", label: t("theme.dark"), icon: "◐" },
       { id: "light", label: t("theme.light"), icon: "☼" },
       { id: "contrast", label: t("theme.contrast"), icon: "◑" },
     ];
+    let availableUpdateCheck = null;
 
     function isMessagesNearBottom() {
       return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 80;
@@ -346,12 +360,30 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     setupSidebarResize();
     applySavedComposerHeight();
     setupComposerResize();
+    setupExternalStatePolling();
 
     // The update modal is declared near the refresh button, but it must render as a
     // window-level overlay instead of being clipped by the sidebar.
     document.body.appendChild(updateConfirmOverlay);
 
     document.getElementById("refreshBtn").addEventListener("click", loadState);
+    updateToastDismiss.addEventListener("click", () => {
+      updateToast.classList.add("hidden");
+      updateToast.setAttribute("aria-hidden", "true");
+    });
+    updateToastDownload.addEventListener("click", async () => {
+      updateToastDownload.disabled = true;
+      updateToastStatus.textContent = t("update.installing");
+      try {
+        const result = await installAvailableUpdate(availableUpdateCheck, { restart: true });
+        if (result?.after) renderUpdateToast(result.after);
+      } catch (err) {
+        updateToastStatus.textContent = t("update.installFailed", { message: err.message });
+        setStatus(err.message, true);
+      } finally {
+        updateToastDownload.disabled = false;
+      }
+    });
 
     function closeDeleteChatModal(confirmed = false) {
       deleteChatOverlay.classList.add("hidden");
@@ -1453,6 +1485,49 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         pollTimer = null;
       }
     }
+    let externalStateRefreshing = false;
+    function setupExternalStatePolling() {
+      setInterval(refreshExternalState, EXTERNAL_STATE_POLL_MS);
+    }
+    function conversationSummaryChanged(prev, next) {
+      if (!prev || !next) return prev !== next;
+      return prev.updatedAt !== next.updatedAt || prev.messageCount !== next.messageCount;
+    }
+    function runningIdsChanged(prev = [], next = []) {
+      return prev.length !== next.length || prev.some((id, index) => id !== next[index]);
+    }
+    async function refreshExternalState() {
+      if (externalStateRefreshing || sending || shutdownStarted) return;
+      externalStateRefreshing = true;
+      try {
+        const nextState = await api("/api/state");
+        const previousActiveId = appState.activeConversationId;
+        const activeId = activeConversation?.id || previousActiveId;
+        const previousActiveSummary = (appState.conversations || []).find((item) => item.id === activeId);
+        const nextActiveSummary = (nextState.conversations || []).find((item) => item.id === activeId);
+        const listChanged = runningIdsChanged(appState.runningTaskIds || [], nextState.runningTaskIds || [])
+          || (appState.conversations || []).length !== (nextState.conversations || []).length
+          || conversationSummaryChanged(previousActiveSummary, nextActiveSummary);
+        appState = {
+          ...nextState,
+          activeConversationId: previousActiveId,
+        };
+        if (listChanged) {
+          renderList();
+          updateStopButton();
+        }
+        if (activeConversation && conversationSummaryChanged(previousActiveSummary, nextActiveSummary)) {
+          const data = await api("/api/conversations/" + activeConversation.id);
+          activeConversation = data.conversation;
+          renderConversation(activeConversation);
+        }
+        if ((appState.runningTaskIds || []).length > 0) ensurePolling();
+      } catch {
+        // Silent: this is only a background sync for external changes.
+      } finally {
+        externalStateRefreshing = false;
+      }
+    }
     let installPollTimer = null;
     function ensureInstallPolling() {
       if (installPollTimer) return;
@@ -2092,7 +2167,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const assistantLabel = message.roleId
           ? roleLabel(message.roleId)
           : (({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || t("chat.assistant"));
-        role.textContent = message.role === "user" ? t("chat.you") : assistantLabel;
+        role.textContent = message.role === "user"
+          ? (message.source === "telegram" ? t("chat.you") + " · Telegram" : t("chat.you"))
+          : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
         if (message.content) {
@@ -2560,6 +2637,58 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return data;
     }
 
+    function renderUpdateToast(data) {
+      availableUpdateCheck = data || null;
+      const shouldShow = Boolean(data?.updateAvailable);
+      updateToast.classList.toggle("hidden", !shouldShow);
+      updateToast.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+      if (!shouldShow) return;
+      const version = data.latestVersion ? "v" + data.latestVersion : "";
+      updateToastMeta.textContent = version
+        ? t("update.available") + " " + version
+        : t("update.available");
+      updateToastStatus.textContent = data.canUpdate ? "" : t("update.gitRequired");
+      updateToastDownload.disabled = !data.canUpdate;
+      updateToastDownload.textContent = data.canUpdate ? "Скачать" : "Недоступно";
+    }
+
+    async function checkUpdateToast() {
+      try {
+        renderUpdateToast(await api("/api/update/check"));
+      } catch {
+        renderUpdateToast(null);
+      }
+    }
+
+    async function installAvailableUpdate(checkData = availableUpdateCheck, options = {}) {
+      let currentCheck = checkData;
+      if (!currentCheck?.updateAvailable) {
+        currentCheck = await api("/api/update/check");
+        renderUpdateToast(currentCheck);
+      }
+      if (!currentCheck?.updateAvailable) {
+        setStatus(t("update.upToDate"), false);
+        return null;
+      }
+      if (!currentCheck.canUpdate) {
+        throw new Error(t("update.gitRequired"));
+      }
+      if (options.restart !== true && !await confirmAppUpdate()) return null;
+      setStatus(t("update.installing"), false);
+      const result = await api("/api/update/run", {
+        method: "POST",
+        body: { restart: options.restart === true },
+      });
+      renderUpdateToast(result.after || null);
+      setStatus(
+        result.restarting
+          ? "Обновление установлено. Перезапускаю AI Free..."
+          : (result.message || t("update.installed")),
+        false,
+      );
+      return result;
+    }
+
     function updateStreamingAssistantBubble(content) {
       const items = messages.querySelectorAll(".msg.assistant.streaming");
       const last = items[items.length - 1];
@@ -2774,6 +2903,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const content = document.createElement("div");
       content.className = "settingsTabContent";
       const tabs = [
+        { id: "status", label: t("settings.tabStatus") || "Статус" },
         { id: "language", label: t("settings.tabLanguage") },
         { id: "agent", label: t("settings.tabAgent") },
         { id: "telegram", label: t("settings.tabTelegram") },
@@ -2802,6 +2932,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       shell.append(nav, content);
       settingsBody.appendChild(shell);
 
+      renderStatusSettings(panels.status);
       renderUiSettings(panels.language, ui, allowedCommands || []);
       renderAgentSettings(panels.agent, ui);
       renderTelegramSettings(panels.telegram, telegram || {});
@@ -2846,7 +2977,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
         panels.permissions.appendChild(groupEl);
       }
-      selectSettingsTab(initialTab || "language");
+      selectSettingsTab(initialTab || "status");
     }
 
     document.getElementById("sidebarMenuPlugins").addEventListener("click", () => {
@@ -2931,6 +3062,132 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       target.appendChild(groupEl);
       renderVoiceSettings(target);
+    }
+
+    function renderStatusSettings(target) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup healthSettings";
+
+      const header = document.createElement("div");
+      header.className = "healthHeader";
+      const heading = document.createElement("h3");
+      heading.textContent = t("health.title") || "Статус системы";
+      const actions = document.createElement("div");
+      actions.className = "healthActions";
+      const refreshBtn = document.createElement("button");
+      refreshBtn.type = "button";
+      refreshBtn.className = "apiKeyBtn";
+      refreshBtn.textContent = t("health.refresh") || "Обновить";
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "apiKeyBtn";
+      copyBtn.textContent = t("health.copyReport") || "Скопировать отчёт";
+      actions.append(refreshBtn, copyBtn);
+      header.append(heading, actions);
+      groupEl.appendChild(header);
+
+      const summary = document.createElement("div");
+      summary.className = "healthSummary";
+      summary.textContent = t("app.loading");
+      groupEl.appendChild(summary);
+
+      const providersGrid = document.createElement("div");
+      providersGrid.className = "healthGrid";
+      groupEl.appendChild(providersGrid);
+
+      const systemGrid = document.createElement("div");
+      systemGrid.className = "healthGrid";
+      groupEl.appendChild(systemGrid);
+
+      const reportBox = document.createElement("textarea");
+      reportBox.className = "healthReport";
+      reportBox.readOnly = true;
+      reportBox.rows = 12;
+      groupEl.appendChild(reportBox);
+
+      let lastReport = "";
+
+      function statusClass(ok) {
+        return ok ? "ok" : "warn";
+      }
+
+      function makeCard(title, value, desc, ok) {
+        const card = document.createElement("div");
+        card.className = "healthCard " + statusClass(ok);
+        const top = document.createElement("div");
+        top.className = "healthCardTop";
+        const name = document.createElement("div");
+        name.className = "healthCardTitle";
+        name.textContent = title;
+        const badge = document.createElement("span");
+        badge.className = "healthBadge " + statusClass(ok);
+        badge.textContent = value;
+        top.append(name, badge);
+        const detail = document.createElement("div");
+        detail.className = "healthCardDesc";
+        detail.textContent = desc || "";
+        card.append(top, detail);
+        return card;
+      }
+
+      function renderDiagnostics(data) {
+        lastReport = data.report || "";
+        const readyProviders = (data.providers || []).filter((provider) => provider.hasAuth).length;
+        const missingCommands = (data.commands || []).filter((command) => !command.ok).map((command) => command.command);
+        summary.textContent = [
+          "AI Free v" + (data.app?.version || "-"),
+          "providers " + readyProviders + "/" + ((data.providers || []).length || 0),
+          missingCommands.length ? ("missing: " + missingCommands.join(", ")) : "commands ok",
+        ].join(" · ");
+
+        providersGrid.innerHTML = "";
+        for (const provider of data.providers || []) {
+          providersGrid.appendChild(makeCard(
+            provider.name,
+            provider.hasAuth ? (t("health.ready") || "Готов") : (t("health.needsLogin") || "Нужен вход"),
+            provider.authFileLabel || provider.description || provider.id,
+            provider.hasAuth,
+          ));
+        }
+
+        systemGrid.innerHTML = "";
+        systemGrid.appendChild(makeCard("Workspace", data.workspace?.exists ? "ok" : "missing", data.workspace?.root || "-", data.workspace?.exists));
+        systemGrid.appendChild(makeCard("Git", data.git?.available ? (data.git.branch || "ok") : "missing", data.git?.dirty ? "dirty worktree" : (data.git?.commit || ""), data.git?.available));
+        systemGrid.appendChild(makeCard("Telegram", data.telegram?.enabled ? "enabled" : "off", data.telegram?.hasBotToken ? "token configured" : "no token", !data.telegram?.enabled || data.telegram?.hasBotToken));
+        for (const command of data.commands || []) {
+          systemGrid.appendChild(makeCard(command.command, command.ok ? "ok" : "missing", command.version || command.error || "", command.ok));
+        }
+
+        reportBox.value = lastReport;
+      }
+
+      async function refreshDiagnostics() {
+        refreshBtn.disabled = true;
+        summary.textContent = t("app.loading");
+        try {
+          renderDiagnostics(await api("/api/diagnostics"));
+        } catch (err) {
+          summary.textContent = t("settings.loadFailed", { message: err.message });
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      }
+
+      refreshBtn.addEventListener("click", refreshDiagnostics);
+      copyBtn.addEventListener("click", async () => {
+        if (!lastReport) await refreshDiagnostics();
+        try {
+          await navigator.clipboard.writeText(lastReport || reportBox.value || "");
+          setStatus(t("health.copied") || "Диагностический отчёт скопирован");
+        } catch {
+          reportBox.focus();
+          reportBox.select();
+          setStatus(t("health.copyManual") || "Выделил отчёт, скопируй вручную");
+        }
+      });
+
+      target.appendChild(groupEl);
+      refreshDiagnostics().catch(() => {});
     }
 
     async function renderAgentSettings(target, ui) {
@@ -3240,7 +3497,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const chatInput = document.createElement("input");
       chatInput.type = "text";
       chatInput.autocomplete = "off";
-      chatInput.placeholder = "123456789";
+      chatInput.placeholder = "auto after /start";
       chatInput.value = telegram.chatId || "";
       chatField.appendChild(chatInput);
       groupEl.appendChild(chatField);
@@ -3437,6 +3694,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       function renderCheck(data) {
         lastCheck = data;
+        renderUpdateToast(data);
         meta.innerHTML = "";
         const rows = [
           [t("update.currentVersion"), data.currentVersion || "-"],
@@ -3488,17 +3746,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       checkBtn.addEventListener("click", check);
       installBtn.addEventListener("click", async () => {
         if (!lastCheck?.updateAvailable) return;
-        if (!await confirmAppUpdate()) return;
         checkBtn.disabled = true;
         installBtn.disabled = true;
         status.textContent = t("update.installing");
         status.className = "updateStatus";
         try {
-          const result = await api("/api/update/run", { method: "POST" });
+          const result = await installAvailableUpdate(lastCheck);
+          if (!result) {
+            renderCheck(lastCheck);
+            return;
+          }
           renderCheck(result.after || lastCheck);
           status.textContent = result.message || t("update.installed");
           status.className = "updateStatus ready";
-          setStatus(status.textContent, false);
         } catch (err) {
           status.textContent = t("update.installFailed", { message: err.message });
           status.className = "updateStatus error";
@@ -3763,6 +4023,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     }
 
     loadState().catch((error) => setStatus(error.message, true));
+    checkUpdateToast().catch(() => {});
   </script>
 </body>
 </html>`;

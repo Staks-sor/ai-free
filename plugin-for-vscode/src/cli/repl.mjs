@@ -4,7 +4,7 @@ export function printWelcome(sessionId, workspaceRoot) {
   console.log("DeepSeek CLI");
   console.log(`Session: ${sessionId}`);
   console.log(`Workspace: ${workspaceRoot}`);
-  console.log("Commands: /code task, /ls [path], /workspace, /new, /clear, /exit");
+  console.log("Commands: /code task, /skill <id> task, /ls [path], /workspace, /new, /clear, /exit");
 }
 
 export function printAssistantMessage(text) {
