@@ -1005,8 +1005,8 @@ export const STYLES = `
       flex: 0 0 auto;
     }
     .sidebarPromo {
-      --promo-a: rgba(77, 124, 255, 0.18);
-      --promo-b: rgba(34, 197, 94, 0.10);
+      --promo-a: rgba(77, 124, 255, 0.13);
+      --promo-b: rgba(34, 197, 94, 0.07);
       --promo-border: rgba(77, 124, 255, 0.34);
       --promo-mark-bg: rgba(77, 124, 255, 0.22);
       --promo-mark-color: #facc15;
@@ -1023,7 +1023,7 @@ export const STYLES = `
       text-decoration: none;
       box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16);
       transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
-      animation: sidebarPromoShift 3.8s ease-in-out infinite;
+      animation: sidebarPromoShift 7s ease-in-out infinite;
       position: relative;
       overflow: hidden;
       isolation: isolate;
@@ -1032,9 +1032,9 @@ export const STYLES = `
       content: "";
       position: absolute;
       inset: -40% -55%;
-      background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.28) 48%, transparent 66%);
+      background: linear-gradient(105deg, transparent 34%, rgba(255, 255, 255, 0.12) 50%, transparent 66%);
       transform: translateX(-70%) rotate(8deg);
-      animation: sidebarPromoGlint 2.8s ease-in-out infinite;
+      animation: sidebarPromoGlint 5.5s ease-in-out infinite;
       pointer-events: none;
       z-index: -1;
     }
@@ -1043,23 +1043,23 @@ export const STYLES = `
       transform: translateY(-1px);
     }
     .sidebarPromoGithub {
-      --promo-a: rgba(77, 124, 255, 0.22);
-      --promo-b: rgba(34, 197, 94, 0.12);
+      --promo-a: rgba(77, 124, 255, 0.15);
+      --promo-b: rgba(34, 197, 94, 0.08);
       --promo-border: rgba(77, 124, 255, 0.42);
       --promo-mark-bg: rgba(77, 124, 255, 0.24);
       --promo-mark-color: #facc15;
     }
     .sidebarPromoAd {
-      --promo-a: rgba(250, 204, 21, 0.18);
-      --promo-b: rgba(244, 63, 94, 0.12);
+      --promo-a: rgba(250, 204, 21, 0.12);
+      --promo-b: rgba(244, 63, 94, 0.08);
       --promo-border: rgba(250, 204, 21, 0.38);
       --promo-mark-bg: rgba(250, 204, 21, 0.18);
       --promo-mark-color: #fef08a;
       animation-delay: -1.5s;
     }
     .sidebarPromoVibe {
-      --promo-a: rgba(20, 184, 166, 0.20);
-      --promo-b: rgba(168, 85, 247, 0.16);
+      --promo-a: rgba(20, 184, 166, 0.13);
+      --promo-b: rgba(168, 85, 247, 0.10);
       --promo-border: rgba(20, 184, 166, 0.40);
       --promo-mark-bg: rgba(20, 184, 166, 0.20);
       --promo-mark-color: #5eead4;
@@ -1076,7 +1076,7 @@ export const STYLES = `
       font-size: 12px;
       font-weight: 900;
       line-height: 1;
-      animation: sidebarPromoMarkPulse 2.4s ease-in-out infinite;
+      animation: sidebarPromoMarkPulse 4.5s ease-in-out infinite;
     }
     .sidebarPromoText {
       min-width: 0;
@@ -1109,7 +1109,7 @@ export const STYLES = `
     }
     @keyframes sidebarPromoMarkPulse {
       0%, 100% { box-shadow: 0 0 0 rgba(255, 255, 255, 0); transform: scale(1); }
-      50% { box-shadow: 0 0 16px color-mix(in srgb, var(--promo-mark-color) 46%, transparent); transform: scale(1.04); }
+      50% { box-shadow: 0 0 8px color-mix(in srgb, var(--promo-mark-color) 24%, transparent); transform: scale(1.015); }
     }
     @media (prefers-reduced-motion: reduce) {
       .sidebarPromo,

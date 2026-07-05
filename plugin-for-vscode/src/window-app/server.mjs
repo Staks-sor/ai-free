@@ -102,15 +102,19 @@ export async function runWindowApp({
     process.env.CHATGPT_EMBED_IN_UI = "1";
   }
 
-  {
-    const { ensureChatGPTProfileReady, cleanupStaleBrowserProfiles } = await import("../providers/chatgpt/browser-login.mjs");
-    const { APP_BROWSER_PROFILE } = await import("./app-browser.mjs");
-    const { APP_WINDOW_PROFILE } = await import("./app-window.mjs");
-    const { CHATGPT_BROWSER_PROFILE } = await import("../providers/chatgpt/config.mjs");
-    const { QWEN_BROWSER_PROFILE } = await import("../providers/qwen/config.mjs");
-    await ensureChatGPTProfileReady(CHATGPT_BROWSER_PROFILE);
-    cleanupStaleBrowserProfiles([APP_BROWSER_PROFILE, APP_WINDOW_PROFILE, QWEN_BROWSER_PROFILE]);
-  }
+  setImmediate(() => {
+    (async () => {
+      const { ensureChatGPTProfileReady, cleanupStaleBrowserProfiles } = await import("../providers/chatgpt/browser-login.mjs");
+      const { APP_BROWSER_PROFILE } = await import("./app-browser.mjs");
+      const { APP_WINDOW_PROFILE } = await import("./app-window.mjs");
+      const { CHATGPT_BROWSER_PROFILE } = await import("../providers/chatgpt/config.mjs");
+      const { QWEN_BROWSER_PROFILE } = await import("../providers/qwen/config.mjs");
+      await ensureChatGPTProfileReady(CHATGPT_BROWSER_PROFILE);
+      cleanupStaleBrowserProfiles([APP_BROWSER_PROFILE, APP_WINDOW_PROFILE, QWEN_BROWSER_PROFILE]);
+    })().catch((error) => {
+      if (consoleLog) console.log(`[startup] browser profile preflight skipped: ${error.message}`);
+    });
+  });
 
   const state = loadWindowState(workspaceRoot);
 

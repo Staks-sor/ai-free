@@ -7,6 +7,7 @@ const fs = require('fs');
 let serverProcess = null;
 let outputChannel = null;
 const REQUIRED_NODE_MAJOR = 18;
+const SERVER_START_TIMEOUT_MS = 90000;
 
 // Поиск свободного порта в диапазоне
 function findFreePort(startPort) {
@@ -260,7 +261,7 @@ async function activate(context) {
     });
 
     try {
-        const ready = await waitForServerReady(port, serverProcess, 30000);
+        const ready = await waitForServerReady(port, serverProcess, SERVER_START_TIMEOUT_MS);
         outputChannel.appendLine(`Server readiness confirmed by ${ready.source}`);
     } catch (error) {
         try { if (serverProcess) serverProcess.kill(); } catch {}
