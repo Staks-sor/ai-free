@@ -1063,7 +1063,7 @@ export async function runWindowApp({
       if (req.method === "POST" && url.pathname === "/api/update/run") {
         const body = await readJsonBody(req).catch(() => ({}));
         const result = await runUpdate();
-        if (body.restart === true && result.updated) {
+        if (body.restart === true && result.updated && result.restartReady !== false) {
           scheduleWindowRestart({ port, workspaceRoot });
           setTimeout(() => {
             requestAppShutdown({ source: "update-restart" }).finally(() => {

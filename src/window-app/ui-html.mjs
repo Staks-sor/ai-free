@@ -2670,7 +2670,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       updateToastMeta.textContent = version
         ? t("update.available") + " " + version
         : t("update.available");
-      updateToastStatus.textContent = data.canUpdate ? "" : t("update.gitRequired");
+      updateToastStatus.textContent = data.canUpdate ? (data.updateWarning || "") : t("update.gitRequired");
       updateToastDownload.disabled = !data.canUpdate;
       updateToastDownload.textContent = data.canUpdate ? "Скачать" : "Недоступно";
     }
@@ -3748,6 +3748,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         if (data.updateAvailable && !data.canUpdate) {
           status.textContent = t("update.gitRequired");
           status.className = "updateStatus error";
+        } else if (data.updateAvailable && data.updateWarning) {
+          status.textContent = data.updateWarning;
+          status.className = "updateStatus";
         }
       }
 

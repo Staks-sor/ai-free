@@ -271,7 +271,7 @@ export const language = {
     "update.upToDate": "You are on the latest version.",
     "update.gitRequired": "A new version is available, but auto-update requires a git installation.",
     "update.checkFailed": "Could not check for updates: {message}",
-    "update.installing": "Updating with git pull and npm install. This can take a couple of minutes...",
+    "update.installing": "Updating with git. If npm is available, dependencies will be installed automatically...",
     "update.installed": "Update installed. Restart AI Free.",
     "update.installFailed": "Could not update: {message}",
     "update.confirm": "Run AI Free update?\n\nThis will run: git pull --ff-only and npm install. Chats in ~/.deepseek-cli/state.json are not deleted.",

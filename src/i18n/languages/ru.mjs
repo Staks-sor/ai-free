@@ -272,7 +272,7 @@ export const language = {
     "update.upToDate": "Установлена актуальная версия.",
     "update.gitRequired": "Новая версия есть, но автообновление доступно только для git-установки.",
     "update.checkFailed": "Не удалось проверить обновление: {message}",
-    "update.installing": "Обновляю: git pull и npm install. Это может занять пару минут...",
+    "update.installing": "Обновляю через git. Если npm доступен, зависимости установятся автоматически...",
     "update.installed": "Обновление установлено. Перезапусти AI Free.",
     "update.installFailed": "Не удалось обновить: {message}",
     "update.confirm": "Запустить обновление AI Free?\n\nБудет выполнено: git pull --ff-only и npm install. Чаты в ~/.deepseek-cli/state.json не удаляются.",

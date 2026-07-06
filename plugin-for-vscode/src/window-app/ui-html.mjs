@@ -3490,6 +3490,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         if (data.updateAvailable && !data.canUpdate) {
           status.textContent = t("update.gitRequired");
           status.className = "updateStatus error";
+        } else if (data.updateAvailable && data.updateWarning) {
+          status.textContent = data.updateWarning;
+          status.className = "updateStatus";
         }
       }
 

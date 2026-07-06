@@ -12,6 +12,7 @@ const REPO_OWNER = "Staks-sor";
 const REPO_NAME = "ai-free";
 const DEFAULT_BRANCH = "main";
 const RAW_PACKAGE_URL = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${DEFAULT_BRANCH}/package.json`;
+const RELEASES_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
 
 function projectRoot() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -43,22 +44,99 @@ export function compareVersions(a, b) {
   return 0;
 }
 
-async function runGit(args, options = {}) {
-  const result = await execFileAsync("git", args, {
-    cwd: options.cwd || projectRoot(),
-    timeout: options.timeout || 120_000,
-    maxBuffer: options.maxBuffer || 2_000_000,
-  });
-  return String(result.stdout || "").trim();
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
 }
 
-async function commandExists(command) {
+function windowsCommandScript(command) {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(String(command || ""));
+}
+
+function commandCandidatePaths(command) {
+  if (process.platform !== "win32") return [command];
+  const env = process.env;
+  if (command === "git") {
+    return unique([
+      "git",
+      "git.exe",
+      env.ProgramFiles && path.join(env.ProgramFiles, "Git", "cmd", "git.exe"),
+      env["ProgramFiles(x86)"] && path.join(env["ProgramFiles(x86)"], "Git", "cmd", "git.exe"),
+      env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs", "Git", "cmd", "git.exe"),
+    ]);
+  }
+  if (command === "npm") {
+    return unique([
+      "npm",
+      "npm.cmd",
+      env.APPDATA && path.join(env.APPDATA, "npm", "npm.cmd"),
+      env.ProgramFiles && path.join(env.ProgramFiles, "nodejs", "npm.cmd"),
+      env["ProgramFiles(x86)"] && path.join(env["ProgramFiles(x86)"], "nodejs", "npm.cmd"),
+    ]);
+  }
+  return [command];
+}
+
+function normalizeExecutable(executable) {
+  if (typeof executable === "string") {
+    return {
+      command: executable,
+      prefixArgs: [],
+      shell: windowsCommandScript(executable),
+    };
+  }
+  return {
+    command: executable.command,
+    prefixArgs: executable.prefixArgs || [],
+    shell: executable.shell === true || windowsCommandScript(executable.command),
+  };
+}
+
+async function executableWorks(executable, args = ["--version"]) {
+  const resolved = normalizeExecutable(executable);
   try {
-    await execFileAsync(command, ["--version"], { timeout: 10_000, maxBuffer: 100_000 });
+    await execFileAsync(resolved.command, [...resolved.prefixArgs, ...args], {
+      shell: resolved.shell,
+      timeout: 10_000,
+      maxBuffer: 100_000,
+    });
     return true;
   } catch {
     return false;
   }
+}
+
+async function resolveCommand(command) {
+  for (const candidate of commandCandidatePaths(command)) {
+    if (await executableWorks(candidate)) return normalizeExecutable(candidate);
+  }
+  return null;
+}
+
+async function resolveNpmCommand() {
+  const npmExecPath = process.env.npm_execpath;
+  const npmNodePath = process.env.npm_node_execpath;
+  if (npmExecPath && fs.existsSync(npmExecPath) && npmNodePath && fs.existsSync(npmNodePath)) {
+    const executable = { command: npmNodePath, prefixArgs: [npmExecPath], shell: false };
+    if (await executableWorks(executable)) return executable;
+  }
+  return resolveCommand("npm");
+}
+
+function executableDisplayName(executable, fallback) {
+  if (!executable) return fallback;
+  const resolved = normalizeExecutable(executable);
+  return [resolved.command, ...resolved.prefixArgs].filter(Boolean).join(" ");
+}
+
+async function runGit(args, options = {}) {
+  const gitCommand = options.gitCommand || await resolveCommand("git");
+  if (!gitCommand) throw new Error("Не найден git. Установи Git или открой страницу релиза для ручного обновления.");
+  const result = await runCommand(gitCommand, args, {
+    cwd: options.cwd || projectRoot(),
+    timeout: options.timeout || 120_000,
+    maxBuffer: options.maxBuffer || 2_000_000,
+  });
+  return String(result || "").trim();
 }
 
 async function readRemotePackage() {
@@ -73,18 +151,19 @@ async function readRemotePackage() {
   };
 }
 
-async function readLocalCommit(root) {
+async function readLocalCommit(root, gitCommand) {
   try {
-    return await runGit(["rev-parse", "HEAD"], { cwd: root });
+    return await runGit(["rev-parse", "HEAD"], { cwd: root, gitCommand });
   } catch {
     return "";
   }
 }
 
-async function readRemoteCommit(root) {
+async function readRemoteCommit(root, gitCommand) {
   try {
     const output = await runGit(["ls-remote", "origin", `refs/heads/${DEFAULT_BRANCH}`], {
       cwd: root,
+      gitCommand,
       timeout: 120_000,
     });
     return output.split(/\s+/)[0] || "";
@@ -96,11 +175,14 @@ async function readRemoteCommit(root) {
 export async function checkForUpdate() {
   const root = projectRoot();
   const currentVersion = readCurrentVersion(root);
-  const [remotePackage, localCommit, remoteCommit, hasGit] = await Promise.all([
+  const [gitCommand, npmCommand] = await Promise.all([
+    resolveCommand("git"),
+    resolveNpmCommand(),
+  ]);
+  const [remotePackage, localCommit, remoteCommit] = await Promise.all([
     readRemotePackage().catch((error) => ({ version: "", error: error.message, url: RAW_PACKAGE_URL })),
-    readLocalCommit(root),
-    readRemoteCommit(root),
-    commandExists("git"),
+    gitCommand ? readLocalCommit(root, gitCommand) : "",
+    gitCommand ? readRemoteCommit(root, gitCommand) : "",
   ]);
   const latestVersion = remotePackage.version || "";
   const versionCompare = latestVersion ? compareVersions(currentVersion, latestVersion) : 0;
@@ -114,16 +196,26 @@ export async function checkForUpdate() {
     updateAvailable,
     localCommit,
     remoteCommit,
-    canUpdate: hasGit && fs.existsSync(path.join(root, ".git")),
+    canUpdate: Boolean(gitCommand) && fs.existsSync(path.join(root, ".git")),
+    canInstallDependencies: Boolean(npmCommand),
+    updateMethod: npmCommand ? "git+npm" : "git",
+    updateWarning: npmCommand
+      ? ""
+      : "npm не найден. AI Free обновит код через git; если изменились зависимости, понадобится установить Node.js/npm и повторить обновление.",
     projectRoot: root,
     source: remotePackage.url,
+    releasesUrl: RELEASES_URL,
+    gitCommand: executableDisplayName(gitCommand, "git"),
+    npmCommand: npmCommand ? executableDisplayName(npmCommand, "npm") : "",
     error: remotePackage.error || "",
   };
 }
 
 async function runCommand(command, args, options = {}) {
-  const result = await execFileAsync(command, args, {
+  const executable = normalizeExecutable(command);
+  const result = await execFileAsync(executable.command, [...executable.prefixArgs, ...args], {
     cwd: options.cwd || projectRoot(),
+    shell: executable.shell,
     timeout: options.timeout || 600_000,
     maxBuffer: options.maxBuffer || 8_000_000,
   });
@@ -135,11 +227,12 @@ export async function runUpdate() {
   if (!fs.existsSync(path.join(root, ".git"))) {
     throw new Error("Автообновление доступно только для установки из git clone.");
   }
-  if (!(await commandExists("git"))) {
-    throw new Error("Не найден git в PATH.");
-  }
-  if (!(await commandExists("npm"))) {
-    throw new Error("Не найден npm в PATH.");
+  const [gitCommand, npmCommand] = await Promise.all([
+    resolveCommand("git"),
+    resolveNpmCommand(),
+  ]);
+  if (!gitCommand) {
+    throw new Error("Не найден git. Установи Git или скачай новую версию вручную со страницы релиза.");
   }
 
   const before = await checkForUpdate();
@@ -155,19 +248,48 @@ export async function runUpdate() {
   }
 
   const logs = [];
-  logs.push(await runCommand("git", ["fetch", "--prune", "origin"], { cwd: root, timeout: 180_000 }));
-  logs.push(await runCommand("git", ["pull", "--ff-only", "origin", DEFAULT_BRANCH], { cwd: root, timeout: 180_000 }));
-  logs.push(await runCommand(process.platform === "win32" ? "npm.cmd" : "npm", ["install"], {
-    cwd: root,
-    timeout: 900_000,
-    maxBuffer: 12_000_000,
-  }));
+  const beforeCommit = before.localCommit || await readLocalCommit(root, gitCommand);
+  logs.push(await runCommand(gitCommand, ["fetch", "--prune", "origin"], { cwd: root, timeout: 180_000 }));
+  logs.push(await runCommand(gitCommand, ["pull", "--ff-only", "origin", DEFAULT_BRANCH], { cwd: root, timeout: 180_000 }));
+
+  const afterPullCommit = await readLocalCommit(root, gitCommand);
+  let changedFiles = [];
+  if (beforeCommit && afterPullCommit && beforeCommit !== afterPullCommit) {
+    const changedOutput = await runCommand(gitCommand, ["diff", "--name-only", `${beforeCommit}..${afterPullCommit}`], {
+      cwd: root,
+      timeout: 60_000,
+      maxBuffer: 1_000_000,
+    }).catch(() => "");
+    changedFiles = String(changedOutput || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  }
+  const dependencyFilesChanged = changedFiles.some((file) =>
+    file === "package.json" || file === "package-lock.json" || file === "npm-shrinkwrap.json"
+  );
+  let skippedDependencyInstall = false;
+  if (npmCommand) {
+    logs.push(await runCommand(npmCommand, ["install"], {
+      cwd: root,
+      timeout: 900_000,
+      maxBuffer: 12_000_000,
+    }));
+  } else {
+    skippedDependencyInstall = true;
+    logs.push("npm не найден: установка зависимостей пропущена.");
+  }
 
   const after = await checkForUpdate();
+  const restartReady = !(skippedDependencyInstall && dependencyFilesChanged);
   return {
     ok: true,
     updated: true,
-    message: "Обновление установлено. Перезапусти AI Free, чтобы загрузить новый код.",
+    restartReady,
+    skippedDependencyInstall,
+    dependencyFilesChanged,
+    message: skippedDependencyInstall
+      ? dependencyFilesChanged
+        ? "Код обновлён, но зависимости изменились, а npm не найден. Установи Node.js/npm и повтори обновление перед перезапуском."
+        : "Код обновлён. npm не найден, но зависимости не менялись, можно перезапустить AI Free."
+      : "Обновление установлено. Перезапусти AI Free, чтобы загрузить новый код.",
     before,
     after,
     logs: logs.filter(Boolean),
