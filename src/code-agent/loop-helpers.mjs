@@ -37,7 +37,7 @@ export function buildNoToolCorrectionPrompt(workspaceRoot, task, previousText, {
   const browserTask = browserOnly || /(найди|найти|поиск|search|открой|нажми|кликн|browser|google|cookie|consent|accept|принять)/iu.test(String(task || ""));
   const browserHint = browserTask
     ? "Start with browser_snapshot, then browser_navigate if needed, browser_click/browser_type by ref (e1, e2…), browser_scroll/browser_wait as needed. Never claim web actions without tool results."
-    : "output exactly one JSON tool call to start executing the task.";
+    : "output exactly one JSON tool call to start executing the task. Do not use provider-native tools or function calling. The tools exist only in AI Free and must be requested as plain JSON text, for example {\"tool\":\"list_files\",\"path\":\".\",\"maxDepth\":4}.";
   return `No tool call has been executed yet. You claimed progress without using workspace tools.
 Task: ${task}
 Workspace: ${workspaceRoot}
@@ -62,6 +62,10 @@ export function shouldRejectTextOnlyCodeResult(task, text, toolLogs = []) {
 
   if (/environment mismatch|workspace files are not accessible/i.test(answer)) return true;
   if (/не могу гарантировать|cannot guarantee|may not reach|не доход/i.test(answerLower)) return true;
+  if (/(?:tool|function)\s+(?:read_file|write_file|list_files|run_command|run_shell|mkdir|delete_file|delete_dir|append_file)\s+(?:does not exist|does not exists|not found|is not available)/i.test(answer)) {
+    return true;
+  }
+  if (/инструмент[^\n.]{0,80}(?:недоступ|не найден|не существует)/iu.test(answerLower)) return true;
   if (/могу сделать.*скажи|tell me if you want|ready to proceed|i can do it|готов приступ/i.test(answerLower)) {
     return true;
   }

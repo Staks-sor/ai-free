@@ -25,25 +25,55 @@ function chromiumLooksInstalled(chromium) {
 }
 
 export async function ensureBrowserBinaries({ quiet = false } = {}) {
-  let chromium;
-  let engine = "playwright";
+  const engines = [];
   try {
     const mod = await import("patchright");
-    chromium = mod.chromium;
-    engine = "patchright";
-  } catch {
+    engines.push({
+      name: "patchright",
+      chromium: mod.chromium,
+      installLabel: "Ставлю Chromium для Patchright",
+      installArgs: ["patchright", "install", "chromium"],
+    });
+  } catch {}
+  try {
     const mod = await import("playwright");
-    chromium = mod.chromium;
+    engines.push({
+      name: "playwright",
+      chromium: mod.chromium,
+      installLabel: "Ставлю Chromium для Playwright",
+      installArgs: ["playwright", "install", "chromium"],
+    });
+  } catch {}
+
+  if (!engines.length) {
+    return { ok: false, engine: "none", error: "Playwright/Patchright packages are not installed" };
   }
 
-  if (chromiumLooksInstalled(chromium)) return { ok: true, engine };
+  const missing = engines.filter((engine) => !chromiumLooksInstalled(engine.chromium));
+  if (!missing.length) return { ok: true, engine: engines.map((engine) => engine.name).join("+") };
 
-  if (quiet) return { ok: false, engine, error: "Chromium not installed" };
-
-  const okPatch = runInstall("Ставлю Chromium для Patchright", ["patchright", "install", "chromium"]);
-  const okPw = runInstall("Ставлю Chromium для Playwright", ["playwright", "install", "chromium"]);
-  if (!okPatch && !okPw) {
-    return { ok: false, engine, error: "Не удалось установить Chromium. Запустите: npx patchright install chromium" };
+  if (quiet) {
+    return {
+      ok: false,
+      engine: missing.map((engine) => engine.name).join("+"),
+      error: `Chromium not installed for: ${missing.map((engine) => engine.name).join(", ")}`,
+    };
   }
-  return { ok: chromiumLooksInstalled(chromium), engine };
+
+  const installed = [];
+  for (const engine of missing) {
+    const ok = runInstall(engine.installLabel, engine.installArgs);
+    if (ok && chromiumLooksInstalled(engine.chromium)) installed.push(engine.name);
+  }
+
+  const stillMissing = engines.filter((engine) => !chromiumLooksInstalled(engine.chromium));
+  if (stillMissing.length) {
+    return {
+      ok: false,
+      engine: stillMissing.map((engine) => engine.name).join("+"),
+      error: `Не удалось установить Chromium для: ${stillMissing.map((engine) => engine.name).join(", ")}. Запустите: npx playwright install chromium`,
+    };
+  }
+
+  return { ok: true, engine: engines.map((engine) => engine.name).join("+"), installed };
 }

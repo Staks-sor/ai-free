@@ -72,6 +72,11 @@ export function getQwenBrowserProxy({ debug = false } = {}) {
 }
 
 async function createProxy({ debug }) {
+  const { ensureBrowserBinaries } = await import("../../browser/ensure-binaries.mjs");
+  const browserReady = await ensureBrowserBinaries();
+  if (!browserReady.ok) {
+    throw new Error(browserReady.error || "Chromium browser binaries are not installed.");
+  }
   const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
   const chromium = await getChatGPTChromium();
 

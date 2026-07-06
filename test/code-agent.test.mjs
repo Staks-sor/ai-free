@@ -668,6 +668,17 @@ describe("runCodeTask text-only code responses", () => {
       true,
     );
   });
+
+  it("detects provider-native missing tool errors as failed code-agent output", () => {
+    assert.equal(
+      shouldRejectTextOnlyCodeResult(
+        "посмотри файлы проекта и исправь UI",
+        "Tool read_file does not exists.Tool run_command does not exists. К сожалению, инструменты для работы с файлами временно недоступны.",
+        [],
+      ),
+      true,
+    );
+  });
 });
 
 describe("resolveMaxToolSteps", () => {
