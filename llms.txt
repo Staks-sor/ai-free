@@ -1,0 +1,53 @@
+# AI Free
+
+AI Free is an open-source local AI client that turns free web AI chats into a developer tool.
+
+Repository: https://github.com/Staks-sor/ai-free
+Release downloads: https://github.com/Staks-sor/ai-free/releases
+VS Code plugin package: https://github.com/Staks-sor/ai-free/releases/latest
+
+## Summary
+
+AI Free lets developers use DeepSeek, Qwen and ChatGPT from one local desktop app, CLI, OpenAI-compatible API, Anthropic-compatible API, VS Code plugin and code-agent workflow. It includes local memory, skills, workspace-aware chats, browser session management, Telegram integration and agent pipeline experiments.
+
+## Core Search Phrases
+
+- free AI coding assistant
+- local AI client
+- local AI desktop app
+- OpenAI-compatible API for Qwen
+- OpenAI-compatible API for DeepSeek
+- Anthropic-compatible API for web AI chats
+- Qwen VS Code extension
+- DeepSeek code agent
+- ChatGPT desktop client
+- local AI agent with memory
+- code agent with workspace access
+- free alternative to paid AI APIs
+- developer tool for free web AI chats
+
+## Main Features
+
+- Desktop UI for DeepSeek, Qwen and ChatGPT.
+- CLI and local API server.
+- OpenAI-compatible and Anthropic-compatible endpoints.
+- VS Code plugin.
+- Code agent with file access and controlled command permissions.
+- Local memory and skills.
+- Agent roles and pipeline workflows.
+- Telegram bot integration.
+- Browser-based provider sessions.
+
+## Target Users
+
+- Developers who want a free local AI coding assistant.
+- Users who want API or CLI access to free web AI chats.
+- People experimenting with local agents, memory, skills and IDE automation.
+- Builders integrating Qwen, DeepSeek or ChatGPT into editor workflows.
+
+## Important Links
+
+- README: https://github.com/Staks-sor/ai-free#readme
+- Releases: https://github.com/Staks-sor/ai-free/releases
+- Issues: https://github.com/Staks-sor/ai-free/issues
+- VS Code extension VSIX: https://github.com/Staks-sor/ai-free/releases/latest

@@ -21,15 +21,22 @@
     "chatgpt",
     "openai-api",
     "anthropic-api",
+    "openai-compatible-api",
+    "anthropic-compatible-api",
     "ai-agent",
     "code-agent",
+    "coding-agent",
+    "ai-coding-assistant",
     "cli",
     "developer-tools",
     "automation",
     "playwright",
     "nodejs",
     "local-ai",
-    "ide"
+    "ide",
+    "vscode-extension",
+    "telegram-bot",
+    "web-automation"
   ],
   "bin": {
     "ai-free": "./bin/deepseek.mjs",

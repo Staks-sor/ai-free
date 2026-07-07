@@ -14,6 +14,21 @@ Good for:
 - people who use web AI chats but want API/CLI access;
 - experiments with agents, memory, skills and IDE automation.
 
+## What Is AI Free?
+
+**AI Free** is an open-source local AI client and developer tool for using free web AI chats as a practical coding assistant. It connects **DeepSeek**, **Qwen** and **ChatGPT** to a desktop app, command line interface, local OpenAI-compatible API, Anthropic-compatible API, VS Code plugin, memory, skills and workspace-aware code-agent workflows.
+
+People usually look for this project as a **free AI coding assistant**, **local AI client**, **OpenAI-compatible API for Qwen or DeepSeek**, **ChatGPT desktop client**, **Qwen VS Code extension**, **DeepSeek code agent**, **free alternative for AI developer tools**, or **local agent with memory and skills**.
+
+## Popular Use Cases
+
+- Run Qwen, DeepSeek and ChatGPT from one local desktop app.
+- Use Qwen or DeepSeek through an OpenAI-compatible API endpoint.
+- Connect local AI chats to VS Code, Continue, Kilo Code and other developer tools.
+- Ask a code agent to read and edit a project folder with controlled command permissions.
+- Keep local memory, skills and reusable workflows for repeated development tasks.
+- Build agent pipelines, Telegram workflows and browser automation around free web AI providers.
+
 ## ✨ Highlights
 
 - **One local app:** DeepSeek, Qwen and ChatGPT chats in one workspace.

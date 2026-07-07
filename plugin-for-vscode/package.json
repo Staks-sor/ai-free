@@ -24,8 +24,15 @@
     "assistant",
     "chat",
     "coding",
+    "coding-agent",
+    "ai-coding-assistant",
     "deepseek",
-    "qwen"
+    "qwen",
+    "chatgpt",
+    "openai-compatible-api",
+    "local-ai",
+    "vscode-extension",
+    "developer-tools"
   ],
   "main": "./extension.js",
   "contributes": {
