@@ -185,6 +185,14 @@ npm start
 └── browser-profile/       # Chromium-профиль для chat.qwen.ai и browser-proxy
 ```
 
+**ChatGPT** (отдельно от DeepSeek и Qwen):
+
+```
+~/.chatgpt-cli/
+├── auth.json              # cookies + session data
+└── browser-profile/       # Chromium-профиль для chatgpt.com
+```
+
 **Memory + Skills** (общие для всех провайдеров):
 
 ```
@@ -197,6 +205,97 @@ npm start
 ```
 
 Чаты и настройки `/code` — в `~/.deepseek-cli/state.json` (общие для всех провайдеров).
+
+---
+
+## 🧹 Полное удаление
+
+Есть два уровня удаления:
+
+1. **Удалить только код приложения** — чаты, токены, browser-сессии, memory и skills останутся в домашней папке.
+2. **Удалить полностью** — вместе с чатами, авторизацией, локальной памятью, skills, browser-профилями и плагином VS Code.
+
+### 1. Удалить desktop/local версию без удаления данных
+
+Если AI Free был установлен через `git clone`, закрой приложение и удали папку проекта:
+
+```bash
+# macOS / Linux
+rm -rf ~/path/to/ai-free
+```
+
+```powershell
+# Windows PowerShell
+Remove-Item -Recurse -Force "$env:USERPROFILE\path\to\ai-free"
+```
+
+Замени `~/path/to/ai-free` или `$env:USERPROFILE\path\to\ai-free` на реальный путь, куда был клонирован проект.
+
+### 2. Полное удаление desktop/local версии вместе с данными
+
+Это удалит:
+
+- чаты и настройки: `~/.deepseek-cli/state.json`, `settings.json`;
+- DeepSeek-сессию и browser-профиль: `~/.deepseek-cli/`;
+- Qwen-сессию и browser-профиль: `~/.qwen-cli/`;
+- ChatGPT-сессию и browser-профиль: `~/.chatgpt-cli/`;
+- memory, skills и установленные плагины AI Free: `~/.ai-free/`.
+
+```bash
+# macOS / Linux
+rm -rf ~/.deepseek-cli ~/.qwen-cli ~/.chatgpt-cli ~/.ai-free
+```
+
+```powershell
+# Windows PowerShell
+Remove-Item -Recurse -Force `
+  "$env:USERPROFILE\.deepseek-cli", `
+  "$env:USERPROFILE\.qwen-cli", `
+  "$env:USERPROFILE\.chatgpt-cli", `
+  "$env:USERPROFILE\.ai-free"
+```
+
+После этого удали саму папку проекта, как в предыдущем пункте.
+
+### 3. Удалить VS Code plugin
+
+Через интерфейс VS Code:
+
+1. Открой **Extensions**.
+2. Найди **AI Free Chat & Agent**.
+3. Нажми **Uninstall**.
+4. Перезапусти VS Code.
+
+Через терминал:
+
+```bash
+code --uninstall-extension developers-daily-life.ai-free-vscode
+```
+
+Если команда `code` недоступна, включи её в VS Code: **Command Palette** → `Shell Command: Install 'code' command in PATH`.
+
+### 4. Удалить всё после VS Code plugin
+
+Сам плагин использует те же локальные данные, что и desktop-версия. Если нужно удалить всё без следов, после удаления расширения выполни команды из раздела **Полное удаление desktop/local версии вместе с данными**.
+
+### 5. Опционально: удалить браузеры Playwright/Patchright
+
+AI Free скачивает Chromium через npm-зависимости. Обычно достаточно удалить папку проекта и `node_modules`, но если нужно освободить место полностью, можно также удалить кеш браузеров:
+
+```bash
+# macOS / Linux
+rm -rf ~/Library/Caches/ms-playwright ~/.cache/ms-playwright ~/.cache/patchright
+```
+
+```powershell
+# Windows PowerShell
+Remove-Item -Recurse -Force `
+  "$env:LOCALAPPDATA\ms-playwright", `
+  "$env:USERPROFILE\AppData\Local\ms-playwright", `
+  "$env:USERPROFILE\AppData\Local\patchright"
+```
+
+Если в этих папках лежат браузеры от других проектов на Playwright, они тоже будут удалены и могут скачаться заново при следующем запуске тех проектов.
 
 ---
 

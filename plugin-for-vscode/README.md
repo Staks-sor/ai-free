@@ -20,6 +20,39 @@ AI Free brings DeepSeek and Qwen into the VS Code sidebar as project-aware codin
 
 The extension stores existing provider sessions in the same local AI Free storage as the main app. It does not rename or migrate `~/.deepseek-cli` or `~/.qwen-cli`.
 
+## Uninstall
+
+To remove only the VS Code extension:
+
+1. Open **Extensions** in VS Code.
+2. Find **AI Free Chat & Agent**.
+3. Click **Uninstall**.
+4. Restart VS Code.
+
+Or run:
+
+```bash
+code --uninstall-extension developers-daily-life.ai-free-vscode
+```
+
+The extension uses the same local data as the desktop app. To fully remove chats, auth sessions, browser profiles, memory and skills, delete these folders after uninstalling the extension:
+
+```bash
+# macOS / Linux
+rm -rf ~/.deepseek-cli ~/.qwen-cli ~/.chatgpt-cli ~/.ai-free
+```
+
+```powershell
+# Windows PowerShell
+Remove-Item -Recurse -Force `
+  "$env:USERPROFILE\.deepseek-cli", `
+  "$env:USERPROFILE\.qwen-cli", `
+  "$env:USERPROFILE\.chatgpt-cli", `
+  "$env:USERPROFILE\.ai-free"
+```
+
+See the root README for the full desktop and plugin removal guide.
+
 ## Support
 
 Если хочешь поддержать мое развитие:
