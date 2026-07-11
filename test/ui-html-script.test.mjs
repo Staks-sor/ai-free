@@ -80,8 +80,7 @@ describe("ui-html inline script", () => {
     assert.match(html, />Сайт<\/a>/);
     assert.match(html, />Telegram-бот<\/a>/);
     assert.match(html, /https:\/\/t\.me\/payments_meBot/);
-    assert.match(html, /VIBE_PROMO_INTERVAL_MS = 10 \* 60 \* 1000/);
-    assert.match(html, /setInterval\(showVibePromoToast, VIBE_PROMO_INTERVAL_MS\)/);
+    assert.doesNotMatch(html, /vibePromoToast/);
     assert.match(html, /sidebarPromoShift/);
     assert.match(html, /sidebarPromoGlint/);
     assert.match(html, /sidebarPromoMarkPulse/);

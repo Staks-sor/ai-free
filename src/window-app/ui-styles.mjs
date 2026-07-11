@@ -1095,42 +1095,6 @@ export const STYLES = `
     .vibePromoCode code { color: #fdba74; font-size: 24px; font-weight: 900; letter-spacing: 0; }
     .vibePromoActions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; margin-top: 5px; }
     .vibePromoActions a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; padding: 0 14px; }
-    .vibePromoToast {
-      position: fixed;
-      top: 14px;
-      left: 50%;
-      z-index: 2400;
-      width: min(390px, calc(100vw - 28px));
-      transform: translateX(-50%);
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 30px;
-      overflow: hidden;
-      border: 1px solid rgba(249, 115, 22, 0.58);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--panel) 88%, #f97316);
-      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
-      animation: vibePromoToastIn 220ms ease-out;
-    }
-    .vibePromoToast.hidden { display: none; }
-    .vibePromoToastContent {
-      min-width: 0;
-      padding: 10px 12px;
-      display: grid;
-      gap: 2px;
-      border: 0;
-      background: transparent;
-      color: var(--text);
-      text-align: left;
-      cursor: pointer;
-    }
-    .vibePromoToastContent strong { font-size: 12px; }
-    .vibePromoToastContent span { color: #fed7aa; font-size: 11px; }
-    .vibePromoToastClose { border: 0; background: transparent; color: #fed7aa; cursor: pointer; }
-    .vibePromoToastClose:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
-    @keyframes vibePromoToastIn {
-      from { opacity: 0; transform: translate(-50%, -8px); }
-      to { opacity: 1; transform: translate(-50%, 0); }
-    }
     .sidebarPromoMark {
       width: 24px;
       height: 24px;

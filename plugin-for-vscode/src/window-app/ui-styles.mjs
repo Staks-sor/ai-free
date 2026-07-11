@@ -856,6 +856,10 @@ export const STYLES = `
       position: relative;
       overflow: hidden;
       isolation: isolate;
+      width: 100%;
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
     }
     .sidebarPromo::before {
       content: "";
@@ -894,6 +898,32 @@ export const STYLES = `
       --promo-mark-color: #5eead4;
       animation-delay: -3s;
     }
+    .vibePromoPanel { max-width: 460px; }
+    .vibePromoBody { gap: 14px; }
+    .vibePromoBody p { margin: 0; color: var(--muted); line-height: 1.5; }
+    .vibePromoOffer {
+      display: grid;
+      gap: 3px;
+      padding: 12px;
+      border: 1px solid rgba(249, 115, 22, 0.34);
+      border-radius: 7px;
+      background: rgba(249, 115, 22, 0.09);
+    }
+    .vibePromoOffer strong { color: #fb923c; font-size: 18px; }
+    .vibePromoOffer span { color: var(--muted); font-size: 12px; }
+    .vibePromoCode {
+      display: grid;
+      justify-items: center;
+      gap: 5px;
+      padding: 10px 12px;
+      border: 1px dashed rgba(253, 186, 116, 0.48);
+      border-radius: 7px;
+      background: rgba(249, 115, 22, 0.06);
+    }
+    .vibePromoCode span { color: var(--text); font-size: 15px; font-weight: 900; }
+    .vibePromoCode code { color: #fdba74; font-size: 24px; font-weight: 900; letter-spacing: 0; }
+    .vibePromoActions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; margin-top: 5px; }
+    .vibePromoActions a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; padding: 0 14px; }
     .sidebarPromoMark {
       width: 24px;
       height: 24px;

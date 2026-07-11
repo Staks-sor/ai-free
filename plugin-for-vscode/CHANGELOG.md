@@ -1,10 +1,11 @@
 # Changelog
 
-## 0.3.13
+## 0.3.14
 
 - Improved Windows startup diagnostics and Chromium binary checks.
 - Reduced Qwen browser startup and navigation latency with background warm-up.
 - Removed the desktop Git updater from the extension; VS Code Marketplace handles extension updates.
+- Synced the VIBE sidebar offer and details dialog with desktop, without popup advertising.
 
 ## 0.1.41
 

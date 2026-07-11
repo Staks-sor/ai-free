@@ -48,13 +48,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <small>Нативно внутри AI Free</small>
           </span>
         </a>
-        <a class="sidebarPromo sidebarPromoVibe" href="https://vibe.stas-sor.ru/" target="_blank" rel="noreferrer">
+        <button id="vibePromoOpen" class="sidebarPromo sidebarPromoVibe" type="button">
           <span class="sidebarPromoMark">V</span>
           <span class="sidebarPromoText">
-            <strong>Vibe private</strong>
-            <small>Закрытый сервис для своих</small>
+            <strong>VIBE: месяц за 100 ₽</strong>
+            <small>−75% по промокоду AIFREE</small>
           </span>
-        </a>
+        </button>
       </div>
 
       <div id="newChatOverlay" class="settingsOverlay hidden" aria-hidden="true">
@@ -156,6 +156,23 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <div class="confirmActions">
               <button id="updateConfirmCancel" class="iconBtn" type="button">${t("newChat.cancel")}</button>
               <button id="updateConfirmRun" class="iconBtn primaryBtn" type="button">${t("update.install")}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="vibePromoOverlay" class="settingsOverlay confirmOverlay hidden" aria-hidden="true">
+        <div class="settingsPanel confirmPanel vibePromoPanel" role="dialog" aria-modal="true" aria-labelledby="vibePromoTitle">
+          <div class="settingsHead">
+            <h2 id="vibePromoTitle">VIBE для пользователей AI Free</h2>
+            <button id="vibePromoClose" class="iconBtn" type="button" aria-label="Закрыть">✕</button>
+          </div>
+          <div class="confirmBody vibePromoBody">
+            <div class="vibePromoOffer"><strong>1 месяц за 100 ₽</strong><span>вместо 400 ₽ · скидка 75%</span></div>
+            <p>Приватный и стабильный доступ к интернету для повседневной работы, общения и поездок.</p>
+            <div class="vibePromoCode"><span>ПРОМОКОД</span><code>AIFREE</code></div>
+            <div class="confirmActions vibePromoActions">
+              <a class="iconBtn" href="https://vibe.stas-sor.ru/" target="_blank" rel="noreferrer">Сайт</a>
+              <a class="iconBtn primaryBtn" href="https://t.me/payments_meBot" target="_blank" rel="noreferrer">Telegram-бот</a>
             </div>
           </div>
         </div>
@@ -334,6 +351,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const activeTitle = document.getElementById("activeTitle");
     const workspace = document.getElementById("workspace");
     const statusEl = document.getElementById("status");
+    const vibePromoOverlay = document.getElementById("vibePromoOverlay");
+    const vibePromoClose = document.getElementById("vibePromoClose");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
     const stopBtn = document.getElementById("stopBtn");
@@ -373,8 +392,26 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     // The update modal is declared near the refresh button, but it must render as a
     // window-level overlay instead of being clipped by the sidebar.
     document.body.appendChild(updateConfirmOverlay);
+    document.body.appendChild(vibePromoOverlay);
 
     document.getElementById("refreshBtn").addEventListener("click", loadState);
+
+    function openVibePromo() {
+      vibePromoOverlay.classList.remove("hidden");
+      vibePromoOverlay.setAttribute("aria-hidden", "false");
+      vibePromoClose.focus();
+    }
+
+    function closeVibePromo() {
+      vibePromoOverlay.classList.add("hidden");
+      vibePromoOverlay.setAttribute("aria-hidden", "true");
+    }
+
+    document.getElementById("vibePromoOpen").addEventListener("click", openVibePromo);
+    vibePromoClose.addEventListener("click", closeVibePromo);
+    vibePromoOverlay.addEventListener("click", (event) => {
+      if (event.target === vibePromoOverlay) closeVibePromo();
+    });
 
     function closeDeleteChatModal(confirmed = false) {
       deleteChatOverlay.classList.add("hidden");
@@ -434,6 +471,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
       if (event.key === "Escape" && !updateConfirmOverlay.classList.contains("hidden")) {
         closeUpdateConfirmModal(false);
+      }
+      if (event.key === "Escape" && !vibePromoOverlay.classList.contains("hidden")) {
+        closeVibePromo();
       }
     });
 

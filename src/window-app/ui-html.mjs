@@ -184,13 +184,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         <div id="updateToastStatus" class="updateToastStatus"></div>
         <button id="updateToastDownload" class="updateToastDownload" type="button">Скачать</button>
       </div>
-      <div id="vibePromoToast" class="vibePromoToast hidden" aria-hidden="true">
-        <button id="vibePromoToastClose" class="vibePromoToastClose" type="button" aria-label="Закрыть">✕</button>
-        <button id="vibePromoToastOpen" class="vibePromoToastContent" type="button">
-          <strong>VIBE: месяц за 100 ₽</strong>
-          <span>Скидка 75% по промокоду AIFREE</span>
-        </button>
-      </div>
       <div id="chatList" class="chatList"></div>
     </aside>
       <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
@@ -372,9 +365,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const updateToastStatus = document.getElementById("updateToastStatus");
     const vibePromoOverlay = document.getElementById("vibePromoOverlay");
     const vibePromoClose = document.getElementById("vibePromoClose");
-    const vibePromoToast = document.getElementById("vibePromoToast");
-    const vibePromoToastClose = document.getElementById("vibePromoToastClose");
-    const vibePromoToastOpen = document.getElementById("vibePromoToastOpen");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
     const stopBtn = document.getElementById("stopBtn");
@@ -386,9 +376,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
     const THEME_KEY = "deepseek.theme";
-    const VIBE_PROMO_LAST_SHOWN_KEY = "ai-free.vibePromoLastShown";
-    const VIBE_PROMO_INTERVAL_MS = 10 * 60 * 1000;
-    const VIBE_PROMO_FIRST_DELAY_MS = 60 * 1000;
     const EXTERNAL_STATE_POLL_MS = 2500;
     const THEMES = [
       { id: "dark", label: t("theme.dark"), icon: "◐" },
@@ -442,8 +429,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     });
 
     function openVibePromo() {
-      vibePromoToast.classList.add("hidden");
-      vibePromoToast.setAttribute("aria-hidden", "true");
       vibePromoOverlay.classList.remove("hidden");
       vibePromoOverlay.setAttribute("aria-hidden", "false");
       vibePromoClose.focus();
@@ -454,29 +439,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       vibePromoOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function hideVibePromoToast() {
-      vibePromoToast.classList.add("hidden");
-      vibePromoToast.setAttribute("aria-hidden", "true");
-    }
-
-    function showVibePromoToast() {
-      const now = Date.now();
-      const lastShown = Number(localStorage.getItem(VIBE_PROMO_LAST_SHOWN_KEY)) || 0;
-      if (now - lastShown < VIBE_PROMO_INTERVAL_MS) return;
-      localStorage.setItem(VIBE_PROMO_LAST_SHOWN_KEY, String(now));
-      vibePromoToast.classList.remove("hidden");
-      vibePromoToast.setAttribute("aria-hidden", "false");
-    }
-
     document.getElementById("vibePromoOpen").addEventListener("click", openVibePromo);
     vibePromoClose.addEventListener("click", closeVibePromo);
     vibePromoOverlay.addEventListener("click", (event) => {
       if (event.target === vibePromoOverlay) closeVibePromo();
     });
-    vibePromoToastClose.addEventListener("click", hideVibePromoToast);
-    vibePromoToastOpen.addEventListener("click", openVibePromo);
-    setTimeout(showVibePromoToast, VIBE_PROMO_FIRST_DELAY_MS);
-    setInterval(showVibePromoToast, VIBE_PROMO_INTERVAL_MS);
 
     function closeDeleteChatModal(confirmed = false) {
       deleteChatOverlay.classList.add("hidden");
