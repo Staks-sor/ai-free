@@ -77,7 +77,6 @@ import { createCodeMemorySavedHandler, scheduleChatMemorySave } from "./memory-h
 import { warmMemoryBackend } from "../memory/store.mjs";
 import { warmGraphBackend } from "../memory/graph/store.mjs";
 import { getVoiceStatus, installSttRuntime, transcribeAudio } from "../stt/service.mjs";
-import { checkForUpdate, runUpdate } from "../updater.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
 import { setOpenAICorsHeaders } from "../../api/server.mjs";
 import {
@@ -1057,14 +1056,6 @@ export async function runWindowApp({
           });
         }
         return sendJson(res, { projects, defaultWorkspace: workspaceRoot, home: os.homedir() });
-      }
-
-      if (req.method === "GET" && url.pathname === "/api/update/check") {
-        return sendJson(res, await checkForUpdate());
-      }
-
-      if (req.method === "POST" && url.pathname === "/api/update/run") {
-        return sendJson(res, await runUpdate());
       }
 
       if (await handleMemoryRoute(req, url, res)) return;
@@ -2180,6 +2171,14 @@ export async function runWindowApp({
   });
 
   const url = `http://127.0.0.1:${port}`;
+  const startupConversation = state.conversations.find((item) => item.id === state.activeConversationId);
+  if (startupConversation?.provider === "qwen") {
+    setImmediate(() => {
+      import("../providers/qwen/browser-proxy.mjs")
+        .then(({ getQwenBrowserProxy }) => getQwenBrowserProxy())
+        .catch((error) => logConsole(`[qwen] background warm-up failed: ${error.message}`));
+    });
+  }
   let telegramBot = null;
   if (process.env.AI_FREE_DISABLE_TELEGRAM !== "1") {
     import("../telegram/bot.mjs")

@@ -266,15 +266,17 @@ export async function runUpdate() {
     file === "package.json" || file === "package-lock.json" || file === "npm-shrinkwrap.json"
   );
   let skippedDependencyInstall = false;
-  if (npmCommand) {
+  if (dependencyFilesChanged && npmCommand) {
     logs.push(await runCommand(npmCommand, ["install"], {
       cwd: root,
       timeout: 900_000,
       maxBuffer: 12_000_000,
     }));
-  } else {
+  } else if (dependencyFilesChanged) {
     skippedDependencyInstall = true;
     logs.push("npm не найден: установка зависимостей пропущена.");
+  } else {
+    logs.push("Зависимости не менялись: npm install не требуется.");
   }
 
   const after = await checkForUpdate();
@@ -289,7 +291,7 @@ export async function runUpdate() {
       ? dependencyFilesChanged
         ? "Код обновлён, но зависимости изменились, а npm не найден. Установи Node.js/npm и повтори обновление перед перезапуском."
         : "Код обновлён. npm не найден, но зависимости не менялись, можно перезапустить AI Free."
-      : "Обновление установлено. Перезапусти AI Free, чтобы загрузить новый код.",
+      : "Обновление установлено. AI Free будет перезапущен автоматически.",
     before,
     after,
     logs: logs.filter(Boolean),

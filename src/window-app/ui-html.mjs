@@ -48,13 +48,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <small>Нативно внутри AI Free</small>
           </span>
         </a>
-        <a class="sidebarPromo sidebarPromoVibe" href="https://vibe.stas-sor.ru/" target="_blank" rel="noreferrer">
+        <button id="vibePromoOpen" class="sidebarPromo sidebarPromoVibe" type="button">
           <span class="sidebarPromoMark">V</span>
           <span class="sidebarPromoText">
-            <strong>Vibe private</strong>
-            <small>Закрытый сервис для своих</small>
+            <strong>VIBE: месяц за 100 ₽</strong>
+            <small>−75% по промокоду AIFREE</small>
           </span>
-        </a>
+        </button>
       </div>
 
       <div id="newChatOverlay" class="settingsOverlay hidden" aria-hidden="true">
@@ -160,12 +160,36 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           </div>
         </div>
       </div>
+      <div id="vibePromoOverlay" class="settingsOverlay confirmOverlay hidden" aria-hidden="true">
+        <div class="settingsPanel confirmPanel vibePromoPanel" role="dialog" aria-modal="true" aria-labelledby="vibePromoTitle">
+          <div class="settingsHead">
+            <h2 id="vibePromoTitle">VIBE для пользователей AI Free</h2>
+            <button id="vibePromoClose" class="iconBtn" type="button" aria-label="Закрыть">✕</button>
+          </div>
+          <div class="confirmBody vibePromoBody">
+            <div class="vibePromoOffer"><strong>1 месяц за 100 ₽</strong><span>вместо 400 ₽ · скидка 75%</span></div>
+            <p>Приватный и стабильный доступ к интернету для повседневной работы, общения и поездок.</p>
+            <div class="vibePromoCode"><span>ПРОМОКОД</span><code>AIFREE</code></div>
+            <div class="confirmActions vibePromoActions">
+              <a class="iconBtn" href="https://vibe.stas-sor.ru/" target="_blank" rel="noreferrer">Сайт</a>
+              <a class="iconBtn primaryBtn" href="https://t.me/payments_meBot" target="_blank" rel="noreferrer">Telegram-бот</a>
+            </div>
+          </div>
+        </div>
+      </div>
       <div id="updateToast" class="updateToast hidden" aria-hidden="true">
         <button id="updateToastDismiss" class="updateToastClose" type="button" aria-label="${t("app.close")}">✕</button>
         <div class="updateToastTitle">Появилось новое обновление</div>
         <div id="updateToastMeta" class="updateToastMeta">${t("update.available")}</div>
         <div id="updateToastStatus" class="updateToastStatus"></div>
         <button id="updateToastDownload" class="updateToastDownload" type="button">Скачать</button>
+      </div>
+      <div id="vibePromoToast" class="vibePromoToast hidden" aria-hidden="true">
+        <button id="vibePromoToastClose" class="vibePromoToastClose" type="button" aria-label="Закрыть">✕</button>
+        <button id="vibePromoToastOpen" class="vibePromoToastContent" type="button">
+          <strong>VIBE: месяц за 100 ₽</strong>
+          <span>Скидка 75% по промокоду AIFREE</span>
+        </button>
       </div>
       <div id="chatList" class="chatList"></div>
     </aside>
@@ -346,6 +370,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const updateToastDownload = document.getElementById("updateToastDownload");
     const updateToastMeta = document.getElementById("updateToastMeta");
     const updateToastStatus = document.getElementById("updateToastStatus");
+    const vibePromoOverlay = document.getElementById("vibePromoOverlay");
+    const vibePromoClose = document.getElementById("vibePromoClose");
+    const vibePromoToast = document.getElementById("vibePromoToast");
+    const vibePromoToastClose = document.getElementById("vibePromoToastClose");
+    const vibePromoToastOpen = document.getElementById("vibePromoToastOpen");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
     const stopBtn = document.getElementById("stopBtn");
@@ -357,6 +386,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
     const THEME_KEY = "deepseek.theme";
+    const VIBE_PROMO_LAST_SHOWN_KEY = "ai-free.vibePromoLastShown";
+    const VIBE_PROMO_INTERVAL_MS = 10 * 60 * 1000;
+    const VIBE_PROMO_FIRST_DELAY_MS = 60 * 1000;
     const EXTERNAL_STATE_POLL_MS = 2500;
     const THEMES = [
       { id: "dark", label: t("theme.dark"), icon: "◐" },
@@ -388,6 +420,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     // The update modal is declared near the refresh button, but it must render as a
     // window-level overlay instead of being clipped by the sidebar.
     document.body.appendChild(updateConfirmOverlay);
+    document.body.appendChild(vibePromoOverlay);
 
     document.getElementById("refreshBtn").addEventListener("click", loadState);
     updateToastDismiss.addEventListener("click", () => {
@@ -407,6 +440,43 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         updateToastDownload.disabled = false;
       }
     });
+
+    function openVibePromo() {
+      vibePromoToast.classList.add("hidden");
+      vibePromoToast.setAttribute("aria-hidden", "true");
+      vibePromoOverlay.classList.remove("hidden");
+      vibePromoOverlay.setAttribute("aria-hidden", "false");
+      vibePromoClose.focus();
+    }
+
+    function closeVibePromo() {
+      vibePromoOverlay.classList.add("hidden");
+      vibePromoOverlay.setAttribute("aria-hidden", "true");
+    }
+
+    function hideVibePromoToast() {
+      vibePromoToast.classList.add("hidden");
+      vibePromoToast.setAttribute("aria-hidden", "true");
+    }
+
+    function showVibePromoToast() {
+      const now = Date.now();
+      const lastShown = Number(localStorage.getItem(VIBE_PROMO_LAST_SHOWN_KEY)) || 0;
+      if (now - lastShown < VIBE_PROMO_INTERVAL_MS) return;
+      localStorage.setItem(VIBE_PROMO_LAST_SHOWN_KEY, String(now));
+      vibePromoToast.classList.remove("hidden");
+      vibePromoToast.setAttribute("aria-hidden", "false");
+    }
+
+    document.getElementById("vibePromoOpen").addEventListener("click", openVibePromo);
+    vibePromoClose.addEventListener("click", closeVibePromo);
+    vibePromoOverlay.addEventListener("click", (event) => {
+      if (event.target === vibePromoOverlay) closeVibePromo();
+    });
+    vibePromoToastClose.addEventListener("click", hideVibePromoToast);
+    vibePromoToastOpen.addEventListener("click", openVibePromo);
+    setTimeout(showVibePromoToast, VIBE_PROMO_FIRST_DELAY_MS);
+    setInterval(showVibePromoToast, VIBE_PROMO_INTERVAL_MS);
 
     function closeDeleteChatModal(confirmed = false) {
       deleteChatOverlay.classList.add("hidden");
@@ -466,6 +536,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
       if (event.key === "Escape" && !updateConfirmOverlay.classList.contains("hidden")) {
         closeUpdateConfirmModal(false);
+      }
+      if (event.key === "Escape" && !vibePromoOverlay.classList.contains("hidden")) {
+        closeVibePromo();
       }
     });
 
@@ -3777,7 +3850,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         status.textContent = t("update.installing");
         status.className = "updateStatus";
         try {
-          const result = await installAvailableUpdate(lastCheck);
+          const result = await installAvailableUpdate(lastCheck, { restart: true });
           if (!result) {
             renderCheck(lastCheck);
             return;

@@ -50,6 +50,11 @@ describe("ui-html inline script", () => {
     assert.doesNotMatch(html, /confirm\(t\("update\.confirm"\)\)/);
   });
 
+  it("restarts the desktop app after installing an update from settings", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /installAvailableUpdate\(lastCheck, \{ restart: true \}\)/);
+  });
+
   it("shows an update toast only when an update is available", () => {
     const html = renderWindowHtml({ language: "ru" });
     assert.match(html, /id="updateToast" class="updateToast hidden"/);
@@ -68,8 +73,15 @@ describe("ui-html inline script", () => {
     assert.match(html, /https:\/\/vibe\.stas-sor\.ru\//);
     assert.match(html, /AI Free на GitHub/);
     assert.match(html, /Здесь может быть ваша реклама/);
-    assert.match(html, /Vibe private/);
-    assert.match(html, /Закрытый сервис для своих/);
+    assert.match(html, /VIBE: месяц за 100 ₽/);
+    assert.match(html, /−75% по промокоду AIFREE/);
+    assert.match(html, /id="vibePromoOverlay"/);
+    assert.match(html, />ПРОМОКОД<\/span><code>AIFREE<\/code>/);
+    assert.match(html, />Сайт<\/a>/);
+    assert.match(html, />Telegram-бот<\/a>/);
+    assert.match(html, /https:\/\/t\.me\/payments_meBot/);
+    assert.match(html, /VIBE_PROMO_INTERVAL_MS = 10 \* 60 \* 1000/);
+    assert.match(html, /setInterval\(showVibePromoToast, VIBE_PROMO_INTERVAL_MS\)/);
     assert.match(html, /sidebarPromoShift/);
     assert.match(html, /sidebarPromoGlint/);
     assert.match(html, /sidebarPromoMarkPulse/);

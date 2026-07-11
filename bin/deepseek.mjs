@@ -50,7 +50,14 @@ if (process.env.CHATGPT_EMBED_IN_UI == null) {
 // Импортируем динамически — на случай если в будущем какой-то модуль захочет
 // что-то проверить перед стартом. Сейчас работает и через static, но dynamic безопаснее.
 const { ensureBrowserBinaries } = await import("../src/browser/ensure-binaries.mjs");
-await ensureBrowserBinaries();
+const browserReady = await ensureBrowserBinaries();
+if (!browserReady.ok) {
+  console.error(`\n❌ ${browserReady.error || "Chromium browser binaries are unavailable."}`);
+  if (process.platform === "win32") {
+    console.error("   Проверьте, что антивирус не заблокировал папку %LOCALAPPDATA%\\ms-playwright.");
+  }
+  process.exit(1);
+}
 
 const { run } = await import("../src/cli/run.mjs");
 

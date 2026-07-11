@@ -2800,7 +2800,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         { id: "language", label: t("settings.tabLanguage") },
         { id: "agent", label: t("settings.tabAgent") },
         { id: "telegram", label: t("settings.tabTelegram") },
-        { id: "update", label: t("settings.tabUpdate") },
         { id: "api", label: t("settings.tabApi") },
         { id: "permissions", label: t("settings.tabPermissions") },
       ];
@@ -2828,7 +2827,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderUiSettings(panels.language, ui, allowedCommands || []);
       renderAgentSettings(panels.agent, ui);
       renderTelegramSettings(panels.telegram, telegram || {});
-      renderUpdateSettings(panels.update);
       renderOpenAISettings(panels.api, openAICompat);
       renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
       for (const key of order) {

@@ -7,6 +7,7 @@ import url from "node:url";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, "..", "..");
+let ensurePromise = null;
 
 function runInstall(label, args) {
   console.log(`📦 ${label}…`);
@@ -25,6 +26,20 @@ function chromiumLooksInstalled(chromium) {
 }
 
 export async function ensureBrowserBinaries({ quiet = false } = {}) {
+  if (!quiet && ensurePromise) return ensurePromise;
+  const run = ensureBrowserBinariesOnce({ quiet });
+  if (quiet) return run;
+  ensurePromise = run.then((result) => {
+    if (!result?.ok) ensurePromise = null;
+    return result;
+  }, (error) => {
+    ensurePromise = null;
+    throw error;
+  });
+  return ensurePromise;
+}
+
+async function ensureBrowserBinariesOnce({ quiet = false } = {}) {
   const engines = [];
   try {
     const mod = await import("patchright");

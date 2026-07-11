@@ -2201,6 +2201,14 @@ export async function runWindowApp({
   });
 
   const url = `http://127.0.0.1:${port}`;
+  const startupConversation = state.conversations.find((item) => item.id === state.activeConversationId);
+  if (startupConversation?.provider === "qwen") {
+    setImmediate(() => {
+      import("../providers/qwen/browser-proxy.mjs")
+        .then(({ getQwenBrowserProxy }) => getQwenBrowserProxy())
+        .catch((error) => logConsole(`[qwen] background warm-up failed: ${error.message}`));
+    });
+  }
   let telegramBot = null;
   if (process.env.AI_FREE_DISABLE_TELEGRAM !== "1") {
     import("../telegram/bot.mjs")

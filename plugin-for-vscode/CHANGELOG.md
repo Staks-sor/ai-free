@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.13
+
+- Improved Windows startup diagnostics and Chromium binary checks.
+- Reduced Qwen browser startup and navigation latency with background warm-up.
+- Removed the desktop Git updater from the extension; VS Code Marketplace handles extension updates.
+
 ## 0.1.41
 
 - Prevented STT install tests from writing fake runtimes into the user's real `~/.deepseek-cli` directory.

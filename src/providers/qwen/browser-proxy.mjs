@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 let proxyPromise = null;
 const QWEN_NAV_TIMEOUT_MS = Number(process.env.QWEN_NAV_TIMEOUT_MS || 90_000);
 const QWEN_READY_DELAY_MS = Number(process.env.QWEN_READY_DELAY_MS || 3000);
+const QWEN_READY_POLL_MS = Number(process.env.QWEN_READY_POLL_MS || 100);
 const QWEN_FETCH_TIMEOUT_MS = Number(process.env.QWEN_FETCH_TIMEOUT_MS || 120_000);
 const QWEN_STREAM_IDLE_TIMEOUT_MS = Number(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS || 45_000);
 const QWEN_PROXY_MAX_ATTEMPTS = Math.max(1, Math.min(5, Number(process.env.QWEN_PROXY_MAX_ATTEMPTS || 3)));
@@ -148,6 +149,18 @@ async function createProxy({ debug }) {
     }, authToken);
   }
 
+  async function waitForQwenRuntime(page) {
+    await page.waitForFunction(() => {
+      if (document.readyState === "loading") return false;
+      return Array.from(document.scripts).some((script) =>
+        /\/qwen-chat-fe\/[^/]+\/js\/main\.js(?:$|\?)/.test(script.src || ""),
+      );
+    }, null, {
+      timeout: QWEN_READY_DELAY_MS,
+      polling: Math.max(50, QWEN_READY_POLL_MS),
+    }).catch(() => {});
+  }
+
   if (debug) {
     // Фильтр шума: console.groupEnd с именем «Error» из Qwen-овского JS (это
     // просто метка группы, не реальная ошибка), Mixed Content для favicon,
@@ -189,7 +202,7 @@ async function createProxy({ debug }) {
     await worker.page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: QWEN_NAV_TIMEOUT_MS });
     await primeQwenPageAuth(worker.page);
     // Даём JS-бандлу проинициализировать перехватчик fetch / bx-ua (на слабых сетях 1-2 сек мало).
-    await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
+    await waitForQwenRuntime(worker.page);
   }));
 
   if (debug) console.log(`[qwen-proxy] ready (${workers.length} page${workers.length === 1 ? "" : "s"})`);
@@ -217,7 +230,7 @@ async function createProxy({ debug }) {
     });
     await primeQwenPageAuth(worker.page);
     // Подождём, пока SPA доделает свою регистрацию и поднимет антибот-перехватчики.
-    await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
+    await waitForQwenRuntime(worker.page);
     worker.currentChatId = chatId;
   }
 
@@ -229,7 +242,7 @@ async function createProxy({ debug }) {
       timeout: QWEN_NAV_TIMEOUT_MS,
     });
     await primeQwenPageAuth(worker.page);
-    await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
+    await waitForQwenRuntime(worker.page);
     worker.currentChatId = "new-chat";
   }
 
@@ -267,7 +280,7 @@ async function createProxy({ debug }) {
     worker.currentChatId = null;
     await worker.page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: QWEN_NAV_TIMEOUT_MS });
     await primeQwenPageAuth(worker.page);
-    await worker.page.waitForTimeout(QWEN_READY_DELAY_MS);
+    await waitForQwenRuntime(worker.page);
   }
 
   async function runProxyFetch(worker, { url, body, chatId, timeoutMs, streamIdleTimeoutMs, maxAttempts }) {
