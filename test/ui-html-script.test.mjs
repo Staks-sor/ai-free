@@ -30,6 +30,11 @@ describe("ui-html inline script", () => {
     );
   });
 
+  it("does not nest provider authorization buttons inside provider buttons", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /const btn = document\.createElement\("div"\);\s*btn\.setAttribute\("role", "button"\);/);
+  });
+
   it("uses an in-app modal to confirm chat deletion", () => {
     const html = renderWindowHtml({ language: "ru" });
     assert.match(html, /id="deleteChatOverlay"/);

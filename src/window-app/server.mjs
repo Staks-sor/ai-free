@@ -137,6 +137,7 @@ export async function runWindowApp({
   let qwenAuthManager = null;
   let chatGPTClient = null;
   const providerLoginJobs = new Map();
+  const providerLoginStates = new Map();
 
   async function getQwenAuthManager() {
     if (!qwenAuthManager) {
@@ -812,6 +813,8 @@ export async function runWindowApp({
           name: p.name,
           description: p.description,
           hasAuth: p.hasAuth(),
+          loginState: providerLoginStates.get(p.id)?.state || "idle",
+          loginError: providerLoginStates.get(p.id)?.error || "",
         }));
         return sendJson(res, { providers });
       }
@@ -864,9 +867,14 @@ export async function runWindowApp({
               chatGPTClient = null;
             }
           })();
+          providerLoginStates.set(providerId, { state: "running", error: "" });
           providerLoginJobs.set(providerId, loginJob);
           loginJob
+            .then(() => {
+              providerLoginStates.set(providerId, { state: "completed", error: "" });
+            })
             .catch((error) => {
+              providerLoginStates.set(providerId, { state: "error", error: error.message || String(error) });
               console.error(`[provider-login] ${providerId} failed:`, error);
             })
             .finally(() => {

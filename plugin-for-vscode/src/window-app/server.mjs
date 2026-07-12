@@ -139,6 +139,7 @@ export async function runWindowApp({
   let qwenAuthManager = null;
   let chatGPTClient = null;
   const providerLoginJobs = new Map();
+  const providerLoginStates = new Map();
 
   async function getQwenAuthManager() {
     if (!qwenAuthManager) {
@@ -814,6 +815,8 @@ export async function runWindowApp({
           name: p.name,
           description: p.description,
           hasAuth: p.hasAuth(),
+          loginState: providerLoginStates.get(p.id)?.state || "idle",
+          loginError: providerLoginStates.get(p.id)?.error || "",
         }));
         return sendJson(res, { providers });
       }
@@ -866,9 +869,14 @@ export async function runWindowApp({
               chatGPTClient = null;
             }
           })();
+          providerLoginStates.set(providerId, { state: "running", error: "" });
           providerLoginJobs.set(providerId, loginJob);
           loginJob
+            .then(() => {
+              providerLoginStates.set(providerId, { state: "completed", error: "" });
+            })
             .catch((error) => {
+              providerLoginStates.set(providerId, { state: "error", error: error.message || String(error) });
               console.error(`[provider-login] ${providerId} failed:`, error);
             })
             .finally(() => {
@@ -2179,20 +2187,6 @@ export async function runWindowApp({
         .catch((error) => logConsole(`[qwen] background warm-up failed: ${error.message}`));
     });
   }
-  let telegramBot = null;
-  if (process.env.AI_FREE_DISABLE_TELEGRAM !== "1") {
-    import("../telegram/bot.mjs")
-      .then((m) => m.startTelegramBot({
-        port,
-        workspaceRoot,
-        log: (message) => logConsole(message),
-      }))
-      .then((bot) => {
-        telegramBot = bot;
-      })
-      .catch((error) => logConsole(`[telegram] failed to start: ${error.message}`));
-  }
-
   if (openWindow) {
     console.log(`Workspace window: ${url}`);
     console.log("Tip: Agent panel (memory/skills/browser) is in the 🧠 drawer inside the app.");
@@ -2224,7 +2218,6 @@ export async function runWindowApp({
   };
 
   registerShutdownServerCloser((done) => {
-    telegramBot?.stop?.();
     server.close(() => done());
     setTimeout(done, 2000).unref();
   });

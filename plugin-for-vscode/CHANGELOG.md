@@ -1,11 +1,13 @@
 # Changelog
 
-## 0.3.14
+## 0.3.15
 
 - Improved Windows startup diagnostics and Chromium binary checks.
 - Reduced Qwen browser startup and navigation latency with background warm-up.
 - Removed the desktop Git updater from the extension; VS Code Marketplace handles extension updates.
 - Synced the VIBE sidebar offer and details dialog with desktop, without popup advertising.
+- Fixed provider authorization buttons on older Chromium/Windows 10 and surfaced background login errors.
+- Removed Telegram UI and bot polling from the extension; Telegram remains desktop-only.
 
 ## 0.1.41
 

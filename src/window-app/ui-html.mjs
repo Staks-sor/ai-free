@@ -1175,6 +1175,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const newChatModePicker = document.getElementById("newChatMode");
 
     let availableProviders = ["deepseek"]; // подтянем с сервера через /api/providers
+    let providerLoginStates = new Map();
     let AGENT_ROLES = [
       { id: "assistant", label: t("role.assistant"), description: t("role.assistantDescription") },
     ];
@@ -1206,6 +1207,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           for (let attempt = 0; attempt < 120; attempt += 1) {
             await new Promise((resolve) => setTimeout(resolve, 5000));
             await refreshAvailableProviders();
+            const loginStatus = providerLoginStates.get(id);
+            if (loginStatus?.state === "error") {
+              alert(t("provider.connectFailed", { label, message: loginStatus.error || "Browser launch failed" }));
+              return;
+            }
             if (availableProviders.includes(id)) {
               newChatSelectedProvider = id;
               localStorage.setItem(PROVIDER_PICK_KEY, id);
@@ -1240,6 +1246,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const r = await fetch("/api/providers");
         if (r.ok) {
           const j = await r.json();
+          providerLoginStates = new Map((j.providers || []).map((p) => [p.id, {
+            state: p.loginState || "idle",
+            error: p.loginError || "",
+          }]));
           availableProviders = (j.providers || []).filter((p) => p.hasAuth).map((p) => p.id);
         }
       } catch {}
@@ -1250,8 +1260,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       for (const id of Object.keys(PROVIDER_INFO)) {
         const info = PROVIDER_INFO[id];
         const isAuthed = availableProviders.includes(id);
-        const btn = document.createElement("button");
-        btn.type = "button";
+        const btn = document.createElement("div");
+        btn.setAttribute("role", "button");
+        btn.tabIndex = 0;
         btn.className = "providerOption " + id
           + (id === newChatSelectedProvider ? " active" : "")
           + (!isAuthed ? " needsAuth" : "");
@@ -1319,6 +1330,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       localStorage.setItem(PROVIDER_PICK_KEY, newChatSelectedProvider);
       renderProviderPicker();
       renderModePickerForProvider();
+    });
+
+    newChatProviderPicker.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const opt = event.target.closest(".providerOption");
+      if (!opt || event.target.closest(".reconnectLink")) return;
+      event.preventDefault();
+      opt.click();
     });
 
     newChatModePicker.addEventListener("click", (event) => {

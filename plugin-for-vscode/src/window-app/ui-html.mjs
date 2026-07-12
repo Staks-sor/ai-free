@@ -26,7 +26,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     <aside class="sidebar">
       <nav class="sidebarMenu" aria-label="${t("sidebar.menu")}">
         <button type="button" id="sidebarMenuPlugins" class="sidebarMenuBtn">${t("sidebar.plugins")}</button>
-        <button type="button" id="sidebarMenuTelegram" class="sidebarMenuBtn">${t("sidebar.telegram")}</button>
       </nav>
       <div class="sideHead">
         <div class="brand">${t("app.workspace")}</div>
@@ -1143,6 +1142,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const newChatModePicker = document.getElementById("newChatMode");
 
     let availableProviders = ["deepseek"]; // подтянем с сервера через /api/providers
+    let providerLoginStates = new Map();
     let AGENT_ROLES = [
       { id: "assistant", label: t("role.assistant"), description: t("role.assistantDescription") },
     ];
@@ -1174,6 +1174,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           for (let attempt = 0; attempt < 120; attempt += 1) {
             await new Promise((resolve) => setTimeout(resolve, 5000));
             await refreshAvailableProviders();
+            const loginStatus = providerLoginStates.get(id);
+            if (loginStatus?.state === "error") {
+              alert(t("provider.connectFailed", { label, message: loginStatus.error || "Browser launch failed" }));
+              return;
+            }
             if (availableProviders.includes(id)) {
               newChatSelectedProvider = id;
               localStorage.setItem(PROVIDER_PICK_KEY, id);
@@ -1208,6 +1213,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const r = await fetch("/api/providers");
         if (r.ok) {
           const j = await r.json();
+          providerLoginStates = new Map((j.providers || []).map((p) => [p.id, {
+            state: p.loginState || "idle",
+            error: p.loginError || "",
+          }]));
           availableProviders = (j.providers || []).filter((p) => p.hasAuth).map((p) => p.id);
         }
       } catch {}
@@ -1218,8 +1227,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       for (const id of Object.keys(PROVIDER_INFO)) {
         const info = PROVIDER_INFO[id];
         const isAuthed = availableProviders.includes(id);
-        const btn = document.createElement("button");
-        btn.type = "button";
+        const btn = document.createElement("div");
+        btn.setAttribute("role", "button");
+        btn.tabIndex = 0;
         btn.className = "providerOption " + id
           + (id === newChatSelectedProvider ? " active" : "")
           + (!isAuthed ? " needsAuth" : "");
@@ -1287,6 +1297,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       localStorage.setItem(PROVIDER_PICK_KEY, newChatSelectedProvider);
       renderProviderPicker();
       renderModePickerForProvider();
+    });
+
+    newChatProviderPicker.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const opt = event.target.closest(".providerOption");
+      if (!opt || event.target.closest(".reconnectLink")) return;
+      event.preventDefault();
+      opt.click();
     });
 
     newChatModePicker.addEventListener("click", (event) => {
@@ -2820,7 +2838,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui, telegram }, initialTab) {
+    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui }, initialTab) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
@@ -2839,7 +2857,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const tabs = [
         { id: "language", label: t("settings.tabLanguage") },
         { id: "agent", label: t("settings.tabAgent") },
-        { id: "telegram", label: t("settings.tabTelegram") },
         { id: "api", label: t("settings.tabApi") },
         { id: "permissions", label: t("settings.tabPermissions") },
       ];
@@ -2866,7 +2883,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       renderUiSettings(panels.language, ui, allowedCommands || []);
       renderAgentSettings(panels.agent, ui);
-      renderTelegramSettings(panels.telegram, telegram || {});
       renderOpenAISettings(panels.api, openAICompat);
       renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
       for (const key of order) {
@@ -2912,9 +2928,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     document.getElementById("sidebarMenuPlugins").addEventListener("click", () => {
       openSettings("agent");
-    });
-    document.getElementById("sidebarMenuTelegram").addEventListener("click", () => {
-      openSettings("telegram");
     });
 
     function selectSettingsTab(tabId) {
