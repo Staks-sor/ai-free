@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0d1324"/><stop offset="1" stop-color="#18233b"/></linearGradient>
+    <filter id="sh"><feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity=".28"/></filter>
+    <marker id="arr" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0l12 6-12 6z" fill="#718096"/></marker>
+    <style>.t{font-family:Inter,Arial,sans-serif;fill:#f8fafc}.m{font-family:Inter,Arial,sans-serif;fill:#a9b6ca}.b{fill:#17233b;stroke:#354564;stroke-width:2}.a{fill:none;stroke:#718096;stroke-width:4;marker-end:url(#arr)}</style>
+  </defs>
+  <rect width="1600" height="900" rx="34" fill="url(#bg2)"/>
+  <text class="t" x="80" y="88" font-size="44" font-weight="700">Восстановление по уровням</text>
+  <text class="m" x="80" y="130" font-size="23">Перезапускается минимальная часть системы, которая действительно сломалась</text>
+
+  <g filter="url(#sh)">
+    <rect class="b" x="90" y="315" width="290" height="220" rx="26"/>
+    <circle cx="145" cy="370" r="24" fill="#38bdf8"/><text class="t" x="190" y="381" font-size="29" font-weight="700">Страница</text>
+    <text class="m" x="130" y="438" font-size="21">context destroyed</text><text class="m" x="130" y="477" font-size="21">target closed</text>
+
+    <rect class="b" x="465" y="315" width="290" height="220" rx="26"/>
+    <circle cx="520" cy="370" r="24" fill="#34d399"/><text class="t" x="565" y="381" font-size="29" font-weight="700">Браузер</text>
+    <text class="m" x="505" y="438" font-size="21">процесс закрыт</text><text class="m" x="505" y="477" font-size="21">профиль недоступен</text>
+
+    <rect class="b" x="840" y="315" width="290" height="220" rx="26"/>
+    <circle cx="895" cy="370" r="24" fill="#f59e0b"/><text class="t" x="940" y="381" font-size="29" font-weight="700">Провайдер</text>
+    <text class="m" x="880" y="438" font-size="21">транспортная ошибка</text><text class="m" x="880" y="477" font-size="21">изменился ответ</text>
+
+    <rect class="b" x="1215" y="315" width="290" height="220" rx="26"/>
+    <circle cx="1270" cy="370" r="24" fill="#fb7185"/><text class="t" x="1315" y="381" font-size="29" font-weight="700">Сессия</text>
+    <text class="m" x="1255" y="438" font-size="21">cookies истекли</text><text class="m" x="1255" y="477" font-size="21">нужен повторный вход</text>
+  </g>
+  <path class="a" d="M380 425H455"/><path class="a" d="M755 425H830"/><path class="a" d="M1130 425H1205"/>
+
+  <g>
+    <rect x="90" y="610" width="290" height="96" rx="20" fill="#203351"/><text class="t" x="235" y="649" text-anchor="middle" font-size="21" font-weight="700">Пересоздать воркер</text><text class="m" x="235" y="680" text-anchor="middle" font-size="18">ограниченный retry</text>
+    <rect x="465" y="610" width="290" height="96" rx="20" fill="#203351"/><text class="t" x="610" y="649" text-anchor="middle" font-size="21" font-weight="700">Сбросить singleton</text><text class="m" x="610" y="680" text-anchor="middle" font-size="18">поднять новый процесс</text>
+    <rect x="840" y="610" width="290" height="96" rx="20" fill="#203351"/><text class="t" x="985" y="649" text-anchor="middle" font-size="21" font-weight="700">Переинициализировать</text><text class="m" x="985" y="680" text-anchor="middle" font-size="18">только транспорт</text>
+    <rect x="1215" y="610" width="290" height="96" rx="20" fill="#203351"/><text class="t" x="1360" y="649" text-anchor="middle" font-size="21" font-weight="700">Показать re-login</text><text class="m" x="1360" y="680" text-anchor="middle" font-size="18">обновить cookies</text>
+  </g>
+  <path d="M235 535V600M610 535V600M985 535V600M1360 535V600" stroke="#718096" stroke-width="4" marker-end="url(#arr)"/>
+  <text class="m" x="800" y="815" text-anchor="middle" font-size="21">Без бесконечных повторов: ошибка должна завершаться понятным состоянием</text>
+</svg>

@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0c1222"/><stop offset="1" stop-color="#151f37"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#38bdf8"/><stop offset="1" stop-color="#818cf8"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity=".28"/></filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0l12 6-12 6z" fill="#64748b"/></marker>
+    <style>
+      .t{font-family:Inter,Arial,sans-serif;fill:#f8fafc}.muted{fill:#a9b6ca}.box{fill:#17233b;stroke:#32415e;stroke-width:2}.provider{fill:#111b30;stroke:#334565;stroke-width:2}.flow{fill:none;stroke:#64748b;stroke-width:4;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1600" height="900" rx="34" fill="url(#bg)"/>
+  <text class="t" x="80" y="86" font-size="44" font-weight="700">AI Free: от веб-сессии к агенту</text>
+  <text class="muted" x="80" y="128" font-family="Inter,Arial,sans-serif" font-size="23">Разные транспорты сходятся в одном агентном рантайме</text>
+
+  <g filter="url(#shadow)">
+    <rect class="provider" x="80" y="210" width="330" height="150" rx="24"/>
+    <circle cx="130" cy="260" r="22" fill="#38bdf8"/><text class="t" x="170" y="270" font-size="30" font-weight="700">DeepSeek</text>
+    <text class="muted" x="120" y="320" font-size="21" font-family="Inter,Arial,sans-serif">WASM PoW + прямой запрос</text>
+
+    <rect class="provider" x="80" y="390" width="330" height="150" rx="24"/>
+    <circle cx="130" cy="440" r="22" fill="#34d399"/><text class="t" x="170" y="450" font-size="30" font-weight="700">Qwen</text>
+    <text class="muted" x="120" y="500" font-size="21" font-family="Inter,Arial,sans-serif">fetch в авторизованной вкладке</text>
+
+    <rect class="provider" x="80" y="570" width="330" height="150" rx="24"/>
+    <circle cx="130" cy="620" r="22" fill="#f59e0b"/><text class="t" x="170" y="630" font-size="30" font-weight="700">ChatGPT</text>
+    <text class="muted" x="120" y="680" font-size="21" font-family="Inter,Arial,sans-serif">штатный UI + чтение ответа</text>
+  </g>
+
+  <path class="flow" d="M410 285H520"/><path class="flow" d="M410 465H520"/><path class="flow" d="M410 645H520"/>
+  <g filter="url(#shadow)">
+    <rect class="box" x="530" y="300" width="270" height="330" rx="26"/>
+    <text class="t" x="665" y="370" text-anchor="middle" font-size="30" font-weight="700">Адаптеры</text>
+    <rect x="575" y="415" width="180" height="52" rx="13" fill="#223352"/><text class="t" x="665" y="449" text-anchor="middle" font-size="20">единые поля</text>
+    <rect x="575" y="488" width="180" height="52" rx="13" fill="#223352"/><text class="t" x="665" y="522" text-anchor="middle" font-size="20">единый ответ</text>
+    <rect x="575" y="561" width="180" height="34" rx="10" fill="#223352"/><text class="muted" x="665" y="585" text-anchor="middle" font-size="18" font-family="Inter,Arial,sans-serif">изоляция транспорта</text>
+  </g>
+
+  <path class="flow" d="M800 465H900"/>
+  <g filter="url(#shadow)">
+    <rect x="910" y="245" width="330" height="440" rx="28" fill="url(#accent)" opacity=".92"/>
+    <text class="t" x="1075" y="322" text-anchor="middle" font-size="32" font-weight="700">Agent Orchestrator</text>
+    <rect x="955" y="370" width="240" height="62" rx="16" fill="#101a30" opacity=".82"/><text class="t" x="1075" y="409" text-anchor="middle" font-size="22">классификация задачи</text>
+    <rect x="955" y="451" width="240" height="62" rx="16" fill="#101a30" opacity=".82"/><text class="t" x="1075" y="490" text-anchor="middle" font-size="22">memory + skills</text>
+    <rect x="955" y="532" width="240" height="62" rx="16" fill="#101a30" opacity=".82"/><text class="t" x="1075" y="571" text-anchor="middle" font-size="22">allowed tools</text>
+    <text class="t" x="1075" y="638" text-anchor="middle" font-size="21">единый цикл выполнения</text>
+  </g>
+
+  <path class="flow" d="M1240 465H1320"/>
+  <g filter="url(#shadow)">
+    <rect class="box" x="1330" y="285" width="200" height="360" rx="26"/>
+    <text class="t" x="1430" y="350" text-anchor="middle" font-size="29" font-weight="700">Инструменты</text>
+    <text class="t" x="1430" y="421" text-anchor="middle" font-size="21">Файлы</text>
+    <text class="t" x="1430" y="474" text-anchor="middle" font-size="21">Команды</text>
+    <text class="t" x="1430" y="527" text-anchor="middle" font-size="21">Браузер</text>
+    <text class="t" x="1430" y="580" text-anchor="middle" font-size="21">IDE / API</text>
+  </g>
+  <text class="muted" x="800" y="824" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="21">Провайдер отвечает за транспорт · оркестратор — за контекст и границы действий</text>
+</svg>
