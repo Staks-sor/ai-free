@@ -2,6 +2,44 @@
 // Здесь храним и OpenAI-compatible id, и UI-метаданные, чтобы API, ACP и webview
 // не расходились между собой после очередного обновления списка моделей.
 
+// Virtuals может временно не ответить на /models. Этот снимок не дает UI
+// свалиться к одной модели; успешный live-каталог всегда имеет приоритет.
+export const ECONOMYOS_FALLBACK_MODELS = [
+  ["z-ai-glm-4-7-flash", "GLM 4.7 Flash"],
+  ["z-ai-glm-5", "GLM 5"],
+  ["z-ai-glm-5-1", "GLM 5.1"],
+  ["z-ai-glm-5-2", "GLM 5.2"],
+  ["z-ai-glm-5-turbo", "GLM 5 Turbo"],
+  ["z-ai-glm-5v-turbo", "GLM 5V Turbo"],
+  ["openai-gpt-56-sol", "GPT-5.6 Sol"],
+  ["openai-gpt-56-sol-pro", "GPT-5.6 Sol Pro"],
+  ["openai-gpt-56-luna", "GPT-5.6 Luna"],
+  ["openai-gpt-56-luna-pro", "GPT-5.6 Luna Pro"],
+  ["openai-gpt-56-terra", "GPT-5.6 Terra"],
+  ["openai-gpt-56-terra-pro", "GPT-5.6 Terra Pro"],
+  ["openai-gpt-55", "GPT-5.5"],
+  ["openai-gpt-55-pro", "GPT-5.5 Pro"],
+  ["openai-gpt-54", "GPT-5.4"],
+  ["openai-gpt-54-mini", "GPT-5.4 Mini"],
+  ["openai-gpt-54-pro", "GPT-5.4 Pro"],
+  ["openai-gpt-53-codex", "GPT-5.3 Codex"],
+  ["anthropic-claude-sonnet-5", "Claude Sonnet 5"],
+  ["anthropic-claude-sonnet-4-6", "Claude Sonnet 4.6"],
+  ["anthropic-claude-opus-4-8", "Claude Opus 4.8"],
+  ["anthropic-claude-opus-4-8-fast", "Claude Opus 4.8 Fast"],
+  ["google-gemini-3-5-flash", "Gemini 3.5 Flash"],
+  ["google-gemini-3-1-pro-preview", "Gemini 3.1 Pro Preview"],
+  ["moonshotai-kimi-k2-7-code", "Kimi K2.7 Code"],
+  ["moonshotai-kimi-k2-6", "Kimi K2.6"],
+  ["deepseek-deepseek-v4-flash", "DeepSeek V4 Flash"],
+  ["deepseek-deepseek-v4-pro", "DeepSeek V4 Pro"],
+  ["deepseek-deepseek-v3-2", "DeepSeek V3.2"],
+  ["minimax-minimax-m3", "MiniMax M3"],
+  ["minimax-minimax-m2-7", "MiniMax M2.7"],
+  ["x-ai-grok-4-5", "Grok 4.5"],
+  ["x-ai-grok-4-20", "Grok 4.20"],
+].map(([id, label]) => ({ id, label, sub: "EconomyOS Compute" }));
+
 export const PROVIDER_CATALOG = {
   deepseek: {
     id: "deepseek",
@@ -93,6 +131,23 @@ export const PROVIDER_CATALOG = {
       { id: "o1-mini", label: "o1 mini", apiModel: "o1-mini", reasoning: true },
       { id: "o3-mini", label: "o3 mini", apiModel: "o3-mini", reasoning: true },
     ],
+  },
+  economyos: {
+    id: "economyos",
+    label: "EconomyOS",
+    icon: "EO",
+    sub: "Virtuals Compute · свой API-ключ",
+    defaultMode: "default",
+    defaultModel: "z-ai-glm-4-7-flash",
+    modes: [
+      {
+        id: "default",
+        title: "EconomyOS Compute",
+        sub: "OpenAI-compatible inference через Virtuals",
+        model: "z-ai-glm-4-7-flash",
+      },
+    ],
+    models: ECONOMYOS_FALLBACK_MODELS,
   },
 };
 

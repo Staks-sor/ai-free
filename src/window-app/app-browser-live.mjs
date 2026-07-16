@@ -70,6 +70,12 @@ export async function handleAppBrowserLiveInput(body = {}) {
     await page.keyboard.insertText(String(body.text || ""));
   } else if (type === "key") {
     await page.keyboard.press(String(body.key || "Enter"));
+  } else if (type === "reload") {
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
+  } else if (type === "back") {
+    await page.goBack({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
+  } else if (type === "forward") {
+    await page.goForward({ waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
   } else {
     throw new Error(`Unknown live input type: ${type || "(empty)"}`);
   }
@@ -82,7 +88,12 @@ export async function handleAppBrowserLiveInput(body = {}) {
     await page.waitForTimeout(700);
     return { ok: true, ...(await browserRecoverBlockedSearch(page)) };
   }
-  return { ok: true, recovered: false };
+  return {
+    ok: true,
+    recovered: false,
+    url: page.url(),
+    title: await page.title().catch(() => ""),
+  };
 }
 
 export async function handleAppBrowserLiveStream(req, res) {
@@ -126,7 +137,9 @@ export function renderEmbedAppBrowserLiveHtml() {
       border: 1px solid var(--line); background: #1a1f27; color: var(--text);
       border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 11px; font-weight: 600;
     }
-    .btn:hover { border-color: var(--accent); }
+    .btn:hover { border-color: var(--accent); background: #222a36; }
+    .btn:active { transform: translateY(1px); }
+    .navBtn { width: 30px; height: 28px; padding: 0; font-size: 15px; }
     .viewport {
       position: relative;
       min-height: 0;
@@ -154,10 +167,12 @@ export function renderEmbedAppBrowserLiveHtml() {
 <body>
   <header class="bar">
     <span class="label">Web</span>
+    <button type="button" class="btn navBtn" id="backBtn" title="Назад">←</button>
+    <button type="button" class="btn navBtn" id="forwardBtn" title="Вперёд">→</button>
+    <button type="button" class="btn navBtn" id="reloadBtn" title="Обновить">↻</button>
     <input id="urlInput" class="urlInput" type="url" placeholder="https://yandex.ru" spellcheck="false">
     <button type="button" class="btn" id="goBtn">Открыть</button>
     <button type="button" class="btn" id="resetBtn">Сброс</button>
-    <button type="button" class="btn" id="reloadBtn">↻</button>
   </header>
   <div class="viewport" id="viewport">
     <div class="screen" id="screen">
@@ -308,9 +323,11 @@ export function renderEmbedAppBrowserLiveHtml() {
           body: JSON.stringify(payload),
         });
         const data = await response.json().catch(() => ({}));
+        if (data.url && urlInput) urlInput.value = data.url;
         if (data.recovered) {
-          if (urlInput) urlInput.value = data.url || "";
-          hintEl.textContent = data.hint || "Google запросил проверку — открыт другой поисковик.";
+          hintEl.textContent = data.hint || "Поисковик запросил проверку — открыт другой поисковик.";
+        } else if (data.title || data.url) {
+          hintEl.textContent = data.title || data.url;
         }
         return data;
       } catch {
@@ -356,7 +373,13 @@ export function renderEmbedAppBrowserLiveHtml() {
       restartStream();
     });
 
-    document.getElementById("reloadBtn").addEventListener("click", () => restartStream());
+    async function browserAction(type) {
+      hintEl.textContent = type === "reload" ? "Обновляю страницу…" : "Переход…";
+      await sendInput({ type });
+    }
+    document.getElementById("backBtn").addEventListener("click", () => browserAction("back"));
+    document.getElementById("forwardBtn").addEventListener("click", () => browserAction("forward"));
+    document.getElementById("reloadBtn").addEventListener("click", () => browserAction("reload"));
   </script>
 </body>
 </html>`;

@@ -11,12 +11,13 @@ describe("web-browser", () => {
     assert.equal(APP_BROWSER_PROFILE, WEB_BROWSER_PROFILE);
   });
 
-  it("always allows browser tools even with restrictive skill", () => {
+  it("blocks browser tools unless the active agent explicitly allows them", () => {
     const allowed = ["list_files", "read_file", "write_file"];
-    assert.equal(isToolAllowed("browser_snapshot", allowed), true);
-    assert.equal(isToolAllowed("browser_navigate", allowed), true);
-    assert.equal(isToolAllowed("browser_click", allowed), true);
-    assert.equal(isToolAllowed("browser_reset", allowed), true);
+    assert.equal(isToolAllowed("browser_snapshot", allowed), false);
+    assert.equal(isToolAllowed("browser_navigate", allowed), false);
+    assert.equal(isToolAllowed("browser_click", allowed), false);
+    assert.equal(isToolAllowed("browser_reset", allowed), false);
+    assert.equal(isToolAllowed("browser_snapshot", ["browser_snapshot"]), true);
     assert.equal(isToolAllowed("run_command", allowed), false);
   });
 

@@ -1,11 +1,14 @@
 # AI Free Chat & Agent
 
-AI Free brings DeepSeek and Qwen into the VS Code sidebar as project-aware coding agents.
+AI Free brings DeepSeek, Qwen, ChatGPT and optional EconomyOS by Virtuals into the VS Code sidebar as project-aware coding agents.
+
+Current release: **0.4.0**.
 
 ## Features
 
 - DeepSeek and Qwen providers.
 - Agent-first workflow for the currently opened VS Code workspace.
+- EconomyOS BYOK integration with selectable Virtuals Compute models and no shared project key.
 - Separate agents and chat history per project.
 - Model picker with current DeepSeek and Qwen model aliases.
 - Local server bridge bundled with the extension.

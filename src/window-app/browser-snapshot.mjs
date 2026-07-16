@@ -1,4 +1,5 @@
-// Снимок Web-браузера → контекст для DeepSeek/Qwen (чат и /code).
+// Снимок Web-браузера → контекст для браузерного агента.
+// Обычные чаты и агенты ищут информацию через встроенный provider web search.
 
 import { captureAppBrowserSnapshot } from "./app-browser.mjs";
 import { formatSnapshotForPrompt } from "../browser/snapshot-build.mjs";
@@ -21,15 +22,15 @@ export async function buildBrowserContextSection(options = {}) {
 }
 
 export async function appendBrowserContextToPrompt(prompt, options = {}) {
-  // Codex-style: browser context goes to the browser agent loop, not regular chat.
+  // Состояние браузера не подмешивается в обычный чат: это провоцирует модель
+  // ходить по странице вместо дешёвого provider web search.
   void options;
   return String(prompt || "");
 }
 
 export async function warmBrowserForAgentTask(task) {
   try {
-    const browserTask = shouldAutoRunBrowserTask(task) || await shouldAutoRunBrowserTaskWithSnapshot(task);
-    if (!browserTask) return;
+    if (!shouldAutoRunBrowserTask(task)) return;
     const { browserWarm } = await import("../browser/service.mjs");
     await browserWarm();
   } catch {}
@@ -40,19 +41,20 @@ export function shouldAutoRunBrowserTask(prompt) {
   if (!text || text === "/code" || text.startsWith("/code ") || text.startsWith("/skill ")) return false;
   const normalized = text.toLowerCase();
 
+  // Браузер включается только для явной работы со страницей: навигации,
+  // кликов, заполнения форм или извлечения/парсинга конкретной страницы.
+  // Обычные «найди», «узнай», новости, цены и актуальные сведения сюда
+  // намеренно не входят — их должен обслуживать provider web search.
+  const explicitBrowser = /(браузер|browser|browser_navigate|browser_snapshot|browser_click)/u.test(normalized);
+  const urlOrSite = /(https?:\/\/|www\.|\b[a-z0-9-]+\.(?:ru|com|net|org|io|dev|рф)\b|сайт(?:е|а|ом)?|страниц(?:а|е|у|ы))/u.test(normalized);
   const clickVerb = /(нажми|кликни|кликн|нажмите|кликните|нажать|кликнуть|\bclick\b|\bpress\b|\btap\b)/u.test(normalized);
-  const typeVerb = /(введи|ввести|напиши в|\btype\b|enter text|\bfill\b)/u.test(normalized);
-  const navVerb = /(открой|перейди|зайди|загрузи|открыть|перейти|\bopen\b|\bvisit\b|\bnavigate\b|browser_navigate|browser_snapshot|browser_click)/u.test(normalized);
-  const searchVerb = /(найди|найти|поиск|search|ищи|lookup|найди мне|загугли|узнай|выясни|собери|погугли)/u.test(normalized);
-  const browserNoun = /(браузер|browser|\bweb\b|google|гугл|страниц|сайт|cookie|cookies|кнопк|consent|вкладк|http|\.com|интернет|online)/u.test(normalized);
-  const dialogAction = /(принять все|принять|отклонить все|отклонить|accept all|reject all|dismiss|закрой диалог)/u.test(normalized);
-  const readPage = /(что на странице|что видишь|прочитай страниц|покажи страниц|what(?:'s| is) on the page|read the page)/u.test(normalized);
+  const typeVerb = /(введи|ввести|напиши в|заполни|\btype\b|enter text|\bfill\b)/u.test(normalized);
+  const navVerb = /(открой|перейди|зайди|загрузи|открыть|перейти|\bopen\b|\bvisit\b|\bnavigate\b)/u.test(normalized);
+  const parseVerb = /(спарси|парсинг|распарси|извлеки|собери со страницы|прочитай страниц|что на странице|что видишь на странице|покажи страницу|parse|scrape|extract from|read the page)/u.test(normalized);
+  const dialogAction = /(принять все|отклонить все|accept all|reject all|закрой диалог|dismiss)/u.test(normalized);
 
-  if (clickVerb && (browserNoun || dialogAction)) return true;
-  if (typeVerb && browserNoun) return true;
-  if (navVerb) return true;
-  if (searchVerb) return true;
-  if (readPage) return true;
+  if (explicitBrowser && (clickVerb || typeVerb || navVerb || parseVerb || dialogAction)) return true;
+  if (urlOrSite && (clickVerb || typeVerb || navVerb || parseVerb || dialogAction)) return true;
   if (dialogAction) return true;
   return false;
 }
@@ -62,25 +64,12 @@ export function isBrowserActionTask(prompt) {
 }
 
 export async function shouldPreferBrowserOverProviderSearch(prompt) {
-  if (shouldAutoRunBrowserTask(prompt)) return true;
-  try {
-    const snap = await getBrowserSnapshotForModels({ maxTextChars: 300 });
-    return snap.ok && !snap.empty;
-  } catch {
-    return false;
-  }
+  // Не отключаем web search из-за того, что в Web-панели случайно открыта страница.
+  // Приоритет браузеру даёт только явная команда пользователя.
+  return shouldAutoRunBrowserTask(prompt);
 }
 
 export async function shouldAutoRunBrowserTaskWithSnapshot(prompt) {
-  if (shouldAutoRunBrowserTask(prompt)) return true;
-  const text = String(prompt || "").trim().toLowerCase();
-  if (!text) return false;
-  const actionHint = /(найди|найти|поиск|search|ищи|открой|нажми|кликн|что на|прочитай|покажи|accept|принять|образовательн|учрежден)/u.test(text);
-  if (!actionHint) return false;
-  try {
-    const snap = await getBrowserSnapshotForModels({ maxTextChars: 400 });
-    return snap.ok && !snap.empty;
-  } catch {
-    return false;
-  }
+  // Наличие снимка само по себе больше не переводит чат в браузерный режим.
+  return shouldAutoRunBrowserTask(prompt);
 }

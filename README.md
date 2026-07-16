@@ -1,12 +1,12 @@
 <h1 align="center">AI Free</h1>
 
 <p align="center">
-  <strong>Free local AI client for DeepSeek, Qwen and ChatGPT with API, CLI, code agent, memory and skills</strong>
+  <strong>Local AI client for DeepSeek, Qwen, ChatGPT and EconomyOS with API, code agent, memory and skills</strong>
 </p>
 
 AI Free turns free AI web chats into a local developer tool.
 
-Use **DeepSeek**, **Qwen** and **ChatGPT** from one desktop window, CLI, OpenAI-compatible API, Anthropic-compatible API, IDE integrations and code-agent workflows — with local memory, skills and workspace-aware chats.
+Use **DeepSeek**, **Qwen**, **ChatGPT** and optional **EconomyOS by Virtuals** from one desktop window, CLI, compatible APIs, IDE integrations and code-agent workflows — with local memory, skills and workspace-aware chats.
 
 Good for:
 
@@ -56,8 +56,10 @@ People usually look for this project as a **free AI coding assistant**, **local 
   <img src="https://img.shields.io/github/package-json/v/Staks-sor/ai-free?style=flat-square&amp;label=version" alt="Версия">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-8250df?style=flat-square" alt="macOS, Linux, Windows">
   <img src="https://img.shields.io/badge/Node.js-18%2B-1f883d?style=flat-square" alt="Node.js 18+">
-  <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
+  <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20EconomyOS-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, EconomyOS">
 </p>
+
+<p align="center"><strong>AI Free 0.4.0</strong></p>
 
 > Локальный AI-клиент, который превращает веб-чаты DeepSeek, Qwen и ChatGPT в инструмент для разработчика: окно чатов, CLI, совместимые API, `/code`-агент, память, skills и IDE-интеграции.
 
@@ -77,11 +79,12 @@ People usually look for this project as a **free AI coding assistant**, **local 
 
 ---
 
-Архитектурно проект разделён на модули в `src/` (auth, browser, providers, code-agent, **memory**, **skills**, agent-orchestrator, state, window-app, api, cli). Точка входа — `bin/deepseek.mjs`. Юнит-тесты: `npm test` (**273** кейса, встроенный Node test runner). Архитектура памяти и skills — [docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md](docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md). Сценарий для видео — [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md).
+Архитектурно проект разделён на модули в `src/` (auth, browser, providers, code-agent, **memory**, **skills**, agent-orchestrator, state, window-app, api, cli). Точка входа — `bin/deepseek.mjs`. Юнит-тесты запускаются командой `npm test` во встроенном Node test runner; точное число зависит от текущей версии. Архитектура памяти и skills — [docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md](docs/AI_FREE_BRAINS_AND_SKILLS_PLAN.md). Сценарий для видео — [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md).
 
 ## ✨ Что внутри
 
-- 💬 **Три провайдера:** DeepSeek, Qwen и ChatGPT в одном окне с выбором модели при создании беседы.
+- 💬 **Четыре провайдера:** DeepSeek, Qwen, ChatGPT и EconomyOS в одном окне с выбором модели при создании беседы.
+- 🌐 **EconomyOS by Virtuals:** опциональный OpenAI-compatible backend с собственным ключом и кредитами каждого пользователя; ключ проекта не раздаётся.
 - 🔑 **Авто-логин DeepSeek:** один вход через браузер, затем тихое восстановление сессии или окно re-login.
 - 🔐 **Авто-логин Qwen и ChatGPT:** отдельные профили и локальные сессии для каждого провайдера.
 - 🪟 **Окно чатов** (`localhost:4317`): несколько параллельных бесед, каждая привязана к своей папке-проекту.
@@ -94,6 +97,18 @@ People usually look for this project as a **free AI coding assistant**, **local 
 - 🔌 **Совместимые API** (`localhost:4318`): OpenAI и Anthropic для Kilo Code, Continue и других IDE.
 - 🎙️ **Голосовой ввод:** Parakeet V3 скачивается отдельно только при первом использовании.
 - 📁 **Файловый браузер:** при создании чата можно выбрать папку или создать новую.
+
+### EconomyOS by Virtuals
+
+В desktop и VS Code можно подключить EconomyOS в **Настройки → API**. Каждый пользователь получает собственный `VIRTUALS_API_KEY` на портале Virtuals; AI Free не содержит общего ключа и отправляет запросы напрямую на официальный `https://compute.virtuals.io/v1/chat/completions`.
+
+Архитектура интеграции и правила защиты кредитов: [docs/ECONOMYOS_INTEGRATION.md](docs/ECONOMYOS_INTEGRATION.md).
+
+### Версия продукта
+
+Текущий релиз — **AI Free 0.4.0**. Desktop/CLI/API и расширение VS Code выпускаются под единым номером версии. Он синхронно хранится в корневом `package.json` и `plugin-for-vscode/package.json`; общий релизный тег имеет формат `vX.Y.Z`.
+
+Что вошло в `0.4.0`: [release notes](docs/RELEASE_NOTES_0.4.0.md).
 
 ---
 
@@ -314,7 +329,7 @@ Remove-Item -Recurse -Force `
 | `npm run login-qwen` | Re-login Qwen → `~/.qwen-cli/auth.json`. |
 | `npm run import-qwen` | Импорт cookies из JSON (Chrome / Cookie Editor), без Playwright. |
 | `npm run save-creds` | Email + пароль для авто-заполнения формы DeepSeek. |
-| `npm test` | Юнит-тесты (**273** кейса). |
+| `npm test` | Полный набор юнит- и интеграционных тестов. |
 
 Запуск OpenAI-совместимого API (отдельный процесс):
 

@@ -40,18 +40,18 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <small>Поставить звезду и поддержать проект</small>
           </span>
         </a>
-        <a class="sidebarPromo sidebarPromoAd" href="mailto:hello@stas-sor.ru?subject=AI%20Free%20ad" target="_blank" rel="noreferrer">
+        <a class="sidebarPromo sidebarPromoAd" href="https://t.me/Staks_sor" target="_blank" rel="noreferrer" aria-label="Разместить рекламу в AI Free — написать @Staks_sor в Telegram">
           <span class="sidebarPromoMark">AD</span>
           <span class="sidebarPromoText">
-            <strong>Здесь может быть ваша реклама</strong>
-            <small>Нативно внутри AI Free</small>
+            <strong>Разместить рекламу</strong>
+            <small>Написать @Staks_sor в Telegram</small>
           </span>
         </a>
-        <button id="vibePromoOpen" class="sidebarPromo sidebarPromoVibe" type="button">
-          <span class="sidebarPromoMark">V</span>
+        <button id="vibePromoOpen" class="sidebarPromo sidebarPromoVibe" type="button" aria-label="Поддержать развитие AI Free через VIBE">
+          <span class="sidebarPromoMark">♥</span>
           <span class="sidebarPromoText">
-            <strong>VIBE: месяц за 100 ₽</strong>
-            <small>−75% по промокоду AIFREE</small>
+            <strong>Поддержи AI Free</strong>
+            <small>VIBE на месяц — 200 ₽</small>
           </span>
         </button>
       </div>
@@ -162,16 +162,16 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       <div id="vibePromoOverlay" class="settingsOverlay confirmOverlay hidden" aria-hidden="true">
         <div class="settingsPanel confirmPanel vibePromoPanel" role="dialog" aria-modal="true" aria-labelledby="vibePromoTitle">
           <div class="settingsHead">
-            <h2 id="vibePromoTitle">VIBE для пользователей AI Free</h2>
+            <h2 id="vibePromoTitle">Поддержать развитие AI Free</h2>
             <button id="vibePromoClose" class="iconBtn" type="button" aria-label="Закрыть">✕</button>
           </div>
           <div class="confirmBody vibePromoBody">
-            <div class="vibePromoOffer"><strong>1 месяц за 100 ₽</strong><span>вместо 400 ₽ · скидка 75%</span></div>
-            <p>Приватный и стабильный доступ к интернету для повседневной работы, общения и поездок.</p>
-            <div class="vibePromoCode"><span>ПРОМОКОД</span><code>AIFREE</code></div>
+            <div class="vibePromoOffer"><strong>VIBE на месяц — 200 ₽</strong><span>вместо 400 ₽ по промокоду AIFREE50</span></div>
+            <p>Поддерживая AI Free, вы помогаете оплачивать разработку, серверы и новые функции проекта. В благодарность вы получаете месяц VIBE — сервиса для приватного и стабильного доступа к интернету.</p>
+            <div class="vibePromoCode"><span>ПРОМОКОД</span><code>AIFREE50</code></div>
             <div class="confirmActions vibePromoActions">
-              <a class="iconBtn" href="https://vibe.stas-sor.ru/" target="_blank" rel="noreferrer">Сайт</a>
-              <a class="iconBtn primaryBtn" href="https://t.me/payments_meBot" target="_blank" rel="noreferrer">Telegram-бот</a>
+              <a class="iconBtn" href="https://vibe.stas-sor.ru/" target="_blank" rel="noreferrer">Подробнее</a>
+              <a class="iconBtn primaryBtn" href="https://t.me/payments_meBot" target="_blank" rel="noreferrer">Поддержать за 200 ₽</a>
             </div>
           </div>
         </div>
@@ -1153,6 +1153,12 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const info = PROVIDER_INFO[id];
       if (!info) return;
       const label = info.label;
+      if (id === "economyos") {
+        closeNewChatModal();
+        await openSettings("api");
+        setStatus(t("settings.economyConnectHint"), false);
+        return;
+      }
       const providerButton = newChatProviderPicker.querySelector('[data-provider="' + id + '"] .reconnectLink');
       if (providerButton?.disabled) return;
       const confirmKey = id === "chatgpt" ? "provider.chatgptConnectConfirm" : "provider.connectConfirm";
@@ -1315,8 +1321,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderModePickerForProvider();
     });
 
-    // На старте подтянем список доступных провайдеров и нарисуем picker'ы.
-    (async () => {
+    // На старте сначала загружаем каталог моделей. Только после этого можно
+    // отображать последний активный чат: иначе неизвестный ещё провайдер
+    // временно подменяется fallback-значением DeepSeek до первого клика по чату.
+    const startupReady = (async () => {
       await refreshModelCatalog();
       await refreshAgentRoles();
       await refreshAvailableProviders();
@@ -1374,7 +1382,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const sentAttachments = attachments;
       attachments = [];
       renderAttachments();
-      activeConversation.messages.push({ role: "user", content: displayForChat });
+      activeConversation.messages.push({
+        role: "user",
+        content: displayForChat,
+        ...(imageFiles.length ? {
+          images: imageFiles.map((image) => "data:" + image.mimeType + ";base64," + image.dataBase64),
+        } : {}),
+      });
       renderConversation(activeConversation);
 
       try {
@@ -1384,7 +1398,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const refFileIds = [];
         let inlineImages = [];
         if (imageFiles.length) {
-          if (sendProvider === "chatgpt") {
+          if (sendProvider === "chatgpt" || sendProvider === "economyos") {
             inlineImages = imageFiles.map((img) => ({
               name: img.name,
               mimeType: img.mimeType,
@@ -1418,9 +1432,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           search: sendProvider === "chatgpt" ? false : searchActive,
           refFileIds,
           images: inlineImages,
+          displayImages: inlineImages.length ? [] : imageFiles.map((image) => ({
+            name: image.name,
+            mimeType: image.mimeType,
+            dataBase64: image.dataBase64,
+          })),
         };
 
-        if (sendProvider === "qwen" || sendProvider === "chatgpt" || sendProvider === "deepseek") {
+        if (["qwen", "chatgpt", "deepseek", "economyos"].includes(sendProvider)) {
           await postStreamingMessage(sentConvId, messageBody, sendProvider);
           return;
         }
@@ -2176,6 +2195,25 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         role.textContent = message.role === "user" ? t("chat.you") : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
+        if (Array.isArray(message.toolLogs) && message.toolLogs.length) {
+          const tools = document.createElement("div");
+          tools.className = "toolLogs";
+          for (const rawLog of message.toolLogs) {
+            const lines = String(rawLog || "").split("\\n");
+            const details = document.createElement("details");
+            details.className = "toolLog";
+            const summary = document.createElement("summary");
+            summary.textContent = lines.shift() || "[tool]";
+            details.appendChild(summary);
+            if (lines.length) {
+              const output = document.createElement("pre");
+              output.textContent = lines.join("\\n");
+              details.appendChild(output);
+            }
+            tools.appendChild(details);
+          }
+          bubble.appendChild(tools);
+        }
         if (message.content) {
           const textEl = document.createElement("div");
           if (message.streaming) {
@@ -2838,7 +2876,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui }, initialTab) {
+    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, economyOS, ui }, initialTab) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
@@ -2884,6 +2922,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderUiSettings(panels.language, ui, allowedCommands || []);
       renderAgentSettings(panels.agent, ui);
       renderOpenAISettings(panels.api, openAICompat);
+      renderEconomyOSSettings(panels.api, economyOS || {});
       renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
       for (const key of order) {
         const items = groups[key];
@@ -3430,6 +3469,20 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           desc: t("settings.allowPythonModuleAndEvalDesc"),
           risk: "high",
         },
+        {
+          key: "allowDestructiveActions",
+          checked: commandPermissions.allowDestructiveActions === true,
+          name: "Удаление и опасные локальные действия",
+          desc: "Удаление, git reset/clean и похожие операции. По умолчанию выключено и включается только с вашего согласия.",
+          risk: "high",
+        },
+        {
+          key: "allowExternalWrites",
+          checked: commandPermissions.allowExternalWrites === true,
+          name: "Изменение GitHub, серверов и внешних систем",
+          desc: "Чтение доступно без запроса. Push, SSH-команды и внешние изменения требуют вашего согласия.",
+          risk: "high",
+        },
       ];
 
       for (const spec of rows) {
@@ -3630,6 +3683,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const keys = info.apiKeys || {};
       keyList.appendChild(makeApiKeyRow("deepseek", "DeepSeek", keys.deepseek || ""));
       keyList.appendChild(makeApiKeyRow("qwen", "Qwen", keys.qwen || ""));
+      keyList.appendChild(makeApiKeyRow("economyos", "EconomyOS proxy", keys.economyos || ""));
       groupEl.appendChild(keyList);
 
       const note = document.createElement("div");
@@ -3661,6 +3715,88 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       note.textContent = t("settings.anthropicNote", { models: (info.models || []).join(", ") });
       groupEl.appendChild(note);
 
+      target.appendChild(groupEl);
+    }
+
+    function renderEconomyOSSettings(target, info) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup apiSettings";
+
+      const heading = document.createElement("h3");
+      heading.textContent = t("settings.economyTitle");
+      groupEl.appendChild(heading);
+
+      const hint = document.createElement("div");
+      hint.className = "apiModels";
+      hint.textContent = t("settings.economyHint");
+      groupEl.appendChild(hint);
+
+      const grid = document.createElement("div");
+      grid.className = "apiSettingsGrid";
+      grid.appendChild(makeApiField(t("settings.baseUrl"), info.baseUrl || "https://compute.virtuals.io/v1"));
+      groupEl.appendChild(grid);
+
+      const field = document.createElement("label");
+      field.className = "formField";
+      const fieldLabel = document.createElement("span");
+      fieldLabel.textContent = t("settings.economyApiKey");
+      const input = document.createElement("input");
+      input.type = "password";
+      input.autocomplete = "off";
+      input.placeholder = info.configured ? t("settings.economyConfigured") : "VIRTUALS_API_KEY";
+      input.disabled = info.source === "environment";
+      field.append(fieldLabel, input);
+      groupEl.appendChild(field);
+
+      const actions = document.createElement("div");
+      actions.className = "settingsActions economyActions";
+      const portal = document.createElement("a");
+      portal.className = "iconBtn";
+      portal.href = "https://app.virtuals.io/acp/agents";
+      portal.target = "_blank";
+      portal.rel = "noreferrer";
+      portal.textContent = t("settings.economyGetKey");
+      actions.appendChild(portal);
+
+      if (info.configured) {
+        const disconnect = document.createElement("button");
+        disconnect.type = "button";
+        disconnect.className = "iconBtn dangerBtn";
+        disconnect.textContent = t("settings.economyDisconnect");
+        disconnect.disabled = info.source === "environment";
+        disconnect.addEventListener("click", async () => {
+          await api("/api/settings/economyos", { method: "DELETE" });
+          const next = await api("/api/settings");
+          renderSettings(next, "api");
+          setStatus(t("settings.economyDisconnected"), false);
+        });
+        actions.appendChild(disconnect);
+      } else {
+        const connect = document.createElement("button");
+        connect.type = "button";
+        connect.className = "iconBtn primaryBtn";
+        connect.textContent = t("settings.economyConnect");
+        connect.addEventListener("click", async () => {
+          const apiKey = input.value.trim();
+          if (!apiKey) return setStatus(t("settings.economyKeyRequired"), true);
+          connect.disabled = true;
+          try {
+            await api("/api/settings/economyos", { method: "PUT", body: { apiKey } });
+            input.value = "";
+            const next = await api("/api/settings");
+            renderSettings(next, "api");
+            await refreshAvailableProviders();
+            setStatus(t("settings.economyConnected"), false);
+          } catch (error) {
+            setStatus(t("settings.economyConnectFailed", { message: error.message }), true);
+          } finally {
+            connect.disabled = false;
+          }
+        });
+        actions.appendChild(connect);
+      }
+
+      groupEl.appendChild(actions);
       target.appendChild(groupEl);
     }
 
@@ -3839,7 +3975,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return parseInt(raw, 10) || 0;
     }
 
-    loadState().catch((error) => setStatus(error.message, true));
+    startupReady
+      .then(() => loadState())
+      .catch((error) => setStatus(error.message, true));
   </script>
 </body>
 </html>`;

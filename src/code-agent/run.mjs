@@ -1,12 +1,14 @@
 // Главная петля /code-агента. Шлёт system prompt → tool loop → execution → memory.
 
 import { createCodeSystemPrompt } from "./prompt.mjs";
+import { loadSettings } from "../state/settings.mjs";
 import { createBrowserSystemPrompt } from "./browser-prompt.mjs";
 import { parseToolCall } from "./parser.mjs";
 import { executeWorkspaceTool } from "./executor.mjs";
 import { enqueueCodeExperienceSave } from "../memory/async-queue.mjs";
 import { isToolAllowed } from "../skills/permissions.mjs";
 import { formatToolLog } from "./tool-log.mjs";
+import { createNativeCodeSystemPrompt, NATIVE_CODE_TOOLS } from "./native-tools.mjs";
 import {
   buildContinuationPrompt,
   buildNoToolCorrectionPrompt,
@@ -28,19 +30,39 @@ export async function runCodeTask(
   const browserContext = options.browserContext || "";
   const allowedTools = options.allowedTools || null;
 
-  let prompt = browserOnly
-    ? createBrowserSystemPrompt(task, { browserContext })
-    : createCodeSystemPrompt(workspaceRoot, task, options.systemPrompt, {
-        searchEnabled: baseOptions?.searchEnabled === true,
-        skillId,
-        skillPrompt,
-        memoryContext,
-        browserContext,
-        allowedTools,
-      });
+  const nativeTools = client?.supportsNativeTools === true;
+  const nativeSystemPrompt = nativeTools ? createNativeCodeSystemPrompt(workspaceRoot, {
+    conversationContext: baseOptions?.conversationContext,
+    skillPrompt,
+    memoryContext,
+    browserContext,
+  }) : "";
+  const availableNativeTools = nativeTools
+    ? NATIVE_CODE_TOOLS.filter((tool) => isToolAllowed(tool.function.name, allowedTools))
+    : null;
+  const resumeState = nativeTools && options.resumeState && typeof options.resumeState === "object"
+    ? options.resumeState
+    : null;
+  let pendingToolResult = resumeState?.pendingToolResult || null;
+  let prompt = resumeState?.prompt ?? (nativeTools
+    ? task
+    : browserOnly
+      ? createBrowserSystemPrompt(task, { browserContext })
+      : createCodeSystemPrompt(workspaceRoot, task, options.systemPrompt, {
+          searchEnabled: baseOptions?.searchEnabled === true,
+          skillId,
+          skillPrompt,
+          memoryContext,
+          browserContext,
+          allowedTools,
+        }));
+  if (resumeState?.clarification) {
+    const clarification = `User clarification while resuming: ${resumeState.clarification}`;
+    prompt = prompt ? `${prompt}\n\n${clarification}` : clarification;
+  }
 
-  let parent = parentMessageId;
-  const toolLogs = [];
+  let parent = resumeState?.parentMessageId ?? parentMessageId;
+  const toolLogs = Array.isArray(resumeState?.toolLogs) ? [...resumeState.toolLogs] : [];
   const maxToolSteps = resolveMaxToolSteps(options.maxToolSteps);
   const maxTransientRetries = resolveTransientTextRetries(options.transientTextRetries);
   const maxNoToolRetries = resolveNoToolTextRetries(options.noToolTextRetries);
@@ -70,13 +92,28 @@ export async function runCodeTask(
     let transientTextRetries = 0;
 
     for (;;) {
+      options.onCheckpoint?.({
+        task,
+        prompt,
+        pendingToolResult,
+        parentMessageId: parent,
+        toolLogs: [...toolLogs],
+      });
       const result = await client.complete({
         ...baseOptions,
         prompt,
         parentMessageId: parent,
+        ...(nativeTools ? {
+          systemPrompt: nativeSystemPrompt,
+          tools: availableNativeTools,
+          toolResult: pendingToolResult,
+        } : {}),
       });
+      pendingToolResult = null;
       const nextParent = result.lastAssistantMessageId ?? parent;
-      const call = parseToolCall(result.text);
+      const call = result.toolCall
+        ? { tool: result.toolCall.name, ...result.toolCall.arguments }
+        : parseToolCall(result.text);
 
       if (!call) {
         if (
@@ -116,7 +153,10 @@ export async function runCodeTask(
         const log = formatToolLog(call, blocked);
         toolLogs.push(log);
         options.onTool?.(call, blocked, log);
-        prompt = buildContinuationPrompt({
+        if (nativeTools && result.toolCall?.id) {
+          pendingToolResult = { toolCallId: result.toolCall.id, result: blocked };
+          prompt = "";
+        } else prompt = buildContinuationPrompt({
           skillId,
           skillPrompt,
           memoryContext,
@@ -129,7 +169,15 @@ export async function runCodeTask(
 
       let toolResult;
       try {
-        toolResult = await executeWorkspaceTool(workspaceRoot, call);
+        const commandPermissions = {
+          ...(loadSettings().commandPermissions || {}),
+          ...(options.executionPermissions || {}),
+        };
+        toolResult = await executeWorkspaceTool(workspaceRoot, call, {
+          workspaceRoot,
+          allowDestructiveActions: commandPermissions.allowDestructiveActions === true,
+          allowExternalWrites: commandPermissions.allowExternalWrites === true,
+        });
       } catch (error) {
         toolResult = {
           ok: false,
@@ -171,7 +219,10 @@ export async function runCodeTask(
           .join("\n")}\nUpdate your plan and next action to follow this clarification.`
         : "";
 
-      prompt = buildContinuationPrompt({
+      if (nativeTools && result.toolCall?.id) {
+        pendingToolResult = { toolCallId: result.toolCall.id, result: toolResult };
+        prompt = clarificationText ? `User clarification:\n${clarificationText}` : "";
+      } else prompt = buildContinuationPrompt({
         skillId,
         skillPrompt,
         memoryContext,

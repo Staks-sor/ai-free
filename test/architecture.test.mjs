@@ -5,6 +5,7 @@ import { strict as assert } from "node:assert";
 import { AI_FREE_VERSION as ROOT_VERSION } from "../src/config.mjs";
 import { AI_FREE_VERSION as PLUGIN_VERSION } from "../plugin-for-vscode/src/config.mjs";
 import {
+  ECONOMYOS_FALLBACK_MODELS,
   OPENAI_COMPAT_MODELS,
   uiModelCatalog,
 } from "../src/providers/model-catalog.mjs";
@@ -42,6 +43,15 @@ describe("architecture invariants", () => {
     assert.deepEqual(uiIds, expected);
   });
 
+  it("keeps EconomyOS model selection available when its live catalog is offline", () => {
+    assert.ok(ECONOMYOS_FALLBACK_MODELS.length > 1);
+    assert.ok(ECONOMYOS_FALLBACK_MODELS.some((model) => model.id === "openai-gpt-56-sol-pro"));
+    assert.equal(
+      uiModelCatalog().providers.economyos.models.length,
+      ECONOMYOS_FALLBACK_MODELS.length,
+    );
+  });
+
   it("reads displayed versions from product package.json files", () => {
     const rootPackage = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     const pluginPackage = JSON.parse(
@@ -49,5 +59,6 @@ describe("architecture invariants", () => {
     );
     assert.equal(ROOT_VERSION, rootPackage.version);
     assert.equal(PLUGIN_VERSION, pluginPackage.version);
+    assert.equal(ROOT_VERSION, PLUGIN_VERSION);
   });
 });

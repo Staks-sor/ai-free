@@ -17,8 +17,9 @@ export class WorkspaceToolError extends Error {
 }
 
 import { executeBrowserTool } from "../browser/service.mjs";
+import { executeGitHubTool } from "./github-tools.mjs";
 
-export async function executeWorkspaceTool(workspaceRoot, call) {
+export async function executeWorkspaceTool(workspaceRoot, call, executionOptions = {}) {
   const tool = call.tool;
 
   if (tool === "finish") {
@@ -46,12 +47,34 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
   }
 
   if (tool === "read_file") {
-    const target = resolveWorkspacePath(workspaceRoot, call.path);
-    const maxBytes = Number.isFinite(Number(call.maxBytes)) ? Number(call.maxBytes) : 60000;
-    const stat = fs.statSync(target);
-    if (!stat.isFile()) throw new Error("read_file target is not a file.");
-    const content = fs.readFileSync(target, "utf8").slice(0, maxBytes);
-    return { ok: true, path: path.relative(workspaceRoot, target), bytes: stat.size, content };
+    const requestedPath = String(call.path || "");
+    const target = resolveReadableWorkspacePath(workspaceRoot, requestedPath);
+    const maxBytes = clampInteger(call.maxBytes, 1, 2_000_000, 60_000);
+    let stat;
+    try {
+      stat = fs.statSync(target);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        throw new Error(`Файл не найден в выбранном проекте: ${requestedPath}. Сначала вызови list_files для уточнения пути.`);
+      }
+      throw error;
+    }
+    if (!stat.isFile()) throw new Error(`read_file ожидает файл, но получена папка: ${requestedPath}`);
+    const buffer = fs.readFileSync(target);
+    if (buffer.subarray(0, Math.min(buffer.length, 8192)).includes(0)) {
+      throw new Error(`Файл является бинарным и не может быть прочитан как текст: ${requestedPath}`);
+    }
+    const truncated = buffer.length > maxBytes;
+    const content = buffer.subarray(0, maxBytes).toString("utf8");
+    return {
+      ok: true,
+      path: path.relative(workspaceRoot, target),
+      bytes: stat.size,
+      readBytes: Math.min(buffer.length, maxBytes),
+      truncated,
+      content,
+      ...(truncated ? { hint: `Показаны первые ${maxBytes} байт. Увеличь maxBytes (до 2000000), если нужен остаток файла.` } : {}),
+    };
   }
 
   if (tool === "write_file") {
@@ -71,6 +94,7 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
   }
 
   if (tool === "delete_file") {
+    requireOwnerApproval("delete_file", call, executionOptions);
     const target = resolveWorkspacePath(workspaceRoot, call.path);
     if (!fs.existsSync(target)) {
       return { ok: true, path: path.relative(workspaceRoot, target), deleted: false, existed: false };
@@ -84,6 +108,7 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
   }
 
   if (tool === "delete_dir") {
+    requireOwnerApproval("delete_dir", call, executionOptions);
     const target = resolveWorkspacePath(workspaceRoot, call.path);
     if (!fs.existsSync(target)) {
       return { ok: true, path: path.relative(workspaceRoot, target), deleted: false, existed: false };
@@ -103,11 +128,18 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
   }
 
   if (tool === "run_command") {
+    requireCommandApproval(call, executionOptions);
     return await runWorkspaceCommand(workspaceRoot, call);
   }
 
   if (tool === "run_shell") {
+    requireShellApproval(call, executionOptions);
     return await runWorkspaceShell(workspaceRoot, call);
+  }
+
+  if (String(tool || "").startsWith("github_")) {
+    if (!GITHUB_READ_ONLY_TOOLS.has(tool)) requireOwnerApproval(tool, call, executionOptions, "external");
+    return executeGitHubTool(workspaceRoot, call);
   }
 
   if (String(tool || "").startsWith("browser_")) {
@@ -115,6 +147,50 @@ export async function executeWorkspaceTool(workspaceRoot, call) {
   }
 
   throw new Error(`Unknown tool: ${tool}`);
+}
+
+const GITHUB_READ_ONLY_TOOLS = new Set(["github_status", "github_repo", "github_issues"]);
+const DESTRUCTIVE_COMMANDS = new Set(["rm", "rmdir", "unlink", "shred"]);
+const EXTERNAL_WRITE_COMMANDS = new Set([
+  "ssh", "scp", "sftp", "rsync", "gh", "curl", "wget", "kubectl", "helm", "terraform", "ansible-playbook",
+]);
+
+function requireCommandApproval(call, executionOptions) {
+  const command = normalizePermissionCommand(String(call.cmd || ""), executionOptions.workspaceRoot);
+  const args = Array.isArray(call.args) ? call.args.map(String) : [];
+  if (DESTRUCTIVE_COMMANDS.has(command)) requireOwnerApproval(command, call, executionOptions);
+  if (command === "git" && ["push", "reset", "clean"].includes(args[0])) {
+    requireOwnerApproval(`git ${args[0]}`, call, executionOptions, args[0] === "push" ? "external" : "destructive");
+  }
+  if (EXTERNAL_WRITE_COMMANDS.has(command)) requireOwnerApproval(command, call, executionOptions, "external");
+}
+
+function requireShellApproval(call, executionOptions) {
+  const command = String(call.command || "");
+  if (/(^|[;&|]\s*)(rm|rmdir|unlink|shred)\b|\bgit\s+(reset|clean)\b/i.test(command)) {
+    requireOwnerApproval("destructive shell command", call, executionOptions);
+  }
+  if (/\b(git\s+push|ssh|scp|sftp|rsync|gh|curl|wget|kubectl|helm|terraform|ansible-playbook)\b/i.test(command)) {
+    requireOwnerApproval("external shell command", call, executionOptions, "external");
+  }
+}
+
+function requireOwnerApproval(action, call, executionOptions, kind = "destructive") {
+  const permissionKey = kind === "external" ? "allowExternalWrites" : "allowDestructiveActions";
+  if (executionOptions?.[permissionKey] === true) return;
+  const target = call.path || call.command || [call.cmd, ...(call.args || [])].filter(Boolean).join(" ");
+  const title = kind === "external" ? "Разрешить внешнее изменение" : "Разрешить удаление или опасное действие";
+  throw new WorkspaceToolError(`${title}: ${action}${target ? ` (${target})` : ""}. Требуется согласие владельца.`, {
+    fatal: true,
+    permissionRequest: {
+      id: `${permissionKey}-${String(action).replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`,
+      permissionKey,
+      title,
+      description: kind === "external"
+        ? `Агент хочет изменить внешний ресурс: ${action}${target ? ` — ${target}` : ""}. Разрешение действует до отключения в настройках.`
+        : `Агент хочет удалить данные или выполнить опасную операцию: ${action}${target ? ` — ${target}` : ""}. Разрешение действует до отключения в настройках.`,
+    },
+  });
 }
 
 export async function runWorkspaceCommand(workspaceRoot, call) {
@@ -514,6 +590,21 @@ export function resolveWorkspacePath(workspaceRoot, requestedPath) {
     throw new Error(`Path is blocked: ${requestedPath}`);
   }
 
+  return target;
+}
+
+
+export function resolveReadableWorkspacePath(workspaceRoot, requestedPath) {
+  const target = resolveWorkspacePath(workspaceRoot, requestedPath);
+  if (fs.existsSync(target)) return target;
+
+  // Модели иногда возвращают "project/src/file" при workspace уже равном "project".
+  const normalized = String(requestedPath || "").replace(/\\/g, "/").replace(/^\.\//, "");
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts[0] === path.basename(path.resolve(workspaceRoot)) && parts.length > 1) {
+    const withoutRepeatedRoot = resolveWorkspacePath(workspaceRoot, parts.slice(1).join("/"));
+    if (fs.existsSync(withoutRepeatedRoot)) return withoutRepeatedRoot;
+  }
   return target;
 }
 

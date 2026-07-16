@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Added EconomyOS as a BYOK provider with selectable Virtuals Compute models.
+- Added native agent tool calls, resumable checkpoints, persistent chat images and improved memory context.
+- Added a resilient cached EconomyOS model catalog with desktop and VS Code parity.
+
 ## 0.3.15
 
 - Improved Windows startup diagnostics and Chromium binary checks.

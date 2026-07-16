@@ -8,11 +8,13 @@ import {
   serializeVector,
 } from "./embed.mjs";
 
+const DEFAULT_MIN_SCORE = 0.2;
+
 export function vectorizeItem(item) {
   return embedText(buildEmbedDocument(item));
 }
 
-export function rankByVector(items = [], query = "", { limit = 20, minScore = 0.05 } = {}) {
+export function rankByVector(items = [], query = "", { limit = 20, minScore = DEFAULT_MIN_SCORE } = {}) {
   const q = String(query || "").trim();
   if (!q || !items.length) return [];
 

@@ -5,7 +5,7 @@ import { loadSettings } from "../state/settings.mjs";
 import { getSkillPrompt } from "../skills/registry.mjs";
 import { formatAllowedToolsHint } from "../skills/permissions.mjs";
 
-export const CODE_AGENT_PROMPT_VERSION = 17;
+export const CODE_AGENT_PROMPT_VERSION = 18;
 
 export function createCodeSystemPrompt(
   workspaceRoot,
@@ -96,6 +96,10 @@ The JSON object MUST contain the string field "tool":
 {"tool":"delete_dir","path":"relative/dir"}
 {"tool":"mkdir","path":"relative/dir"}
 {"tool":"list_serial_ports"}
+{"tool":"github_status"}
+{"tool":"github_repo"}
+{"tool":"github_issues","state":"open","limit":20}
+{"tool":"github_create_issue","title":"Краткий заголовок","body":"Описание","labels":["bug"]}
 {"tool":"ask_user","question":"What should I do next?","details":"Optional short context","choices":["Option A","Option B"]}
 {"tool":"run_command","cmd":"node","args":["relative/file.js"],"timeoutMs":20000}
 {"tool":"run_shell","command":"grep -r pattern . | head -n 20","timeoutMs":20000}
@@ -125,6 +129,9 @@ Rules:
 - Do not say a file/folder was created until the matching tool result says ok:true.
 - If asked to delete/remove a file, use delete_file. If asked to delete/remove a directory, use delete_dir.
 - Never use rm -r, rm -R, or rm -rf. Directory deletion is handled by delete_dir inside workspace safety checks.
+- You are a full project and operations assistant: inspect GitHub and remote servers when the task requires it, using the provided tools and enabled commands.
+- Read-only inspection is allowed. Before deletion, git push/reset/clean, changing GitHub, or mutating a remote server/external system, use the normal tool; the runtime will stop and request the owner's explicit permission when needed.
+- Never bypass a permission request with another tool or an encoded/custom script.
 - After write_file/mkdir, finish with a short factual summary only after seeing ok:true.
 - For file and folder changes, use built-in file tools directly:
   create folder -> mkdir, create/overwrite file -> write_file, append -> append_file, delete file -> delete_file, delete folder -> delete_dir.
@@ -133,6 +140,8 @@ Rules:
   Good: "src/app.js", "tests/foo.py", "README.md"
   Bad:  "/Users/.../workspace/src/app.js", "../something", "~/file.txt"
 - For ESP/Arduino serial port discovery, use list_serial_ports. Do NOT run ls/find on /dev.
+- For GitHub repository status, metadata and issues, prefer github_status, github_repo, github_issues and github_create_issue. They use origin automatically and authenticate through GITHUB_TOKEN, GH_TOKEN, or GitHub CLI.
+- Use git through run_command for status/diff/commit/pull/push. Never expose authentication tokens in output or files.
 - If a required project choice is ambiguous and guessing could waste time or damage files/devices, call ask_user with a short question and 2-4 concrete choices.
 - Inspect files before editing when the task touches existing code.
 - Prefer small, focused edits.

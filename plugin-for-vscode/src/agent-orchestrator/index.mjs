@@ -36,11 +36,16 @@ export async function runAgentTask(
         autoSkill: options.autoSkill !== false,
       });
 
+  // Снимок страницы нужен только специализированному browser-only агенту.
+  // Обычный code/chat-агент получает provider web search и не должен
+  // отвлекаться на случайно открытую пользователем вкладку.
   let browserContext = "";
-  try {
-    const { buildBrowserContextSection } = await import("../window-app/browser-snapshot.mjs");
-    browserContext = await buildBrowserContextSection();
-  } catch {}
+  if (browserOnly) {
+    try {
+      const { buildBrowserContextSection } = await import("../window-app/browser-snapshot.mjs");
+      browserContext = await buildBrowserContextSection();
+    } catch {}
+  }
 
   return runCodeTask(client, baseOptions, workspaceRoot, task, parentMessageId, {
     ...options,

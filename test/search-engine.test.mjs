@@ -62,7 +62,10 @@ describe("search-engine", () => {
 
   it("extracts the query from a Google sorry continue URL", () => {
     const continued = encodeURIComponent("https://www.google.com/search?q=ai-free");
-    const fallback = buildBlockedSearchFallback(`https://sorry.google.com/sorry/index?continue=${continued}`);
+    const fallback = buildBlockedSearchFallback(
+      `https://sorry.google.com/sorry/index?continue=${continued}`,
+      { locale: "en" },
+    );
     assert.ok(fallback);
     assert.equal(fallback.query, "ai-free");
     assert.match(fallback.url, /duckduckgo\.com/);

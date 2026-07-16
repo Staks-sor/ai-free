@@ -9,7 +9,6 @@ import {
 
 function isImportantMemory({ type, content = "", tags = [], meta = {} }) {
   const text = String(content).toLowerCase();
-
   if (Array.isArray(tags) && tags.length > 0) return true;
 
   const keywords = [
@@ -17,16 +16,14 @@ function isImportantMemory({ type, content = "", tags = [], meta = {} }) {
     "implement", "update", "change", "remove", "delete", "install",
     "config", "fail", "issue",
   ];
-
   if (keywords.some((k) => text.includes(k))) return true;
   if (meta?.important === true) return true;
-
   return false;
 }
 
-export function addMemory({ type = "note", content = "", tags = [], workspace = "", meta = {} }) {
+export function addMemory({ id, type = "note", content = "", tags = [], workspace = "", meta = {} }) {
   if (!isImportantMemory({ type, content, tags, meta })) return null;
-  return insertMemoryItem({ type, content, tags, workspace, meta });
+  return insertMemoryItem({ id, type, content, tags, workspace, meta });
 }
 
 export function searchMemory(query = "", workspace = "") {
@@ -43,15 +40,12 @@ export function getMemoryById(id) {
 
 export function extractFromToolLogs(task, toolLogs = [], workspace = "") {
   let saved = 0;
-
   for (const log of toolLogs) {
     if (!log) continue;
     const text = String(log);
-
     const hasError = text.includes("error") || text.includes("Error");
     const hasFile = text.includes("write_file") || text.includes("read_file");
     const hasCmd = text.includes("run_command") || text.includes("run_shell");
-
     if (!hasError && !hasFile && !hasCmd) continue;
 
     const item = addMemory({
@@ -63,7 +57,6 @@ export function extractFromToolLogs(task, toolLogs = [], workspace = "") {
     });
     if (item) saved += 1;
   }
-
   return saved;
 }
 

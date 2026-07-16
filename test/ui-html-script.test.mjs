@@ -77,19 +77,54 @@ describe("ui-html inline script", () => {
     assert.match(html, /https:\/\/github\.com\/Staks-sor\/ai-free/);
     assert.match(html, /https:\/\/vibe\.stas-sor\.ru\//);
     assert.match(html, /AI Free на GitHub/);
-    assert.match(html, /Здесь может быть ваша реклама/);
-    assert.match(html, /VIBE: месяц за 100 ₽/);
-    assert.match(html, /−75% по промокоду AIFREE/);
+    assert.match(html, /Разместить рекламу/);
+    assert.match(html, /Написать @Staks_sor в Telegram/);
+    assert.match(html, /https:\/\/t\.me\/Staks_sor/);
+    assert.doesNotMatch(html, /mailto:hello@stas-sor\.ru/);
+    assert.match(html, /Поддержи AI Free/);
+    assert.match(html, /VIBE на месяц — 200 ₽/);
+    assert.match(html, /Поддержать развитие AI Free/);
+    assert.match(html, /сервиса для приватного и стабильного доступа к интернету/);
+    assert.match(html, /помогаете оплачивать разработку, серверы и новые функции проекта/);
     assert.match(html, /id="vibePromoOverlay"/);
-    assert.match(html, />ПРОМОКОД<\/span><code>AIFREE<\/code>/);
-    assert.match(html, />Сайт<\/a>/);
-    assert.match(html, />Telegram-бот<\/a>/);
+    assert.match(html, />ПРОМОКОД<\/span><code>AIFREE50<\/code>/);
+    assert.match(html, />Подробнее<\/a>/);
+    assert.match(html, />Поддержать за 200 ₽<\/a>/);
     assert.match(html, /https:\/\/t\.me\/payments_meBot/);
     assert.doesNotMatch(html, /vibePromoToast/);
+    assert.doesNotMatch(html, /Приватный и стабильный доступ к интернету/);
     assert.match(html, /sidebarPromoShift/);
     assert.match(html, /sidebarPromoGlint/);
     assert.match(html, /sidebarPromoMarkPulse/);
     assert.match(html, /\.sidebarPromo\s*\{/);
+  });
+
+  it("renders the EconomyOS BYOK integration without embedding a shared key", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /EconomyOS by Virtuals/);
+    assert.match(html, /https:\/\/compute\.virtuals\.io\/v1/);
+    assert.match(html, /https:\/\/app\.virtuals\.io\/acp\/agents/);
+    assert.match(html, /\/api\/settings\/economyos/);
+    assert.match(html, /input\.type = "password"/);
+    assert.doesNotMatch(html, /VIRTUALS_API_KEY\s*=/);
+  });
+
+  it("opens EconomyOS API settings from the new-chat authorization button", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /if \(id === "economyos"\) \{\s*closeNewChatModal\(\);\s*await openSettings\("api"\);/);
+    assert.doesNotMatch(html, /\bcloseNewChat\(\)/);
+  });
+
+  it("reads EconomyOS replies through the NDJSON streaming path", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /\["qwen", "chatgpt", "deepseek", "economyos"\]\.includes\(sendProvider\)/);
+  });
+
+  it("sends EconomyOS images inline instead of uploading them through DeepSeek", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /sendProvider === "chatgpt" \|\| sendProvider === "economyos"/);
+    assert.match(html, /displayImages: inlineImages\.length \? \[\] : imageFiles\.map/);
+    assert.match(html, /images: imageFiles\.map\(\(image\) => "data:" \+ image\.mimeType/);
   });
 
   it("shows Coder and ESP controls for ChatGPT conversations", () => {

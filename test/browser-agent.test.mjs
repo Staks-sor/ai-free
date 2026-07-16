@@ -1,18 +1,44 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { resolveAgentTaskInput } from "../src/code-agent/task-input.mjs";
-import { createBrowserSystemPrompt, BROWSER_AGENT_TOOLS } from "../src/code-agent/browser-prompt.mjs";
-import { appendBrowserContextToPrompt } from "../src/window-app/browser-snapshot.mjs";
+import { createBrowserSystemPrompt } from "../src/code-agent/browser-prompt.mjs";
+import {
+  appendBrowserContextToPrompt,
+  shouldAutoRunBrowserTask,
+  shouldAutoRunBrowserTaskWithSnapshot,
+  shouldPreferBrowserOverProviderSearch,
+} from "../src/window-app/browser-snapshot.mjs";
+import { isToolAllowed } from "../src/skills/permissions.mjs";
 
-describe("browser agent (Codex-style)", () => {
-  it("routes web tasks to browser-only agent, not full code agent", () => {
-    const input = resolveAgentTaskInput("найди в гугле курс доллара", {
-      autoBrowserMode: true,
-      autoCodeMode: false,
-    });
-    assert.equal(input.run, true);
-    assert.equal(input.browserOnly, true);
-    assert.equal(input.slash, false);
+describe("browser agent (explicit page work only)", () => {
+  it("does not route ordinary internet research to the browser", async () => {
+    for (const task of [
+      "найди курс доллара",
+      "узнай последние новости Мурманска",
+      "найди в гугле погоду на завтра",
+      "собери информацию о Node.js",
+    ]) {
+      assert.equal(shouldAutoRunBrowserTask(task), false, task);
+      assert.equal(await shouldAutoRunBrowserTaskWithSnapshot(task), false, task);
+      assert.equal(await shouldPreferBrowserOverProviderSearch(task), false, task);
+    }
+  });
+
+  it("routes explicit page parsing and interaction to browser-only agent", () => {
+    for (const task of [
+      "открой https://example.com и спарси таблицу",
+      "нажми кнопку Войти на сайте example.com",
+      "в браузере открой страницу и прими cookies",
+      "прочитай страницу https://example.com/docs",
+    ]) {
+      assert.equal(shouldAutoRunBrowserTask(task), true, task);
+      const input = resolveAgentTaskInput(task, {
+        autoBrowserMode: true,
+        autoCodeMode: false,
+      });
+      assert.equal(input.run, true);
+      assert.equal(input.browserOnly, true);
+    }
   });
 
   it("keeps /code as full code agent even for browser wording", () => {
@@ -29,8 +55,15 @@ describe("browser agent (Codex-style)", () => {
     assert.equal(out, "привет");
   });
 
+  it("hard-blocks browser tools unless browser-only whitelist is active", () => {
+    assert.equal(isToolAllowed("browser_navigate", null), false);
+    assert.equal(isToolAllowed("browser_snapshot", ["read_file"]), false);
+    assert.equal(isToolAllowed("browser_navigate", ["browser_navigate", "finish"]), true);
+    assert.equal(isToolAllowed("read_file", null), true);
+  });
+
   it("browser prompt avoids Google search examples", () => {
-    const prompt = createBrowserSystemPrompt("найди Мурманск новости сегодня");
+    const prompt = createBrowserSystemPrompt("спарси страницу с новостями");
     assert.match(prompt, /yandex\.ru\/search/);
     assert.doesNotMatch(prompt, /\{"tool":"browser_navigate","url":"https:\/\/www\.google\.com"/);
     assert.match(prompt, /captcha/i);

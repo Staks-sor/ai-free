@@ -12,9 +12,7 @@ export const WEB_BROWSER_PROFILE = path.join(os.homedir(), ".deepseek-cli", "web
 export const WEB_BROWSER_DEFAULT_VIEWPORT = { width: 960, height: 720 };
 
 const WEB_BROWSER_PERF_ARGS = [
-  "--disable-blink-features=AutomationControlled",
   "--disable-dev-shm-usage",
-  "--disable-gpu",
   "--disable-extensions",
   "--disable-sync",
   "--disable-background-networking",
@@ -22,7 +20,6 @@ const WEB_BROWSER_PERF_ARGS = [
   "--disable-backgrounding-occluded-windows",
   "--disable-renderer-backgrounding",
   "--mute-audio",
-  "--hide-scrollbars",
   "--no-first-run",
 ];
 
@@ -112,11 +109,17 @@ async function launchWebBrowserContext() {
   const { getChatGPTChromium } = await import("../providers/chatgpt/engine.mjs");
   const chromium = await getChatGPTChromium();
   const viewport = getWebBrowserViewport();
+  // Браузер работает без собственного окна; интерфейс передаётся во встроенную Web-панель AI Free.
   const context = await launchPersistentDeepSeekContext(chromium, WEB_BROWSER_PROFILE, true, {
-    channel: "",
+    channel: "chrome",
     viewport,
+    locale: "ru-RU",
     reducedMotion: "reduce",
-    args: WEB_BROWSER_PERF_ARGS,
+    ignoreDefaultArgs: ["--enable-automation"],
+    args: [
+      ...WEB_BROWSER_PERF_ARGS,
+      `--window-size=${viewport.width},${viewport.height}`,
+    ],
   });
   await installPerfInitScripts(context);
   await installSearchNavigationGuard(context);
@@ -162,8 +165,8 @@ export function getWebBrowserContextPromise() {
 export async function captureWebBrowserJpeg(page) {
   return page.screenshot({
     type: "jpeg",
-    quality: 50,
-    timeout: 8000,
+    quality: 62,
+    timeout: 5000,
     animations: "disabled",
   });
 }
@@ -184,7 +187,7 @@ export async function resetWebBrowser() {
   contextPromise = null;
   pageRef = null;
   cleanupWebBrowserProfileLocks();
-  return { ok: true, engine: "patchright-headless" };
+  return { ok: true, engine: "google-chrome-headed" };
 }
 
 function cleanupWebBrowserProfileLocks() {

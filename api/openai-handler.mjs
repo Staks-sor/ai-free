@@ -30,6 +30,8 @@ import { parseModelToolCalls } from "./tool-calls.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
+import { EconomyOSClient } from "../src/providers/economyos/client.mjs";
+import { getEconomyOSSettings } from "../src/state/settings.mjs";
 
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.
 let qwenClient = null;
@@ -85,6 +87,19 @@ async function getChatGPTClient() {
     debug: Boolean(process.env.API_DEBUG),
   });
   return chatgptClient;
+}
+
+let economyOSClient = null;
+async function getEconomyOSClient() {
+  const config = getEconomyOSSettings();
+  if (!config.apiKey) {
+    throw new Error("EconomyOS не подключён. Добавьте свой ключ в Настройки → API.");
+  }
+  if (economyOSClient?.apiKey === config.apiKey && economyOSClient?.baseUrl === config.baseUrl) {
+    return economyOSClient;
+  }
+  economyOSClient = new EconomyOSClient(config);
+  return economyOSClient;
 }
 
 export async function handleRequest(req, res) {
@@ -238,6 +253,14 @@ async function handleChatCompletions(req, res) {
         prompt,
         model: mapping.model,
       });
+      return sendJson(res, toOpenAIResponse(modelName, result.text));
+    }
+    if (mapping.provider === "economyos") {
+      const client = await getEconomyOSClient();
+      if (body.stream === true) {
+        return handleEconomyOSStream(client, prompt, modelName, mapping.model, res);
+      }
+      const result = await client.complete({ prompt, model: mapping.model });
       return sendJson(res, toOpenAIResponse(modelName, result.text));
     }
     return sendError(res, 500, `Unknown provider: ${mapping.provider}`);
@@ -501,6 +524,11 @@ async function completeText(mapping, prompt, { thinking = false, search = false 
       prompt,
       model: mapping.model,
     });
+    return result.text || "";
+  }
+  if (mapping.provider === "economyos") {
+    const client = await getEconomyOSClient();
+    const result = await client.complete({ prompt, model: mapping.model });
     return result.text || "";
   }
 
@@ -885,6 +913,28 @@ async function handleChatGPTStream(client, prompt, modelName, model, res) {
   } catch (e) {
     console.error("[API] ChatGPT stream error:", e.message);
     sendStreamError(res, modelName, e.message);
+  }
+}
+
+async function handleEconomyOSStream(client, prompt, modelName, model, res) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const parser = new StreamParser(modelName, res);
+  try {
+    await client.complete({
+      prompt,
+      model,
+      onText: (textDelta) => parser.onText(textDelta),
+    });
+    parser.onEnd();
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (error) {
+    console.error("[API] EconomyOS stream error:", error.message);
+    sendStreamError(res, modelName, error.message);
   }
 }
 

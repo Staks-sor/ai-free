@@ -45,9 +45,10 @@ describe("browser service", () => {
     assert.equal(defs.find((d) => d.name === "browser_click")?.inputSchema?.properties?.ref?.type, "string");
   });
 
-  it("allows new browser tools in restrictive skills", () => {
+  it("requires an explicit browser-only whitelist for browser tools", () => {
     const allowed = ["read_file"];
-    assert.equal(isToolAllowed("browser_scroll", allowed), true);
-    assert.equal(isToolAllowed("browser_wait", allowed), true);
+    assert.equal(isToolAllowed("browser_scroll", allowed), false);
+    assert.equal(isToolAllowed("browser_wait", allowed), false);
+    assert.equal(isToolAllowed("browser_scroll", ["browser_scroll", "browser_wait"]), true);
   });
 });

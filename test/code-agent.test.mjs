@@ -323,13 +323,51 @@ describe("validateCommandArgs", () => {
   });
 });
 
+describe("owner approval guard", () => {
+  it("blocks file deletion until explicitly approved", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dscli-approval-"));
+    try {
+      fs.writeFileSync(path.join(dir, "keep.txt"), "keep");
+      await assert.rejects(
+        () => executeWorkspaceTool(dir, { tool: "delete_file", path: "keep.txt" }),
+        (error) => error.permissionRequest?.permissionKey === "allowDestructiveActions",
+      );
+      assert.equal(fs.existsSync(path.join(dir, "keep.txt")), true);
+      const result = await executeWorkspaceTool(
+        dir,
+        { tool: "delete_file", path: "keep.txt" },
+        { allowDestructiveActions: true },
+      );
+      assert.equal(result.deleted, true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows GitHub reads but blocks external writes until approved", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dscli-external-"));
+    try {
+      await assert.rejects(
+        () => executeWorkspaceTool(dir, { tool: "github_create_issue", title: "x", body: "", labels: [] }),
+        (error) => error.permissionRequest?.permissionKey === "allowExternalWrites",
+      );
+      await assert.rejects(
+        () => executeWorkspaceTool(dir, { tool: "run_command", cmd: "git", args: ["push"] }),
+        (error) => error.permissionRequest?.permissionKey === "allowExternalWrites",
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("executeWorkspaceTool delete_file", () => {
   it("deletes a file inside the workspace", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
     const file = path.join(dir, "setup_venv.py");
     fs.writeFileSync(file, "print('x')", "utf8");
     try {
-      const result = await executeWorkspaceTool(dir, { tool: "delete_file", path: "setup_venv.py" });
+      const result = await executeWorkspaceTool(dir, { tool: "delete_file", path: "setup_venv.py" }, { allowDestructiveActions: true });
       assert.deepEqual(result, {
         ok: true,
         path: "setup_venv.py",
@@ -347,7 +385,7 @@ describe("executeWorkspaceTool delete_file", () => {
     fs.mkdirSync(path.join(dir, "nested"));
     try {
       await assert.rejects(
-        () => executeWorkspaceTool(dir, { tool: "delete_file", path: "nested" }),
+        () => executeWorkspaceTool(dir, { tool: "delete_file", path: "nested" }, { allowDestructiveActions: true }),
         /directory/i,
       );
       assert.equal(fs.existsSync(path.join(dir, "nested")), true);
@@ -362,7 +400,7 @@ describe("executeWorkspaceTool delete_dir", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-delete-dir-"));
     fs.mkdirSync(path.join(dir, "empty"));
     try {
-      const result = await executeWorkspaceTool(dir, { tool: "delete_dir", path: "empty" });
+      const result = await executeWorkspaceTool(dir, { tool: "delete_dir", path: "empty" }, { allowDestructiveActions: true });
       assert.equal(result.ok, true);
       assert.equal(result.deleted, true);
       assert.equal(fs.existsSync(path.join(dir, "empty")), false);
@@ -376,7 +414,7 @@ describe("executeWorkspaceTool delete_dir", () => {
     fs.mkdirSync(path.join(dir, "nonempty"));
     fs.writeFileSync(path.join(dir, "nonempty", "file.txt"), "x");
     try {
-      const result = await executeWorkspaceTool(dir, { tool: "delete_dir", path: "nonempty" });
+      const result = await executeWorkspaceTool(dir, { tool: "delete_dir", path: "nonempty" }, { allowDestructiveActions: true });
       assert.equal(result.ok, true);
       assert.equal(result.deleted, true);
       assert.equal(fs.existsSync(path.join(dir, "nonempty")), false);
@@ -390,7 +428,7 @@ describe("executeWorkspaceTool delete_dir", () => {
     fs.writeFileSync(path.join(dir, "file.txt"), "x");
     try {
       await assert.rejects(
-        () => executeWorkspaceTool(dir, { tool: "delete_dir", path: "file.txt" }),
+        () => executeWorkspaceTool(dir, { tool: "delete_dir", path: "file.txt" }, { allowDestructiveActions: true }),
         /not a directory/i,
       );
       assert.equal(fs.existsSync(path.join(dir, "file.txt")), true);
@@ -542,6 +580,7 @@ describe("runCodeTask transient text retries", () => {
       };
       const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "delete setup_venv.py", null, {
         transientTextRetries: 1,
+        executionPermissions: { allowDestructiveActions: true },
       });
       assert.equal(calls, 3);
       assert.equal(result.message, "Удалил setup_venv.py");
@@ -965,5 +1004,77 @@ describe("truncateOutput", () => {
     assert.equal(truncateOutput(null), "");
     assert.equal(truncateOutput(undefined), "");
     assert.equal(truncateOutput(42), "42");
+  });
+});
+
+describe("read_file path recovery", () => {
+  it("reads a relative file when the model repeats the workspace folder name", async () => {
+    const { executeWorkspaceTool } = await import("../src/code-agent/executor.mjs");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-read-"));
+    const namedRoot = path.join(root, "demo-project");
+    fs.mkdirSync(namedRoot);
+    fs.writeFileSync(path.join(namedRoot, "hello.txt"), "привет", "utf8");
+    try {
+      const result = await executeWorkspaceTool(namedRoot, {
+        tool: "read_file",
+        path: "demo-project/hello.txt",
+      });
+      assert.equal(result.content, "привет");
+      assert.equal(result.path, "hello.txt");
+      assert.equal(result.truncated, false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("native code agent checkpoints", () => {
+  it("resumes after an API failure without executing a completed tool twice", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-resume-"));
+    let apiCalls = 0;
+    let checkpoint = null;
+    const client = {
+      supportsNativeTools: true,
+      async complete(options) {
+        apiCalls += 1;
+        if (apiCalls === 1) {
+          return {
+            text: "",
+            toolCall: { id: "call_write", name: "write_file", arguments: { path: "result.txt", content: "once" } },
+            lastAssistantMessageId: "assistant-1",
+          };
+        }
+        if (apiCalls === 2) {
+          assert.equal(options.toolResult.toolCallId, "call_write");
+          const error = new Error("rate limited");
+          error.retryable = true;
+          throw error;
+        }
+        assert.equal(options.toolResult.toolCallId, "call_write");
+        return {
+          text: "",
+          toolCall: { id: "call_finish", name: "finish", arguments: { message: "Completed" } },
+          lastAssistantMessageId: "assistant-2",
+        };
+      },
+    };
+
+    try {
+      await assert.rejects(() => runCodeTask(client, {}, root, "Create result.txt", null, {
+        onCheckpoint: (value) => { checkpoint = value; },
+      }), /rate limited/);
+      assert.equal(fs.readFileSync(path.join(root, "result.txt"), "utf8"), "once");
+      assert.equal(checkpoint.pendingToolResult.toolCallId, "call_write");
+
+      const result = await runCodeTask(client, {}, root, checkpoint.task, null, {
+        resumeState: checkpoint,
+      });
+      assert.equal(result.message, "Completed");
+      assert.equal(result.toolLogs.filter((log) => log.includes("write_file")).length, 1);
+      assert.equal(fs.readFileSync(path.join(root, "result.txt"), "utf8"), "once");
+      assert.equal(apiCalls, 3);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

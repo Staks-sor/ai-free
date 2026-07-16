@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests and architecture checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            plugin-for-vscode/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install VS Code extension dependencies
+        working-directory: plugin-for-vscode
+        run: npm ci --ignore-scripts
+
+      - name: Check versions, catalogs, EconomyOS, and artifacts
+        run: npm run check:ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check VS Code extension build
+        working-directory: plugin-for-vscode
+        run: npm run build

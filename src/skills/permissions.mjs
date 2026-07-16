@@ -3,6 +3,9 @@
 const ALWAYS_ALLOWED = new Set([
   "finish",
   "ask_user",
+]);
+
+const BROWSER_TOOLS = new Set([
   "browser_snapshot",
   "browser_navigate",
   "browser_click",
@@ -25,11 +28,20 @@ export function isToolAllowed(toolName, allowedTools) {
   const tool = String(toolName || "").trim();
   if (!tool) return false;
   if (ALWAYS_ALLOWED.has(tool)) return true;
+
+  // Браузер закрыт для обычных chat/code-агентов. Он доступен только когда
+  // оркестратор явно передал browser-only whitelist для работы со страницей.
+  if (BROWSER_TOOLS.has(tool)) {
+    return Array.isArray(allowedTools) && allowedTools.includes(tool);
+  }
+
   if (!Array.isArray(allowedTools) || !allowedTools.length) return true;
   return allowedTools.includes(tool);
 }
 
 export function formatAllowedToolsHint(allowedTools) {
-  if (!Array.isArray(allowedTools) || !allowedTools.length) return "";
+  if (!Array.isArray(allowedTools) || !allowedTools.length) {
+    return "Browser tools are disabled for this agent. Use provider web search for internet research; the managed browser is reserved for explicit page parsing and interaction tasks.";
+  }
   return `Active skill restricts tools to: ${allowedTools.join(", ")} (+ finish, ask_user).`;
 }

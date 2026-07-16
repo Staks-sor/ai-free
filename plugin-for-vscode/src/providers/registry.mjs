@@ -11,6 +11,7 @@ import { QWEN_AUTH_FILE } from "./qwen/config.mjs";
 import { CHATGPT_AUTH_FILE } from "./chatgpt/config.mjs";
 import { isChatGPTAuthUsable, readChatGPTAuth } from "./chatgpt/auth-files.mjs";
 import { isChatGPTBrowserProxyActive } from "./chatgpt/browser-proxy.mjs";
+import { getEconomyOSSettings } from "../state/settings.mjs";
 
 export const PROVIDERS = {
   deepseek: {
@@ -44,6 +45,16 @@ export const PROVIDERS = {
     async login() {
       const { loginChatGPTAndSave } = await import("./chatgpt/browser-login.mjs");
       await loginChatGPTAndSave();
+    },
+  },
+  economyos: {
+    id: "economyos",
+    name: "EconomyOS",
+    description: "Virtuals Compute — OpenAI-compatible API с личными кредитами пользователя",
+    authFile: null,
+    hasAuth: () => Boolean(getEconomyOSSettings().apiKey),
+    async login() {
+      throw new Error("Добавьте свой EconomyOS API-ключ в Настройки → API.");
     },
   },
 };

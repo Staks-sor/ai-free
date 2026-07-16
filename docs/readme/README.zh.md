@@ -22,8 +22,10 @@
   <img src="https://img.shields.io/github/package-json/v/Staks-sor/ai-free?style=flat-square&amp;label=版本" alt="版本">
   <img src="https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-8250df?style=flat-square" alt="macOS, Linux, Windows">
   <img src="https://img.shields.io/badge/Node.js-18%2B-1f883d?style=flat-square" alt="Node.js 18+">
-  <img src="https://img.shields.io/badge/服务商-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
+  <img src="https://img.shields.io/badge/服务商-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20EconomyOS-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, EconomyOS">
 </p>
+
+<p align="center"><strong>AI Free 0.4.0</strong></p>
 
 > 将免费 AI 网页聊天集中到一个界面的命令行和桌面应用。目前支持 **DeepSeek、Qwen 和 ChatGPT**，可运行于 macOS、Linux 和 Windows。
 

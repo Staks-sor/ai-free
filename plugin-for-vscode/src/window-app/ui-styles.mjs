@@ -654,6 +654,21 @@ export const STYLES = `
       border-radius: 8px;
       padding: 12px;
     }
+    .economyActions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .economyActions .iconBtn {
+      width: auto;
+      padding: 0 12px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
     .apiSettingsGrid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -1223,6 +1238,42 @@ export const STYLES = `
       color: var(--text);
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
       transition: all 120ms ease;
+    }
+    .toolLogs {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 10px;
+      white-space: normal;
+    }
+    .toolLog {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.14);
+    }
+    .toolLog summary {
+      padding: 7px 10px;
+      color: var(--muted);
+      font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+      cursor: pointer;
+      user-select: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .toolLog summary:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.035);
+    }
+    .toolLog pre {
+      max-height: 320px;
+      margin: 0;
+      padding: 9px 10px;
+      overflow: auto;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font: 11px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+      white-space: pre;
     }
     .msg.streaming .streamingText::after {
       content: "▋";
