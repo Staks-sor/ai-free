@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3
+
+- Fixed Qwen code-agent recovery when the model responds without workspace tool calls.
+- Reduced wasted Qwen web requests and handled the temporary `The chat is in progress` state.
+- Synced Qwen search capabilities with the live model catalog and added Qwen3.8 Max Preview.
+- Kept desktop and VS Code provider, agent and model behavior synchronized.
+
 ## 0.4.0
 
 - Added EconomyOS as a BYOK provider with selectable Virtuals Compute models.

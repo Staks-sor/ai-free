@@ -34,17 +34,18 @@ export function buildContinuationPrompt({
 }
 
 export function buildNoToolCorrectionPrompt(workspaceRoot, task, previousText, { browserOnly = false } = {}) {
-  const browserTask = browserOnly || /(найди|найти|поиск|search|открой|нажми|кликн|browser|google|cookie|consent|accept|принять)/iu.test(String(task || ""));
-  const browserHint = browserTask
-    ? "Start with browser_snapshot, then browser_navigate if needed, browser_click/browser_type by ref (e1, e2…), browser_scroll/browser_wait as needed. Never claim web actions without tool results."
-    : "output exactly one JSON tool call to start executing the task. Do not use provider-native tools or function calling. The tools exist only in AI Free and must be requested as plain JSON text, for example {\"tool\":\"list_files\",\"path\":\".\",\"maxDepth\":4}.";
-  return `No tool call has been executed yet. You claimed progress without using workspace tools.
+  const requiredCall = browserOnly
+    ? '{"tool":"browser_snapshot","maxTextChars":8000,"includeScreenshot":true}'
+    : '{"tool":"list_files","path":".","maxDepth":4,"maxEntries":500}';
+  const previous = String(previousText || "").trim().slice(0, 1200);
+  return `TOOL CALL REQUIRED. Your previous response did not execute anything.
 Task: ${task}
 Workspace: ${workspaceRoot}
-Your previous text-only response:
-${previousText}
+Previous invalid text-only response:
+${previous}
 
-Fix this now: ${browserHint}`;
+Reply with exactly this one-line JSON object and no prose, markdown, explanation, or provider-native function call:
+${requiredCall}`;
 }
 
 export function shouldRejectTextOnlyCodeResult(task, text, toolLogs = []) {
@@ -70,7 +71,7 @@ export function shouldRejectTextOnlyCodeResult(task, text, toolLogs = []) {
     return true;
   }
 
-  const browserTask = /(найди|найти|поиск|search|открой|нажми|кликн|browser|google|гугл|сайт|страниц|узнай|собери|загугли|cookie|consent|accept|принять)/iu.test(taskText);
+  const browserTask = /(найди|найти|поиск|поищи|посмотри|взгляни|сравни|как\s+выглядит|search|look\s+up|browse|compare|open\s+(?:the\s+)?(?:site|page)|открой|нажми|кликн|browser|google|гугл|сайт|страниц|узнай|собери|загугли|cookie|consent|accept|принять)/iu.test(taskText);
   if (browserTask && toolLogs.length === 0) {
     const claimsWebAction = /(выполнил|искал|search|нашёл|found|results|результат|открыл|clicked|перешёл|провёл поиск|here are|вот результаты)/iu.test(answerLower);
     if (claimsWebAction) return true;

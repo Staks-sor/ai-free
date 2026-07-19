@@ -65,8 +65,11 @@ export async function runCodeTask(
   const toolLogs = Array.isArray(resumeState?.toolLogs) ? [...resumeState.toolLogs] : [];
   const maxToolSteps = resolveMaxToolSteps(options.maxToolSteps);
   const maxTransientRetries = resolveTransientTextRetries(options.transientTextRetries);
-  const maxNoToolRetries = resolveNoToolTextRetries(options.noToolTextRetries);
+  const maxNoToolRetries = resolveNoToolTextRetries(
+    options.noToolTextRetries ?? client?.noToolTextRetries,
+  );
   let noToolRetries = 0;
+  let repairingMissingTool = false;
 
   const memoryUsedCount = Number(options.memoryUsedCount) || 0;
   const graphUsedCount = Number(options.graphUsedCount) || 0;
@@ -101,6 +104,7 @@ export async function runCodeTask(
       });
       const result = await client.complete({
         ...baseOptions,
+        ...(repairingMissingTool ? { searchEnabled: false } : {}),
         prompt,
         parentMessageId: parent,
         ...(nativeTools ? {
@@ -134,6 +138,7 @@ export async function runCodeTask(
             return finish({ parentMessageId: parent, message, toolLogs });
           }
           noToolRetries += 1;
+          repairingMissingTool = true;
           prompt = buildNoToolCorrectionPrompt(workspaceRoot, task, result.text, { browserOnly });
           continue;
         }
@@ -143,6 +148,7 @@ export async function runCodeTask(
       }
 
       parent = nextParent;
+      repairingMissingTool = false;
 
       if (!isToolAllowed(call.tool, allowedTools)) {
         const blocked = {

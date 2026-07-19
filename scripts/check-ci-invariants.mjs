@@ -65,6 +65,41 @@ check("desktop and VS Code EconomyOS clients are synchronized", () => {
   );
 });
 
+check("desktop and VS Code Qwen clients are synchronized", () => {
+  assert.equal(
+    read("plugin-for-vscode/src/providers/qwen/client.mjs"),
+    read("src/providers/qwen/client.mjs"),
+  );
+});
+
+check("desktop and VS Code Qwen model sync is synchronized", () => {
+  assert.equal(
+    read("plugin-for-vscode/src/providers/qwen/model-sync.mjs"),
+    read("src/providers/qwen/model-sync.mjs"),
+  );
+});
+
+check("desktop and VS Code Qwen agent adapters are synchronized", () => {
+  assert.equal(
+    read("plugin-for-vscode/src/providers/qwen/agent-adapter.mjs"),
+    read("src/providers/qwen/agent-adapter.mjs"),
+  );
+});
+
+check("desktop and VS Code code-agent recovery prompts are synchronized", () => {
+  assert.equal(
+    read("plugin-for-vscode/src/code-agent/loop-helpers.mjs"),
+    read("src/code-agent/loop-helpers.mjs"),
+  );
+});
+
+check("desktop and VS Code code-agent loops are synchronized", () => {
+  assert.equal(
+    read("plugin-for-vscode/src/code-agent/run.mjs"),
+    read("src/code-agent/run.mjs"),
+  );
+});
+
 check("EconomyOS integration has implementation, tests, and documentation", () => {
   const required = [
     "src/providers/economyos/client.mjs",

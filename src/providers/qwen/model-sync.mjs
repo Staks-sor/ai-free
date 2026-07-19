@@ -6,6 +6,7 @@ let cache = null;
 
 export const QWEN_SUPPORTED_WEB_MODEL_IDS = new Set([
   "qwen3.7-plus",
+  "qwen3.8-max-preview",
   "qwen3.7-max",
   "qwen-latest-series-invite-beta-v24",
   "qwen-latest-series-invite-beta-v16",
@@ -107,4 +108,9 @@ export async function getQwenLiveCatalogOverride(options = {}) {
     ],
     models,
   };
+}
+
+export function qwenLiveModelSupportsSearch(catalog, modelId) {
+  const model = catalog?.models?.find((item) => item.id === modelId);
+  return model ? model.search === true : true;
 }

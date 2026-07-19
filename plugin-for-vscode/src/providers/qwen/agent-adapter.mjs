@@ -13,6 +13,9 @@
 
 export function createQwenAgentAdapter(qwenClient) {
   return {
+    // Qwen web chat has a small request budget. One strict repair is enough;
+    // repeating ignored tool instructions only burns the user's quota.
+    noToolTextRetries: 1,
     async complete({
       sessionId,
       prompt,

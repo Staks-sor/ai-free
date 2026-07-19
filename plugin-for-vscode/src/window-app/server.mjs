@@ -465,6 +465,14 @@ export async function runWindowApp({
       : getProviderDefaultModel(provider, mode);
   }
 
+  async function resolveQwenSearchEnabled(modelId, prompt, body, globalDefault) {
+    const requested = await resolveProviderSearchEnabled(prompt, body, globalDefault);
+    if (!requested) return false;
+    const catalog = await getQwenCatalogOverrideSafe();
+    const { qwenLiveModelSupportsSearch } = await import("../providers/qwen/model-sync.mjs");
+    return qwenLiveModelSupportsSearch(catalog, modelId);
+  }
+
   async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}, signal = null) {
     const edges = state.pipeline?.edges || [];
     const queue = [{ conversationId: startConversationId, input: initialPrompt, sourceTitle: "User", depth: 0 }];
@@ -1661,7 +1669,12 @@ export async function runWindowApp({
               });
               const workspacePath = path.resolve(conversation.workspace || workspaceRoot);
               await prepareBrowserAgentTask(task);
-              const qwenCodeUseSearch = await resolveProviderSearchEnabled(task, body, searchEnabled);
+              const qwenCodeUseSearch = await resolveQwenSearchEnabled(
+                conversation.model,
+                task,
+                body,
+                searchEnabled,
+              );
               const baseOptions = {
                 sessionId: conversation.sessionId,
                 thinkingEnabled: body.thinking === true,
@@ -1729,7 +1742,12 @@ export async function runWindowApp({
             }
 
             const isQwenReasoning = findProviderModel("qwen", conversation.model)?.reasoning === true;
-            const qwenUseSearch = await resolveProviderSearchEnabled(prompt, body, searchEnabled);
+            const qwenUseSearch = await resolveQwenSearchEnabled(
+              conversation.model,
+              prompt,
+              body,
+              searchEnabled,
+            );
             let qwenPrompt = qwenUseSearch ? withWebSearchInstruction(prompt) : prompt;
 
             if (isRunning(conversation.id)) {

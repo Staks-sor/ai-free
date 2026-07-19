@@ -283,6 +283,13 @@ export class QwenChatClient {
             ? streamParser.finish(result.text)
             : parseQwenResponseText(result.text, result.contentType, onText);
 
+          if (attempt < 2 && isQwenChatInProgressError(parsed, result.text)) {
+            const waitMs = 1_500 * (attempt + 1);
+            if (this.debug) console.log(`[qwen] chat is still finalizing; retrying same turn in ${waitMs}ms…`);
+            await waitForQwenChat(waitMs);
+            continue;
+          }
+
           if (attempt < 2 && isQwenRecoverableStreamError(parsed, result.text)) {
             if (this.debug) console.log("[qwen] recoverable stream error, resetting browser proxy…");
             await resetQwenBrowserProxy();
@@ -711,4 +718,13 @@ export function isQwenRecoverableStreamError(parsed, rawText = "") {
   const blob = `${parsed?.error || ""}\n${parsed?.text || ""}\n${rawText}`.toLowerCase();
   if (isQwenSessionExpiredText(blob)) return false;
   return /bad_request|internal_error|непредвиденн|unexpected error/.test(blob);
+}
+
+export function isQwenChatInProgressError(parsed, rawText = "") {
+  const blob = `${parsed?.error || ""}\n${parsed?.text || ""}\n${rawText}`.toLowerCase();
+  return /chat\s+is\s+(?:still\s+)?in\s+progress|chat_in_progress/.test(blob);
+}
+
+function waitForQwenChat(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

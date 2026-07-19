@@ -28,6 +28,9 @@ import {
   shouldRejectTextOnlyCodeResult,
   runCodeTask,
 } from "../src/code-agent/run.mjs";
+import {
+  buildNoToolCorrectionPrompt,
+} from "../src/code-agent/loop-helpers.mjs";
 import { createCodeSystemPrompt } from "../src/code-agent/prompt.mjs";
 import { getCommandDescription } from "../src/i18n/command-descriptions.mjs";
 import { getLocalizedAgentRoles } from "../src/i18n/agent-roles.mjs";
@@ -592,15 +595,40 @@ describe("runCodeTask transient text retries", () => {
 });
 
 describe("runCodeTask text-only code responses", () => {
+  it("keeps visual-reference code tasks on the workspace tool protocol", () => {
+    const task = "посмотри как выглядит GTA 2 и сделай так же";
+    const prompt = buildNoToolCorrectionPrompt("/tmp/game", task, "Сейчас всё улучшу.");
+
+    assert.match(prompt, /Reply with exactly this one-line JSON object/);
+    assert.match(prompt, /\{"tool":"list_files","path":"\."/);
+    assert.doesNotMatch(prompt, /browser_snapshot/);
+  });
+
+  it("uses browser_snapshot only for the dedicated browser agent", () => {
+    const prompt = buildNoToolCorrectionPrompt("/tmp/game", "посмотри страницу", "Готово.", {
+      browserOnly: true,
+    });
+
+    assert.match(prompt, /\{"tool":"browser_snapshot"/);
+  });
+
+  it("forces local edit requests to begin with a workspace inspection", () => {
+    const prompt = buildNoToolCorrectionPrompt("/tmp/app", "исправь кнопку", "Готово.");
+
+    assert.match(prompt, /\{"tool":"list_files","path":"\."/);
+  });
+
   it("does not accept claimed file changes until a workspace tool runs", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
     const prompts = [];
+    const searchFlags = [];
     let calls = 0;
     try {
       const fakeClient = {
         async complete(options) {
           calls += 1;
           prompts.push(options.prompt);
+          searchFlags.push(options.searchEnabled);
           if (calls === 1) {
             return {
               text: "Готово, создал файл notes.txt.",
@@ -619,13 +647,14 @@ describe("runCodeTask text-only code responses", () => {
           };
         },
       };
-      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "создай notes.txt", null, {
+      const result = await runCodeTask(fakeClient, { sessionId: "s1", searchEnabled: true }, dir, "создай notes.txt", null, {
         noToolTextRetries: 1,
       });
       assert.equal(calls, 3);
       assert.equal(result.message, "Создал notes.txt");
       assert.equal(fs.readFileSync(path.join(dir, "notes.txt"), "utf8"), "ok\n");
-      assert.match(prompts[1], /No tool call has been executed yet/);
+      assert.match(prompts[1], /TOOL CALL REQUIRED/);
+      assert.deepEqual(searchFlags, [true, false, true]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

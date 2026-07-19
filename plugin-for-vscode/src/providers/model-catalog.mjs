@@ -95,6 +95,7 @@ export const PROVIDER_CATALOG = {
     ],
     models: [
       { id: "qwen3.7-plus", label: "Qwen3.7 Plus", sub: "default, актуальный web-default" },
+      { id: "qwen3.8-max-preview", label: "Qwen3.8 MAX Preview", sub: "новый флагманский preview" },
       { id: "qwen3.7-max", label: "Qwen3.7 MAX", sub: "мощнее, может требовать доступ" },
       { id: "qwen-latest-series-invite-beta-v24", label: "Qwen3.7 Max Preview", sub: "актуальный preview max" },
       { id: "qwen-latest-series-invite-beta-v16", label: "Qwen3.7 Plus Preview", sub: "актуальный preview plus" },

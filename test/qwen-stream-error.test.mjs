@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatQwenStreamError, formatQwenUserFacingError } from "../src/providers/qwen/client.mjs";
+import {
+  formatQwenStreamError,
+  formatQwenUserFacingError,
+  isQwenChatInProgressError,
+} from "../src/providers/qwen/client.mjs";
+import { createQwenAgentAdapter } from "../src/providers/qwen/agent-adapter.mjs";
 
 describe("Qwen SSE error parsing", () => {
+  it("limits ignored text-tool repairs to one extra Qwen request", () => {
+    const adapter = createQwenAgentAdapter({ complete: async () => ({ text: "", lastMessageId: null }) });
+    assert.equal(adapter.noToolTextRetries, 1);
+  });
+
   it("formats quota exceeded from error event", () => {
     const payload = {
       error: {
@@ -33,5 +43,16 @@ describe("Qwen SSE error parsing", () => {
     assert.ok(msg);
     assert.match(msg, /anti-bot/i);
     assert.doesNotMatch(msg, /Сессия Qwen устарела/);
+  });
+
+  it("recognizes the temporary chat-in-progress state in parsed and raw responses", () => {
+    assert.equal(isQwenChatInProgressError({
+      error: "Qwen вернул ошибку (Bad_Request): The chat is in progress!",
+    }), true);
+    assert.equal(isQwenChatInProgressError(null, JSON.stringify({
+      success: false,
+      data: { code: "Bad_Request", details: "Chat is still in progress" },
+    })), true);
+    assert.equal(isQwenChatInProgressError({ error: "Allocated quota exceeded" }), false);
   });
 });
