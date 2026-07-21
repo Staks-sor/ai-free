@@ -48,6 +48,7 @@ export const COMMAND_CATALOG = {
   tail:    { description: "Последние N строк файла",                           risk: "low",    enabledByDefault: true },
   wc:      { description: "Подсчёт строк / слов / байт",                       risk: "low",    enabledByDefault: true },
   diff:    { description: "Сравнение файлов",                                  risk: "low",    enabledByDefault: true },
+  cmp:     { description: "Побайтовое сравнение файлов",                        risk: "low",    enabledByDefault: true },
   jq:      { description: "JSON из командной строки",                          risk: "low",    enabledByDefault: true },
   yq:      { description: "YAML из командной строки",                          risk: "low",    enabledByDefault: true },
   env:     { description: "Переменные окружения",                              risk: "low",    enabledByDefault: true },
@@ -91,6 +92,40 @@ export const COMMAND_CATALOG = {
   sed: {
     description: "Замена/обработка текста",
     risk: "medium", enabledByDefault: true,
+  },
+  perl: {
+    description: "Perl: однострочники для обработки текста (system/exec/`backtick` заблокированы)",
+    risk: "medium", enabledByDefault: false,
+    validateArgs: (args) => {
+      const joined = args.join(" ");
+      if (/system\s*\(|exec\s*\(|`/.test(joined)) {
+        throw new Error("perl: system()/exec()/backticks заблокированы (потенциальный RCE).");
+      }
+    },
+  },
+  awk: {
+    description: "AWK: обработка текста построчно",
+    risk: "medium", enabledByDefault: false,
+  },
+  ruby: {
+    description: "Ruby: однострочники и скрипты (system/exec/`backtick` заблокированы)",
+    risk: "medium", enabledByDefault: false,
+    validateArgs: (args) => {
+      const joined = args.join(" ");
+      if (/system\s*\(|exec\s*\(|`/.test(joined)) {
+        throw new Error("ruby: system()/exec()/backticks заблокированы (потенциальный RCE).");
+      }
+    },
+  },
+  php: {
+    description: "PHP: CLI-однострочники (system/exec/shell_exec заблокированы)",
+    risk: "medium", enabledByDefault: false,
+    validateArgs: (args) => {
+      const joined = args.join(" ");
+      if (/\bsystem\s*\(|\bexec\s*\(|\bshell_exec\s*\(|\bpassthru\s*\(|`/.test(joined)) {
+        throw new Error("php: system()/exec()/shell_exec()/passthru()/backticks заблокированы (потенциальный RCE).");
+      }
+    },
   },
   chmod: {
     description: "Изменение прав (777, +x на всё — заблокированы)",

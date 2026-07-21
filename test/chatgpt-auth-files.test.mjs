@@ -1,8 +1,24 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
-import { sanitizeCookiesForStorage, pickEssentialChatGPTCookies, estimateCookieHeaderBytes } from "../src/providers/chatgpt/auth-files.mjs";
+import { sanitizeCookiesForStorage, pickEssentialChatGPTCookies, estimateCookieHeaderBytes, isChatGPTAuthUsable, getChatGPTSessionToken } from "../src/providers/chatgpt/auth-files.mjs";
 
 describe("ChatGPT cookie sanitization", () => {
+  it("accepts current Auth.js session cookie names", () => {
+    const cookies = [{ name: "__Secure-authjs.session-token", value: "current-session", domain: ".chatgpt.com", path: "/" }];
+    assert.equal(isChatGPTAuthUsable({ cookies }), true);
+    assert.equal(getChatGPTSessionToken(cookies), "current-session");
+    assert.equal(pickEssentialChatGPTCookies(cookies).length, 1);
+  });
+
+  it("merges chunked Auth.js session cookies before extracting token", () => {
+    const cookies = [
+      { name: "__Secure-authjs.session-token.0", value: "part-a", domain: ".chatgpt.com", path: "/" },
+      { name: "__Secure-authjs.session-token.1", value: "part-b", domain: ".chatgpt.com", path: "/" },
+    ];
+    assert.equal(isChatGPTAuthUsable({ cookies }), true);
+    assert.equal(getChatGPTSessionToken(cookies), "part-apart-b");
+  });
+
   it("merges chunked session cookies and drops duplicate base entry", () => {
     const input = [
       {
@@ -65,4 +81,14 @@ describe("ChatGPT cookie sanitization", () => {
     assert.equal(names.includes("_ga"), false);
     assert.equal(estimateCookieHeaderBytes(out) < estimateCookieHeaderBytes(input), true);
   });
+
+  it("rejects an expired JWT when no persistent session cookie exists", () => {
+    const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 3600 })).toString("base64url");
+    assert.equal(isChatGPTAuthUsable({ accessToken: `x.${payload}.y`, cookies: [] }), false);
+  });
+
+  it("keeps opaque access tokens usable", () => {
+    assert.equal(isChatGPTAuthUsable({ accessToken: "opaque-current-token", cookies: [] }), true);
+  });
+
 });

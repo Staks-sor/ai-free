@@ -84,7 +84,9 @@ export class EconomyOSClient {
         ? (chunk) => { emitted = true; onText(chunk); }
         : null;
       try {
-        if (nativeTools) await this.#paceNativeRequest(signal);
+        // Pace every completion, not only tool calls. Team/pipeline agents can otherwise
+        // start several ordinary completions at once and trigger provider-wide 429s.
+        await this.#paceNativeRequest(signal);
         const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, request);
         if (!response.ok) throw await responseError(response, "EconomyOS completion");
         const contentType = String(response.headers.get("content-type") || "");
@@ -126,9 +128,13 @@ export class EconomyOSClient {
   }
 
   async #paceNativeRequest(signal) {
-    const waitMs = Math.max(0, this.nextNativeRequestAt - Date.now());
+    // Reserve a slot before awaiting. This makes concurrent callers form a queue
+    // instead of waking together and sending a burst after the same timeout.
+    const now = Date.now();
+    const slotAt = Math.max(now, this.nextNativeRequestAt);
+    this.nextNativeRequestAt = slotAt + this.nativeRequestIntervalMs;
+    const waitMs = Math.max(0, slotAt - now);
     if (waitMs) await delay(waitMs, signal);
-    this.nextNativeRequestAt = Date.now() + this.nativeRequestIntervalMs;
   }
 }
 

@@ -297,4 +297,28 @@ describe("EconomyOS client", () => {
     assert.match(prompt, /Recent conversation:\nUser: Continue/);
     assert.match(prompt, /Relevant long-term memory \(compressed\):\n- \[fix\]/);
   });
+  it("serializes simultaneous completions instead of sending a rate-limit burst", async () => {
+    const started = [];
+    const client = new EconomyOSClient({
+      apiKey: "user-owned-key",
+      nativeRequestIntervalMs: 25,
+      fetchImpl: async () => {
+        started.push(Date.now());
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    await Promise.all([
+      client.complete({ prompt: "one" }),
+      client.complete({ prompt: "two" }),
+      client.complete({ prompt: "three" }),
+    ]);
+
+    assert.equal(started.length, 3);
+    assert.ok(started[1] - started[0] >= 15, `second request gap was ${started[1] - started[0]}ms`);
+    assert.ok(started[2] - started[1] >= 15, `third request gap was ${started[2] - started[1]}ms`);
+  });
+
 });

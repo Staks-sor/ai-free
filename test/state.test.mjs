@@ -246,6 +246,7 @@ describe("normalizeWindowState", () => {
         { id: "kept", title: "kept", updatedAt: "2026-01-01T00:00:00Z", messages: [] },
       ],
       pipeline: {
+        mainAgentId: "deleted",
         edges: [
           { from: "kept", to: "deleted" },
           { from: "deleted", to: "kept" },
@@ -257,5 +258,6 @@ describe("normalizeWindowState", () => {
     assert.equal(normalized.activeConversationId, "kept");
     assert.deepEqual(normalized.activeByWorkspace, { "/tmp/other": "kept" });
     assert.deepEqual(normalized.pipeline.edges, []);
+    assert.equal(normalized.pipeline.mainAgentId, null);
   });
 });

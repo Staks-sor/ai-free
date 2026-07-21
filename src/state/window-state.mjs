@@ -197,8 +197,10 @@ function normalizePipeline(pipeline, conversations) {
     seen.add(key);
     deduped.push(edge);
   }
+  const requestedMain = String(pipeline?.mainAgentId || "");
   return {
     edges: deduped,
+    mainAgentId: ids.has(requestedMain) ? requestedMain : null,
     updatedAt: pipeline?.updatedAt || null,
   };
 }

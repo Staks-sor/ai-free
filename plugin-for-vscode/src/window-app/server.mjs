@@ -80,6 +80,8 @@ import { deleteConversationImages, persistChatImages, resolveChatImage } from ".
 import { warmMemoryBackend } from "../memory/store.mjs";
 import { warmGraphBackend } from "../memory/graph/store.mjs";
 import { getVoiceStatus, installSttRuntime, transcribeAudio } from "../stt/service.mjs";
+import { checkForUpdate, runUpdate, scheduleWindowRestart } from "../updater.mjs";
+import { collectDiagnostics } from "./diagnostics.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
 import { setOpenAICorsHeaders } from "../../api/server.mjs";
 import {
@@ -103,31 +105,26 @@ export async function runWindowApp({
   openWindow = true,
   consoleLog = false,
 }) {
-  // ChatGPT UI в боковой панели drawer, без отдельного окна Chrome.
+  // ChatGPT по умолчанию использует отдельный видимый Chrome: так авторизация и Cloudflare работают стабильнее.
   if (process.env.CHATGPT_EMBED_IN_UI == null) {
-    process.env.CHATGPT_EMBED_IN_UI = "1";
+    process.env.CHATGPT_EMBED_IN_UI = "0";
   }
 
-  setImmediate(() => {
-    (async () => {
-      const { ensureChatGPTProfileReady, cleanupStaleBrowserProfiles } = await import("../providers/chatgpt/browser-login.mjs");
-      const { APP_BROWSER_PROFILE } = await import("./app-browser.mjs");
-      const { APP_WINDOW_PROFILE } = await import("./app-window.mjs");
-      const { CHATGPT_BROWSER_PROFILE } = await import("../providers/chatgpt/config.mjs");
-      const { QWEN_BROWSER_PROFILE } = await import("../providers/qwen/config.mjs");
-      await ensureChatGPTProfileReady(CHATGPT_BROWSER_PROFILE);
-      cleanupStaleBrowserProfiles([APP_BROWSER_PROFILE, APP_WINDOW_PROFILE, QWEN_BROWSER_PROFILE]);
-    })().catch((error) => {
-      if (consoleLog) console.log(`[startup] browser profile preflight skipped: ${error.message}`);
-    });
-  });
+  {
+    const { ensureChatGPTProfileReady, cleanupStaleBrowserProfiles } = await import("../providers/chatgpt/browser-login.mjs");
+    const { APP_BROWSER_PROFILE } = await import("./app-browser.mjs");
+    const { APP_WINDOW_PROFILE } = await import("./app-window.mjs");
+    const { CHATGPT_BROWSER_PROFILE } = await import("../providers/chatgpt/config.mjs");
+    const { QWEN_BROWSER_PROFILE } = await import("../providers/qwen/config.mjs");
+    await ensureChatGPTProfileReady(CHATGPT_BROWSER_PROFILE);
+    cleanupStaleBrowserProfiles([APP_BROWSER_PROFILE, APP_WINDOW_PROFILE, QWEN_BROWSER_PROFILE]);
+  }
 
   const state = loadWindowState(workspaceRoot);
 
   setImmediate(() => {
     warmMemoryBackend().catch(() => {});
     warmGraphBackend().catch(() => {});
-    import("./web-browser.mjs").then((m) => m.warmWebBrowser()).catch(() => {});
   });
 
   function logConsole(message) {
@@ -475,7 +472,11 @@ export async function runWindowApp({
 
   async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}, signal = null) {
     const edges = state.pipeline?.edges || [];
-    const queue = [{ conversationId: startConversationId, input: initialPrompt, sourceTitle: "User", depth: 0 }];
+    const configuredLeader = String(state.pipeline?.mainAgentId || "");
+    const leaderId = state.conversations.some((item) => item.id === configuredLeader)
+      ? configuredLeader
+      : startConversationId;
+    const queue = [{ conversationId: leaderId, input: initialPrompt, sourceTitle: "User", depth: 0 }];
     const visited = new Set();
     const maxSteps = 12;
     let steps = 0;
@@ -1188,6 +1189,25 @@ export async function runWindowApp({
         return sendJson(res, { projects, defaultWorkspace: workspaceRoot, home: os.homedir() });
       }
 
+      if (req.method === "GET" && url.pathname === "/api/update/check") {
+        return sendJson(res, await checkForUpdate());
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/update/run") {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const result = await runUpdate();
+        if (body.restart === true && result.updated && result.restartReady !== false) {
+          scheduleWindowRestart({ port, workspaceRoot });
+          setTimeout(() => {
+            requestAppShutdown({ source: "update-restart" }).finally(() => {
+              setTimeout(() => process.exit(0), 200).unref();
+            });
+          }, 250).unref();
+          return sendJson(res, { ...result, restarting: true });
+        }
+        return sendJson(res, result);
+      }
+
       if (await handleMemoryRoute(req, url, res)) return;
       if (await handleSkillsRoute(req, url, res)) return;
       if (await handlePluginsRoute(req, url, res)) return;
@@ -1234,6 +1254,14 @@ export async function runWindowApp({
             providers,
           },
         });
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/diagnostics") {
+        return sendJson(res, await collectDiagnostics({
+          workspaceRoot,
+          state,
+          runningTaskIds: getRunningIds(),
+        }));
       }
 
       if (req.method === "POST" && url.pathname === "/api/settings/openai-key") {
@@ -1812,6 +1840,14 @@ export async function runWindowApp({
                 },
               );
               conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
+              // Qwen recovered «The chat is in progress!» by creating a fresh
+              // chat_id. Закрепляем его в conversation.sessionId, чтобы следующие
+              // сообщения шли в восстановленный чат, а не в зависший старый.
+              if (result.recoveredChatId && result.recoveredChatId !== conversation.sessionId) {
+                console.log(`[chat] qwen recovered into fresh chat_id=${result.recoveredChatId} (was ${conversation.sessionId})`);
+                conversation.sessionId = result.recoveredChatId;
+                // parentId уже обновлён result.lastMessageId выше.
+              }
               const finalText = result.thinkingText
                 ? formatQwenStreamDisplay(result.thinkingText, result.text)
                 : String(result.text || "").trim();
@@ -2551,6 +2587,20 @@ export async function runWindowApp({
         .catch((error) => logConsole(`[qwen] background warm-up failed: ${error.message}`));
     });
   }
+  let telegramBot = null;
+  if (process.env.AI_FREE_DISABLE_TELEGRAM !== "1") {
+    import("../telegram/bot.mjs")
+      .then((m) => m.startTelegramBot({
+        port,
+        workspaceRoot,
+        log: (message) => logConsole(message),
+      }))
+      .then((bot) => {
+        telegramBot = bot;
+      })
+      .catch((error) => logConsole(`[telegram] failed to start: ${error.message}`));
+  }
+
   if (openWindow) {
     console.log(`Workspace window: ${url}`);
     console.log("Tip: Agent panel (memory/skills/browser) is in the 🧠 drawer inside the app.");
@@ -2582,6 +2632,7 @@ export async function runWindowApp({
   };
 
   registerShutdownServerCloser((done) => {
+    telegramBot?.stop?.();
     server.close(() => done());
     setTimeout(done, 2000).unref();
   });
@@ -2737,6 +2788,7 @@ function normalizePipelinePatch(body, conversations) {
         .filter((edge) => edge.from && edge.to && edge.from !== edge.to && ids.has(edge.from) && ids.has(edge.to))
     : [];
   const seen = new Set();
+  const mainAgentId = String(body?.mainAgentId || "");
   return {
     edges: edges.filter((edge) => {
       const key = `${edge.from}->${edge.to}`;
@@ -2744,6 +2796,7 @@ function normalizePipelinePatch(body, conversations) {
       seen.add(key);
       return true;
     }),
+    mainAgentId: ids.has(mainAgentId) ? mainAgentId : null,
     updatedAt: new Date().toISOString(),
   };
 }

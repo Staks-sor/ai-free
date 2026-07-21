@@ -10,7 +10,6 @@ import { DEFAULT_AUTH_FILE } from "../config.mjs";
 import { QWEN_AUTH_FILE } from "./qwen/config.mjs";
 import { CHATGPT_AUTH_FILE } from "./chatgpt/config.mjs";
 import { isChatGPTAuthUsable, readChatGPTAuth } from "./chatgpt/auth-files.mjs";
-import { isChatGPTBrowserProxyActive } from "./chatgpt/browser-proxy.mjs";
 import { getEconomyOSSettings } from "../state/settings.mjs";
 
 export const PROVIDERS = {
@@ -41,7 +40,7 @@ export const PROVIDERS = {
     name: "ChatGPT",
     description: "chatgpt.com — бесплатный веб-интерфейс OpenAI",
     authFile: CHATGPT_AUTH_FILE,
-    hasAuth: () => isChatGPTAuthUsable(readChatGPTAuth(CHATGPT_AUTH_FILE)) || isChatGPTBrowserProxyActive(),
+    hasAuth: () => isChatGPTAuthUsable(readChatGPTAuth(CHATGPT_AUTH_FILE)),
     async login() {
       const { loginChatGPTAndSave } = await import("./chatgpt/browser-login.mjs");
       await loginChatGPTAndSave();

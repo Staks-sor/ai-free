@@ -266,10 +266,11 @@ describe("validateCommandArgs", () => {
     assert.throws(() => validateCommandArgs("/tmp", "npm", ["login"]));
   });
 
-  it("blocks node -e / --eval / -p / --print", () => {
-    assert.throws(() => validateCommandArgs("/tmp", "node", ["-e", "x"]));
-    assert.throws(() => validateCommandArgs("/tmp", "node", ["--eval", "x"]));
-    assert.throws(() => validateCommandArgs("/tmp", "node", ["-p", "x"]));
+  it("allows node eval/print flags for short diagnostics", () => {
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "node", ["-e", "console.log(1)"]));
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "node", ["--eval", "console.log(1)"]));
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "node", ["-p", "1 + 1"]));
+    assert.doesNotThrow(() => validateCommandArgs("/tmp", "node", ["--print", "1 + 1"]));
   });
 
   it("allows python -c / -m by default", () => {
@@ -890,6 +891,49 @@ describe("COMMAND_CATALOG hardware validators", () => {
     assert.doesNotThrow(() => v(["--chip", "esp32", "write_flash", "0x1000", "firmware.bin"]));
     assert.throws(() => v(["--port", "/dev/cu.usbserial-110", "erase_flash"]));
     assert.throws(() => v(["--port", "/dev/cu.usbserial-110"]));
+  });
+});
+
+describe("COMMAND_CATALOG.perl/ruby/php RCE validators", () => {
+  it("perl blocks system()/exec()/backticks", () => {
+    const v = COMMAND_CATALOG.perl.validateArgs;
+    assert.throws(() => v(["-e", "system('rm -rf /')"]));
+    assert.throws(() => v(["-e", "exec('id')"]));
+    assert.throws(() => v(["-e", "print `whoami`"]));
+  });
+
+  it("perl allows safe one-liners", () => {
+    const v = COMMAND_CATALOG.perl.validateArgs;
+    assert.doesNotThrow(() => v(["-ne", "print if /pattern/"]));
+    assert.doesNotThrow(() => v(["-e", "print lc('Hello')"]));
+  });
+
+  it("ruby blocks system()/exec()/backticks", () => {
+    const v = COMMAND_CATALOG.ruby.validateArgs;
+    assert.throws(() => v(["-e", "system('rm -rf /')"]));
+    assert.throws(() => v(["-e", "exec('id')"]));
+    assert.throws(() => v(["-e", "puts `whoami`"]));
+  });
+
+  it("php blocks system/exec/shell_exec/passthru/backticks", () => {
+    const v = COMMAND_CATALOG.php.validateArgs;
+    assert.throws(() => v(["-r", "system('id');"]));
+    assert.throws(() => v(["-r", "exec('id');"]));
+    assert.throws(() => v(["-r", "shell_exec('id');"]));
+    assert.throws(() => v(["-r", "passthru('id');"]));
+  });
+
+  it("awk has no validator but is registered as medium-risk", () => {
+    assert.equal(COMMAND_CATALOG.awk.risk, "medium");
+    assert.equal(COMMAND_CATALOG.awk.enabledByDefault, false);
+  });
+
+  it("new scripting commands are off by default and surfaced in catalog", () => {
+    for (const cmd of ["perl", "awk", "ruby", "php"]) {
+      assert.ok(COMMAND_CATALOG[cmd], `${cmd} missing from catalog`);
+      assert.equal(COMMAND_CATALOG[cmd].enabledByDefault, false, `${cmd} should be off by default`);
+      assert.ok(COMMAND_CATALOG[cmd].description.length > 0, `${cmd} missing description`);
+    }
   });
 });
 

@@ -12,6 +12,7 @@ import {
   writeChatGPTAuth,
   clearBrowserCookiesViaCdp,
   pickEssentialChatGPTCookies,
+  getChatGPTSessionToken,
 } from "./auth-files.mjs";
 import { withChatGPTProfileLock } from "./chrome-profile-lock.mjs";
 
@@ -624,15 +625,17 @@ export async function loginChatGPTAndSave(authFile = CHATGPT_AUTH_FILE) {
           try {
             if (await isChatGPTChallengePage(page)) return;
             const body = await readSessionFromPage(page);
-            if (body && body.accessToken) {
+            const cookies = pickEssentialChatGPTCookies(await context.cookies());
+            const sessionToken = body?.sessionToken || getChatGPTSessionToken(cookies);
+            // Auth.js does not always expose accessToken; its persistent session cookie is sufficient.
+            if (body && (body.accessToken || sessionToken)) {
               done = true;
               clearTimeout(timeout);
               clearInterval(interval);
-              const cookies = pickEssentialChatGPTCookies(await context.cookies());
               const userAgent = await page.evaluate(() => navigator.userAgent);
               resolve({
-                accessToken: body.accessToken,
-                sessionToken: body.sessionToken || cookies.find((c) => c.name === "__Secure-next-auth.session-token")?.value || "",
+                accessToken: body.accessToken || "",
+                sessionToken,
                 cookies,
                 userAgent,
               });
@@ -710,15 +713,17 @@ export async function loginChatGPTAndSave(authFile = CHATGPT_AUTH_FILE) {
         try {
           if (await isChatGPTChallengePage(page)) return;
           const body = await readSessionFromPage(page);
-          if (body && body.accessToken) {
+          const cookies = pickEssentialChatGPTCookies(await context.cookies());
+          const sessionToken = body?.sessionToken || getChatGPTSessionToken(cookies);
+          // Auth.js does not always expose accessToken; its persistent session cookie is sufficient.
+          if (body && (body.accessToken || sessionToken)) {
             done = true;
             clearTimeout(timeout);
             clearInterval(interval);
-            const cookies = pickEssentialChatGPTCookies(await context.cookies());
             const userAgent = await page.evaluate(() => navigator.userAgent);
             resolve({
-              accessToken: body.accessToken,
-              sessionToken: body.sessionToken || cookies.find((c) => c.name === "__Secure-next-auth.session-token")?.value || "",
+              accessToken: body.accessToken || "",
+              sessionToken,
               cookies,
               userAgent,
             });
@@ -735,15 +740,16 @@ export async function loginChatGPTAndSave(authFile = CHATGPT_AUTH_FILE) {
           if (url.includes("/api/auth/session")) {
             if (response.status() === 200) {
               const body = await response.json();
-              if (body && body.accessToken) {
+              const cookies = pickEssentialChatGPTCookies(await context.cookies());
+              const sessionToken = body?.sessionToken || getChatGPTSessionToken(cookies);
+              if (body && (body.accessToken || sessionToken)) {
                 done = true;
                 clearTimeout(timeout);
                 clearInterval(interval);
-                const cookies = pickEssentialChatGPTCookies(await context.cookies());
                 const userAgent = await page.evaluate(() => navigator.userAgent);
                 resolve({
-                  accessToken: body.accessToken,
-                  sessionToken: body.sessionToken || cookies.find((c) => c.name === "__Secure-next-auth.session-token")?.value || "",
+                  accessToken: body.accessToken || "",
+                  sessionToken,
                   cookies,
                   userAgent,
                 });

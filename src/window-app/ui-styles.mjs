@@ -1904,6 +1904,14 @@ export const STYLES = `
       color: var(--muted);
       font-size: 12px;
     }
+    .pipelineTeamActions {
+      display: flex;
+      gap: 8px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+
     .pipelineBody {
       overflow: auto;
       padding: 10px;

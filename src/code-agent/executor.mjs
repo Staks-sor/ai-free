@@ -408,10 +408,6 @@ export function validateCommandArgs(workspaceRoot, cmd, args, options = {}) {
     throw new WorkspaceToolError(`npm ${args.find((arg) => blockedNpmFlags.has(arg))} is blocked.`, { fatal: true });
   }
 
-  if (cmd === "node" && args.some((arg) => ["-e", "--eval", "-p", "--print"].includes(arg))) {
-    throw new WorkspaceToolError("node eval/print flags are blocked. Run a workspace file instead.", { fatal: true });
-  }
-
   if (
     (cmd === "python" || cmd === "python3") &&
     args.some((arg) => ["-c", "-m"].includes(arg)) &&

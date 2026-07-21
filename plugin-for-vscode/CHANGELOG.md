@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.5
+
+- Made Qwen recover from stuck `The chat is in progress` turns by continuing in a fresh chat.
+- Improved ChatGPT Auth.js session-cookie compatibility and expired-token handling.
+- Serialized EconomyOS completions to reduce concurrent request bursts and HTTP 429 errors.
+- Added opt-in permissions for additional local scripting commands.
+- Kept desktop and VS Code provider, agent and settings behavior synchronized.
+
 ## 0.4.3
 
 - Fixed Qwen code-agent recovery when the model responds without workspace tool calls.

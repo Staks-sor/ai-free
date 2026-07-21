@@ -472,7 +472,11 @@ export async function runWindowApp({
 
   async function runPipelineFromConversation(startConversationId, initialPrompt, requestOptions = {}, signal = null) {
     const edges = state.pipeline?.edges || [];
-    const queue = [{ conversationId: startConversationId, input: initialPrompt, sourceTitle: "User", depth: 0 }];
+    const configuredLeader = String(state.pipeline?.mainAgentId || "");
+    const leaderId = state.conversations.some((item) => item.id === configuredLeader)
+      ? configuredLeader
+      : startConversationId;
+    const queue = [{ conversationId: leaderId, input: initialPrompt, sourceTitle: "User", depth: 0 }];
     const visited = new Set();
     const maxSteps = 12;
     let steps = 0;
@@ -1836,6 +1840,14 @@ export async function runWindowApp({
                 },
               );
               conversation.parentMessageId = result.lastMessageId ?? conversation.parentMessageId;
+              // Qwen recovered «The chat is in progress!» by creating a fresh
+              // chat_id. Закрепляем его в conversation.sessionId, чтобы следующие
+              // сообщения шли в восстановленный чат, а не в зависший старый.
+              if (result.recoveredChatId && result.recoveredChatId !== conversation.sessionId) {
+                console.log(`[chat] qwen recovered into fresh chat_id=${result.recoveredChatId} (was ${conversation.sessionId})`);
+                conversation.sessionId = result.recoveredChatId;
+                // parentId уже обновлён result.lastMessageId выше.
+              }
               const finalText = result.thinkingText
                 ? formatQwenStreamDisplay(result.thinkingText, result.text)
                 : String(result.text || "").trim();
@@ -2776,6 +2788,7 @@ function normalizePipelinePatch(body, conversations) {
         .filter((edge) => edge.from && edge.to && edge.from !== edge.to && ids.has(edge.from) && ids.has(edge.to))
     : [];
   const seen = new Set();
+  const mainAgentId = String(body?.mainAgentId || "");
   return {
     edges: edges.filter((edge) => {
       const key = `${edge.from}->${edge.to}`;
@@ -2783,6 +2796,7 @@ function normalizePipelinePatch(body, conversations) {
       seen.add(key);
       return true;
     }),
+    mainAgentId: ids.has(mainAgentId) ? mainAgentId : null,
     updatedAt: new Date().toISOString(),
   };
 }

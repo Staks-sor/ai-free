@@ -29,12 +29,17 @@ export function isChatGPTAuthUsable(auth) {
     auth.sessionToken
     || auth.cookies?.some((c) => {
       const name = String(c?.name || "");
-      return name === "__Secure-next-auth.session-token" || /^__Secure-next-auth\.session-token\.\d+$/.test(name);
+      return /^(?:__Secure-)?(?:next-auth|authjs)\.session-token(?:\.\d+)?$/.test(name);
     }),
   );
   if (hasSessionCookie) return true;
-  if (auth.accessToken && !isJwtExpired(auth.accessToken, 60)) return true;
-  return Boolean(auth.accessToken);
+  // Opaque tokens remain usable; JWT tokens must not be expired.
+  return Boolean(auth.accessToken) && !isJwtExpired(auth.accessToken, 60);
+}
+
+export function getChatGPTSessionToken(cookies) {
+  const clean = sanitizeCookiesForStorage(cookies);
+  return clean.find((cookie) => /^(?:__Secure-)?(?:next-auth|authjs)\.session-token$/.test(String(cookie?.name || "")))?.value || "";
 }
 
 export function writeChatGPTAuth(file, { cookies, accessToken, sessionToken, profileDir, userAgent }) {
@@ -212,9 +217,9 @@ export function sanitizeCookiesForStorage(cookies) {
 }
 
 const ESSENTIAL_CHATGPT_COOKIE_PATTERNS = [
-  /^__Secure-next-auth\.session-token$/,
-  /^__Secure-next-auth\.csrf-token$/,
-  /^__Host-next-auth\.csrf-token$/,
+  /^(?:__Secure-)?(?:next-auth|authjs)\.session-token$/,
+  /^(?:__Secure-)?(?:next-auth|authjs)\.csrf-token$/,
+  /^__Host-(?:next-auth|authjs)\.csrf-token$/,
   /^cf_clearance$/,
   /^__cf_bm$/,
   /^_cfuvid$/,

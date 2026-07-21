@@ -231,6 +231,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           </div>
           <button id="pipelineClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
         </div>
+        <div class="pipelineTeamActions">
+          <button id="pipelineMakeLeader" class="iconBtn" type="button">${t("pipeline.makeLeader")}</button>
+          <button id="pipelineAddAgent" class="iconBtn primaryBtn" type="button">${t("pipeline.addAgent")}</button>
+        </div>
         <div id="pipelineBody" class="pipelineBody"></div>
       </div>
       <div id="agentDrawerBackdrop" class="agentDrawerBackdrop" aria-hidden="true"></div>
@@ -373,6 +377,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const pipelineBody = document.getElementById("pipelineBody");
     const pipelinePanelBtn = document.getElementById("pipelinePanelBtn");
     const pipelineClose = document.getElementById("pipelineClose");
+    const pipelineMakeLeader = document.getElementById("pipelineMakeLeader");
+    const pipelineAddAgent = document.getElementById("pipelineAddAgent");
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
     const THEME_KEY = "deepseek.theme";
@@ -2415,16 +2421,44 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       tick();
     }
 
-    async function updatePipelineEdges(edges) {
-      const data = await api("/api/pipeline", { method: "PATCH", body: { edges } });
+    async function updatePipeline(edges, mainAgentId = appState?.pipeline?.mainAgentId || null) {
+      const data = await api("/api/pipeline", { method: "PATCH", body: { edges, mainAgentId } });
       appState.pipeline = data.pipeline;
       renderPipelinePanel();
     }
+
+    async function updatePipelineEdges(edges) {
+      return updatePipeline(edges);
+    }
+
+    pipelineMakeLeader.addEventListener("click", async () => {
+      if (!activeConversation) return;
+      await api("/api/conversations/" + activeConversation.id, { method: "PATCH", body: { pipelineMode: true } });
+      activeConversation.pipelineMode = true;
+      await updatePipeline(appState?.pipeline?.edges || [], activeConversation.id);
+      setStatus(t("pipeline.leaderSet", { title: activeConversation.title }));
+    });
+
+    pipelineAddAgent.addEventListener("click", async () => {
+      if (!activeConversation) return;
+      const leaderId = appState?.pipeline?.mainAgentId || activeConversation.id;
+      await api("/api/conversations/" + leaderId, { method: "PATCH", body: { pipelineMode: true } });
+      const role = AGENT_ROLES.find((item) => item.id === "developer") || AGENT_ROLES[0];
+      const data = await api("/api/conversations", { method: "POST", body: {
+        title: role.label, workspace: activeConversation.workspace, provider: activeConversation.provider,
+        mode: activeConversation.mode, model: activeConversation.model, roleId: role.id, pipelineMode: true,
+      } });
+      const edges = (appState?.pipeline?.edges || []).concat({ from: leaderId, to: data.conversation.id });
+      await updatePipeline(edges, leaderId);
+      await loadState(leaderId);
+      setStatus(t("pipeline.agentAdded", { title: role.label }));
+    });
 
     function renderPipelinePanel() {
       const conversations = appState?.conversations || [];
       const edges = appState?.pipeline?.edges || [];
       const nextByFrom = new Map(edges.map((edge) => [edge.from, edge.to]));
+      const mainAgentId = appState?.pipeline?.mainAgentId || null;
       pipelineBody.innerHTML = "";
       if (!conversations.length) {
         pipelineBody.innerHTML = '<div class="empty smallEmpty">' + t("pipeline.empty") + '</div>';
@@ -2437,7 +2471,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         meta.className = "pipelineNodeMeta";
         const title = document.createElement("div");
         title.className = "pipelineNodeTitle";
-        title.textContent = conversation.title;
+        title.textContent = (conversation.id === mainAgentId ? "★ " : "") + conversation.title;
         const sub = document.createElement("div");
         sub.className = "pipelineNodeSub";
         sub.textContent = (conversation.provider || "deepseek") + " · " + (conversation.model || conversation.mode || t("pipeline.model"));

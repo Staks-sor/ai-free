@@ -111,6 +111,14 @@ function extractQwenErrorFieldsFromRaw(rawText) {
 const QWEN_TRANSPORT = process.env.QWEN_TRANSPORT || "browser";
 const QWEN_CREATE_CHAT_TIMEOUT_MS = Number(process.env.QWEN_CREATE_CHAT_TIMEOUT_MS || 10_000);
 
+// Авто-режим (/code-агент, CLI, ACP): при "The chat is in progress!" не сдаёмся
+// после одной попытки создать новый чат, а крутим цикл повторов с растущими
+// паузами, чтобы задача выполнилась без ручного вмешательства пользователя.
+// Интерактивный чат (allowNewChatRecovery без autoRetry) ведёт себя как раньше.
+const QWEN_AUTO_RETRY_MAX_ATTEMPTS = Number(process.env.QWEN_AUTO_RETRY_MAX_ATTEMPTS || 6);
+const QWEN_AUTO_RETRY_BASE_DELAY_MS = Number(process.env.QWEN_AUTO_RETRY_BASE_DELAY_MS || 4_000);
+const QWEN_AUTO_RETRY_MAX_DELAY_MS = Number(process.env.QWEN_AUTO_RETRY_MAX_DELAY_MS || 30_000);
+
 // Куда дампим исходящие запросы и сырой стрим при DEEPSEEK_DEBUG_QWEN=1.
 // Юзер потом diff'ает с рабочим cURL — сразу видно, где расхождение.
 const QWEN_DEBUG_DIR = path.join(os.tmpdir(), "qwen-debug");
@@ -204,6 +212,17 @@ export class QwenChatClient {
 
   // Отправка сообщения в существующий чат. parentId — id предыдущего assistant-сообщения
   // для chain-of-context (как parent_message_id у DeepSeek).
+  //
+  // Восстановление при «The chat is in progress!»:
+  // Qwen иногда держит предыдущую генерацию чата «активной» на сервере
+  // (прерванный стрим, зависшая очередь). В этом состоянии он отклоняет новые
+  // сообщения в тот же chat_id кодом Bad_Request: «The chat is in progress!».
+  // Короткие повторы в тот же чат чаще всего не помогают — зависший turn может
+  // висеть минутами. Поэтому, если мягкие повторы (1.5с / 3с) не освободили чат,
+  // мы создаём НОВЫЙ чат и повторяем запрос туда с пустым parentId. Это сразу
+  // разблокирует пользователя без ручного «нового разговора». Серверная
+  // обёртка читает optional поле result.recoveredChatId и обновляет
+  // conversation.sessionId, чтобы следующие сообщения шли в тот же чат.
   async complete({
     chatId,
     prompt,
@@ -213,6 +232,157 @@ export class QwenChatClient {
     onText = null,
     onThinking = null,
     model = ENV_DEFAULT_MODEL,
+    allowNewChatRecovery = true,
+    // autoRetry=true включает авто-режим для /code-агента, CLI и ACP:
+    // при застревании "The chat is in progress!" клиент многократно создаёт
+    // новые чаты с растущими паузами, пока не пробьётся или не исчерпает лимит.
+    // Интерактивный чат по умолчанию НЕ включает авто-режим (одно восстановление
+    // + читаемое сообщение пользователю), чтобы не висеть долго в UI.
+    autoRetry = false,
+  }) {
+    return await this.#completeWithRecovery({
+      chatId,
+      prompt,
+      parentId,
+      thinking,
+      search,
+      onText,
+      onThinking,
+      model,
+      allowNewChatRecovery,
+      autoRetry,
+    });
+  }
+
+  // Внутренняя реализация complete с восстановлением через новый чат.
+  //
+  // Два режима:
+  //  • Интерактивный (autoRetry=false): одна попытка создать новый чат, затем
+  //    читаемое сообщение пользователю — чтобы UI не висел долго в ожидании.
+  //  • Авто-режим (autoRetry=true, для /code-агента, CLI, ACP): если новый чат
+  //    тоже застрял, повторяем создание новых чатов с растущими паузами
+  //    (4с → 8с → 16с → 30с…) до QWEN_AUTO_RETRY_MAX_ATTEMPTS попыток. Так
+  //    автономная задача не падает из-за зависшего turn на сервере Qwen и
+  //    не требует ручного «подожди и пришли ещё раз».
+  async #completeWithRecovery({
+    chatId,
+    prompt,
+    parentId,
+    thinking,
+    search,
+    onText,
+    onThinking,
+    model,
+    allowNewChatRecovery,
+    autoRetry,
+  }) {
+    const round = await this.#completionRound({
+      chatId,
+      prompt,
+      parentId,
+      thinking,
+      search,
+      onText,
+      onThinking,
+      model,
+    });
+
+    // Успех — отдаём как есть. Оба состояния ниже означают, что сохранённая
+    // серверная ветка Qwen больше не пригодна и запрос надо перенести в свежий чат.
+    const invalidParentStuck = Boolean(round.invalidParentStuck);
+    if (!round.chatInProgressStuck && !invalidParentStuck) return round.result;
+
+    // allowNewChatRecovery относится к занятости чата. Потерянный parent_id всегда
+    // восстанавливаем автоматически: повтор с тем же parent_id заведомо не поможет.
+    if (!allowNewChatRecovery && !invalidParentStuck) {
+      return {
+        text: formatQwenChatInProgressUserMessage(),
+        lastMessageId: null,
+        thinkingText: "",
+        chatInProgress: true,
+      };
+    }
+
+    // Сколько раз ещё можно попытаться создать свежий чат.
+    // В авто-режиме лимит берём из ENV; в интерактивном — ровно один раз.
+    const maxFreshAttempts = autoRetry
+      ? Math.max(1, QWEN_AUTO_RETRY_MAX_ATTEMPTS)
+      : 1;
+
+    for (let attempt = 1; attempt <= maxFreshAttempts; attempt += 1) {
+      // Пауза перед созданием нового чата: в авто-режиме растёт экспоненциально,
+      // чтобы дать серверу Qwen время освободить зависший turn. В интерактивном
+      // режиме (попытка №1) паузы нет — мы уже подождали в мягких повторах.
+      if (autoRetry && attempt > 1) {
+        const delay = Math.min(
+          QWEN_AUTO_RETRY_BASE_DELAY_MS * 2 ** (attempt - 2),
+          QWEN_AUTO_RETRY_MAX_DELAY_MS,
+        );
+        if (this.debug) console.log(`[qwen] auto-retry: waiting ${Math.round(delay / 1000)}s before attempt ${attempt}/${maxFreshAttempts}…`);
+        await waitForQwenChat(delay);
+      }
+
+      try {
+        if (this.debug) console.log(`[qwen] chat stuck "in progress" — creating a fresh chat (attempt ${attempt}/${maxFreshAttempts})…`);
+        const freshChatId = await this.createChat({
+          title: "Новый чат",
+          model: model || ENV_DEFAULT_MODEL,
+        });
+        console.log(`[qwen] recovered into fresh chat_id=${freshChatId} (was ${chatId})`);
+        const recovered = await this.#completionRound({
+          chatId: freshChatId,
+          prompt,
+          parentId: null,
+          thinking,
+          search,
+          onText,
+          onThinking,
+          model,
+        });
+        if (!recovered.chatInProgressStuck && !recovered.invalidParentStuck) {
+          return {
+            ...recovered.result,
+            recoveredChatId: freshChatId,
+          };
+        }
+        if (this.debug) console.log(`[qwen] fresh chat_id=${freshChatId} also stuck in progress (attempt ${attempt}/${maxFreshAttempts}).`);
+        // В авто-режиме — продолжаем цикл к следующей попытке. В интерактивном
+        // (attempt=1, maxFreshAttempts=1) — выходим и отдаём сообщение ниже.
+      } catch (recoveryError) {
+        if (this.debug) console.log(`[qwen] new-chat recovery failed (attempt ${attempt}/${maxFreshAttempts}): ${recoveryError?.message || recoveryError}`);
+        // Ошибка создания чата — в авто-режим продолжаем цикл, иначе падаем ниже.
+      }
+    }
+
+    // Все попытки создания нового чата исчерпаны — отдаём понятное сообщение
+    // вместо сырого «Bad_Request: The chat is in progress!».
+    if (autoRetry && this.debug) {
+      console.log(`[qwen] auto-retry exhausted after ${maxFreshAttempts} attempts — giving up.`);
+    }
+    return {
+      text: invalidParentStuck
+        ? formatQwenInvalidParentUserMessage()
+        : formatQwenChatInProgressUserMessage(),
+      lastMessageId: null,
+      thinkingText: "",
+      chatInProgress: !invalidParentStuck,
+      invalidParent: invalidParentStuck,
+    };
+  }
+
+  // Один раунд запроса в конкретный chat_id: мягкие повторы внутри одного чата
+  // (1.5с / 3с для «in progress», reset proxy для recoverable stream error).
+  // Возвращает { result, chatInProgressStuck } — последний флаг означает, что
+  // чат «in progress» и мягкие повторы в тот же chat_id исчерпаны.
+  async #completionRound({
+    chatId,
+    prompt,
+    parentId,
+    thinking,
+    search,
+    onText,
+    onThinking,
+    model,
   }) {
     const body = buildQwenCompletionPayload({
       chatId,
@@ -245,9 +415,8 @@ export class QwenChatClient {
       }
     }
 
-    // ОСНОВНОЙ ПУТЬ: запрос через невидимый Playwright (browser-proxy).
-    // Бандл chat.qwen.ai сам подписывает запрос свежим bx-ua.
     if (QWEN_TRANSPORT === "browser") {
+      let chatInProgressSeen = false;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
           const proxy = await getQwenBrowserProxy({ debug: this.debug });
@@ -283,11 +452,20 @@ export class QwenChatClient {
             ? streamParser.finish(result.text)
             : parseQwenResponseText(result.text, result.contentType, onText);
 
-          if (attempt < 2 && isQwenChatInProgressError(parsed, result.text)) {
-            const waitMs = 1_500 * (attempt + 1);
-            if (this.debug) console.log(`[qwen] chat is still finalizing; retrying same turn in ${waitMs}ms…`);
-            await waitForQwenChat(waitMs);
-            continue;
+          if (isQwenInvalidParentError(parsed, result.text)) {
+            return { result: null, chatInProgressStuck: false, invalidParentStuck: true };
+          }
+
+          if (isQwenChatInProgressError(parsed, result.text)) {
+            chatInProgressSeen = true;
+            if (attempt < 2) {
+              const waitMs = 1_500 * (attempt + 1);
+              if (this.debug) console.log(`[qwen] chat is still finalizing; retrying same turn in ${waitMs}ms…`);
+              await waitForQwenChat(waitMs);
+              continue;
+            }
+            // Все 3 попытки в тот же чат ушли в «in progress».
+            return { result: null, chatInProgressStuck: true };
           }
 
           if (attempt < 2 && isQwenRecoverableStreamError(parsed, result.text)) {
@@ -296,14 +474,20 @@ export class QwenChatClient {
             continue;
           }
 
-          return finalizeQwenCompletionResult(parsed, result.text, "completion (browser)");
+          return { result: finalizeQwenCompletionResult(parsed, result.text, "completion (browser)"), chatInProgressStuck: false };
         } catch (error) {
-          if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) throw error;
+          if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) {
+            // Транспортная/авторизационная ошибка не считается «in progress».
+            if (chatInProgressSeen) return { result: null, chatInProgressStuck: true };
+            throw error;
+          }
           if (this.debug) console.log(`[qwen] transient browser transport error, resetting proxy and retrying: ${error.message}`);
           await resetQwenBrowserProxy();
           continue;
         }
       }
+      // Цикл вышел без return (теоретически недостижимо, но для безопасности).
+      return { result: null, chatInProgressStuck: chatInProgressSeen };
     }
 
     // FALLBACK: прямой fetch с bx-ua из .env (обычно ломается на Bad_Request).
@@ -317,26 +501,46 @@ export class QwenChatClient {
     const contentType = String(res.headers.get("content-type") || "");
     console.log(`[qwen] response content-type: ${contentType}`);
 
-    if (contentType.includes("application/json")) {
-      const text = await res.text();
-      console.log(`[qwen] non-SSE response body (first 1000 chars):\n${text.slice(0, 1000)}`);
-      let json;
-      try { json = JSON.parse(text); } catch {
-        return { text: `⚠️ Qwen вернул не-JSON и не-SSE. Тело:\n\n${text.slice(0, 800)}`, lastMessageId: null, thinkingText: "" };
-      }
-      const found = extractTextRecursively(json);
-      if (found.text) {
-        return { text: found.text, lastMessageId: found.messageId, thinkingText: found.isThinking ? found.text : "" };
-      }
-      return {
-        text: `⚠️ Qwen вернул JSON, но текста в нём нет. Тело:\n\n${JSON.stringify(json, null, 2).slice(0, 1200)}\n\nПрисылай мне это сообщение.`,
-        lastMessageId: null,
-        thinkingText: "",
-      };
+    // Единый парсинг через parseQwenResponseText: он корректно обрабатывает
+    // и одиночный JSON-ошибку (success:false + data.code/details), и SSE-стрим,
+    // и применяет formatQwenStreamError (в т.ч. читаемое сообщение для
+    // «chat is in progress!»).
+    const directText = await res.text();
+    const parsed = parseQwenResponseText(directText, contentType, onText);
+
+    // Восстановление «chat is in progress!» работает и для direct-транспорта,
+    // чтобы не зависеть от того, какой transport сейчас активен.
+    if (isQwenInvalidParentError(parsed, directText)) {
+      return { result: null, chatInProgressStuck: false, invalidParentStuck: true };
+    }
+    if (isQwenChatInProgressError(parsed, directText)) {
+      return { result: null, chatInProgressStuck: true, invalidParentStuck: false };
     }
 
-    return await parseQwenStream(res, onText, this.debug);
+    const directFinalized = finalizeQwenCompletionResult(parsed, directText, "completion (direct)");
+    return { result: directFinalized, chatInProgressStuck: false };
   }
+}
+
+// Понятное сообщение для пользователя, когда «The chat is in progress!»
+// пережила и мягкие повторы, и попытку создать новый чат.
+function formatQwenChatInProgressUserMessage() {
+  return (
+    "⏳ Qwen сейчас занят предыдущим ответом и не принимает новое сообщение в этот чат.\n\n" +
+    "AI Free уже попробовал подождать и открыть свежий чат, но сервер Qwen пока не освободился.\n\n" +
+    "Что сделать:\n" +
+    "• Подожди ~10–20 секунд и пришли сообщение ещё раз — обычно этого хватает.\n" +
+    "• Начни новый разговор кнопкой «Новый чат» — это гарантированно даёт чистый чат.\n" +
+    "• Если ошибка повторяется часто, перезапусти чат: закрытие окна сбрасывает зависший turn."
+  );
+}
+
+function formatQwenInvalidParentUserMessage() {
+  return (
+    "Qwen потерял связь с предыдущим сообщением этой ветки. " +
+    "AI Free автоматически открыл свежий чат, но сервер повторно отклонил запрос. " +
+    "Попробуй отправить сообщение ещё раз."
+  );
 }
 
 // SSE-событие с полем error (квота, rate limit и т.д.) — не содержит текста ответа.
@@ -387,6 +591,12 @@ export function formatQwenUserFacingError(code, details) {
   }
   if (d.includes("rate limit") || d.includes("too many requests") || code.includes("rate")) {
     return `Слишком много запросов к Qwen (rate limit).\n\n${details}`;
+  }
+  if (isQwenInvalidParentText(`${code} ${details}`)) {
+    return formatQwenInvalidParentUserMessage();
+  }
+  if (d.includes("chat is in progress") || d.includes("chat_in_progress")) {
+    return formatQwenChatInProgressUserMessage();
   }
   return `Qwen вернул ошибку (${code}):\n\n${details}`;
 }
@@ -718,6 +928,15 @@ export function isQwenRecoverableStreamError(parsed, rawText = "") {
   const blob = `${parsed?.error || ""}\n${parsed?.text || ""}\n${rawText}`.toLowerCase();
   if (isQwenSessionExpiredText(blob)) return false;
   return /bad_request|internal_error|непредвиденн|unexpected error/.test(blob);
+}
+
+function isQwenInvalidParentText(text) {
+  return /(?:invalid\s+input\s+chat\s+)?parent[_\s-]?id[^\n]*(?:not\s+exist|does\s+not\s+exist|invalid|unknown|not\s+found)/i.test(String(text || ""));
+}
+
+export function isQwenInvalidParentError(parsed, rawText = "") {
+  const blob = `${parsed?.error || ""}\n${parsed?.text || ""}\n${rawText}`;
+  return isQwenInvalidParentText(blob);
 }
 
 export function isQwenChatInProgressError(parsed, rawText = "") {

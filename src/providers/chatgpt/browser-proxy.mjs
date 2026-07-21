@@ -20,6 +20,7 @@ import {
   applyCookiesToContext,
   clearBrowserCookiesViaCdp,
   estimateCookieHeaderBytes,
+  getChatGPTSessionToken,
   isChatGPTAuthUsable,
   pickEssentialChatGPTCookies,
   readChatGPTAuth,
@@ -199,7 +200,7 @@ async function createProxy({ debug, adoptedSession = null }) {
   async function syncAuthFromBrowser() {
     try {
       const cookies = pickEssentialChatGPTCookies(await context.cookies());
-      const sessionTokenFromCookie = cookies.find((c) => c.name === "__Secure-next-auth.session-token")?.value || "";
+      const sessionTokenFromCookie = getChatGPTSessionToken(cookies);
 
       let session = null;
       try {
