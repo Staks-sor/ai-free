@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.6
+
+- Fixed the packaged extension failing at startup because `diagnostics.mjs` was missing from the VSIX.
+- Fixed Windows startup when `node.exe` in `PATH` is missing, slow or shadowed by another command.
+- The extension now prefers the compatible Node.js runtime bundled with VS Code or Cursor and falls back to Node.js 18+ from `PATH`.
+- Added build-time server import validation and runtime-selection tests so incomplete VSIX builds cannot pass CI.
+- Preserved the dedicated ChatGPT browser profile across normal re-authorization.
+
 ## 0.4.5
 
 - Made Qwen recover from stuck `The chat is in progress` turns by continuing in a fresh chat.

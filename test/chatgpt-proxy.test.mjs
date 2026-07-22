@@ -106,3 +106,18 @@ describe("tryAssistCloudflareClick", () => {
     assert.deepEqual(events.filter((e) => e[0] === "down" || e[0] === "up"), [["down"], ["up"]]);
   });
 });
+
+describe("persistent ChatGPT login profile", () => {
+  it("does not clear the dedicated Chrome profile during a normal re-login", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../src/providers/chatgpt/browser-login.mjs", import.meta.url), "utf8"),
+    );
+    const loginStart = source.indexOf("export async function loginChatGPTAndSave");
+    const loginBody = source.slice(loginStart);
+    assert.match(loginBody, /await closeChatGPTBrowserProxy\(\)/);
+    assert.match(loginBody, /prepareChromeProfileForLaunch\(profileDir, \{ clearCookies: false \}\)/);
+    assert.match(loginBody, /clearCookies: false,\s+skipKillStale: true/);
+    assert.doesNotMatch(loginBody, /repairChatGPTBrowserProfile\(profileDir\)/);
+    assert.doesNotMatch(loginBody, /await clearBrowserCookiesViaCdp\(page, context\)/);
+  });
+});

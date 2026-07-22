@@ -6,11 +6,13 @@ const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 
 const requiredPaths = [
   "extension.js",
+  "node-runtime.js",
   "package.json",
   "bin/deepseek.mjs",
   "src/cli/run.mjs",
   "src/providers/model-catalog.mjs",
   "src/window-app/server.mjs",
+  "src/window-app/diagnostics.mjs",
   "src/window-app/ui-html.mjs",
   "api/models.mjs",
   "api/openai-handler.mjs",
@@ -21,6 +23,15 @@ for (const relPath of requiredPaths) {
   const absPath = path.join(__dirname, relPath);
   if (!fs.existsSync(absPath)) {
     console.error(`missing: ${relPath}`);
+    failed = true;
+  }
+}
+
+if (!failed) {
+  try {
+    await import("./src/window-app/server.mjs");
+  } catch (error) {
+    console.error(`server import failed: ${error.message}`);
     failed = true;
   }
 }

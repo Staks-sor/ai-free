@@ -58,6 +58,13 @@ check("desktop and VS Code model catalogs are synchronized", () => {
   );
 });
 
+check("desktop and VS Code diagnostics are synchronized", () => {
+  assert.equal(
+    read("plugin-for-vscode/src/window-app/diagnostics.mjs"),
+    read("src/window-app/diagnostics.mjs"),
+  );
+});
+
 check("desktop and VS Code EconomyOS clients are synchronized", () => {
   assert.equal(
     read("plugin-for-vscode/src/providers/economyos/client.mjs"),

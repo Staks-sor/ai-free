@@ -24,6 +24,15 @@ describe("architecture invariants", () => {
     assert.equal(pluginCatalog, rootCatalog);
   });
 
+  it("keeps desktop and VS Code diagnostics in sync", () => {
+    const desktop = fs.readFileSync(new URL("../src/window-app/diagnostics.mjs", import.meta.url), "utf8");
+    const plugin = fs.readFileSync(
+      new URL("../plugin-for-vscode/src/window-app/diagnostics.mjs", import.meta.url),
+      "utf8",
+    );
+    assert.equal(plugin, desktop);
+  });
+
   it("uses the shared model catalog for OpenAI-compatible models", () => {
     assert.deepEqual(API_MODELS, OPENAI_COMPAT_MODELS);
     assert.deepEqual(

@@ -80,7 +80,7 @@ import { deleteConversationImages, persistChatImages, resolveChatImage } from ".
 import { warmMemoryBackend } from "../memory/store.mjs";
 import { warmGraphBackend } from "../memory/graph/store.mjs";
 import { getVoiceStatus, installSttRuntime, transcribeAudio } from "../stt/service.mjs";
-import { checkForUpdate, runUpdate, scheduleWindowRestart } from "../updater.mjs";
+import { checkForUpdate, runUpdate } from "../updater.mjs";
 import { collectDiagnostics } from "./diagnostics.mjs";
 import { handleRequest as handleOpenAICompatRequest } from "../../api/openai-handler.mjs";
 import { setOpenAICorsHeaders } from "../../api/server.mjs";
@@ -1194,17 +1194,8 @@ export async function runWindowApp({
       }
 
       if (req.method === "POST" && url.pathname === "/api/update/run") {
-        const body = await readJsonBody(req).catch(() => ({}));
+        await readJsonBody(req).catch(() => ({}));
         const result = await runUpdate();
-        if (body.restart === true && result.updated && result.restartReady !== false) {
-          scheduleWindowRestart({ port, workspaceRoot });
-          setTimeout(() => {
-            requestAppShutdown({ source: "update-restart" }).finally(() => {
-              setTimeout(() => process.exit(0), 200).unref();
-            });
-          }, 250).unref();
-          return sendJson(res, { ...result, restarting: true });
-        }
         return sendJson(res, result);
       }
 

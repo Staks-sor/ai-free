@@ -2,7 +2,7 @@
 
 AI Free brings DeepSeek, Qwen, ChatGPT and optional EconomyOS by Virtuals into the VS Code sidebar as project-aware coding agents.
 
-Current release: **0.4.5**.
+Current release: **0.4.6**.
 
 ## Features
 
@@ -15,7 +15,7 @@ Current release: **0.4.5**.
 
 ## Requirements
 
-- Node.js 18 or newer.
+- Current VS Code or Cursor. The extension uses the IDE's bundled Node.js runtime when compatible and falls back to Node.js 18+ from `PATH`.
 - Existing AI Free authentication state for the providers you use.
 - Qwen login can be prepared from the main AI Free app with `npm run login-qwen`.
 

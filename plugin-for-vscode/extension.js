@@ -3,10 +3,10 @@ const { spawn } = require('child_process');
 const path = require('path');
 const net = require('net');
 const fs = require('fs');
+const { REQUIRED_NODE_MAJOR, resolveNodeRuntime } = require('./node-runtime');
 
 let serverProcess = null;
 let outputChannel = null;
-const REQUIRED_NODE_MAJOR = 18;
 const SERVER_START_TIMEOUT_MS = 90000;
 
 // Поиск свободного порта в диапазоне
@@ -92,51 +92,6 @@ function waitForServerReady(port, child, timeoutMs = 30000) {
     });
 }
 
-function runNodeVersionCheck(timeoutMs = 5000) {
-    return new Promise((resolve) => {
-        const child = spawn('node', ['--version'], {
-            windowsHide: true
-        });
-        let stdout = '';
-        let stderr = '';
-        let settled = false;
-        const timer = setTimeout(() => {
-            if (settled) return;
-            settled = true;
-            try { child.kill(); } catch {}
-            resolve({ ok: false, message: `node --version timed out after ${timeoutMs}ms` });
-        }, timeoutMs);
-
-        child.stdout.on('data', (data) => { stdout += data.toString(); });
-        child.stderr.on('data', (data) => { stderr += data.toString(); });
-        child.on('error', (error) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve({ ok: false, message: error.code === 'ENOENT'
-                ? 'Node.js was not found in PATH'
-                : `Could not start Node.js: ${error.message}` });
-        });
-        child.on('close', (code) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            const version = stdout.trim();
-            if (code !== 0) {
-                resolve({ ok: false, message: `node --version exited with code ${code}: ${stderr.trim()}` });
-                return;
-            }
-            const match = /^v(\d+)\./.exec(version);
-            const major = match ? Number(match[1]) : 0;
-            if (!major || major < REQUIRED_NODE_MAJOR) {
-                resolve({ ok: false, message: `Node.js ${REQUIRED_NODE_MAJOR}+ is required, found ${version || 'unknown version'}` });
-                return;
-            }
-            resolve({ ok: true, version });
-        });
-    });
-}
-
 async function reportStartupError(message) {
     outputChannel.appendLine(`[Startup Error] ${message}`);
     outputChannel.show(true);
@@ -181,12 +136,13 @@ async function activate(context) {
     outputChannel.appendLine("Activating AI Free Chat & Agent...");
     outputChannel.appendLine(`Platform: ${process.platform} ${process.arch}`);
 
-    const nodeCheck = await runNodeVersionCheck();
-    if (!nodeCheck.ok) {
-        await reportStartupError(`${nodeCheck.message}. Install Node.js 18+ and restart VS Code.`);
+    const nodeRuntime = await resolveNodeRuntime();
+    if (nodeRuntime.ok === false) {
+        const detail = nodeRuntime.attempts.join('; ');
+        await reportStartupError(`не найден рабочий Node.js ${REQUIRED_NODE_MAJOR}+: ${detail}. Обновите VS Code или установите Node.js ${REQUIRED_NODE_MAJOR}+.`);
         return;
     }
-    outputChannel.appendLine(`Node.js: ${nodeCheck.version}`);
+    outputChannel.appendLine(`Node.js: ${nodeRuntime.version} (${nodeRuntime.label})`);
 
     // Определяем пути к серверу
     // 1. Для упакованной автономной версии файлы лежат внутри плагина
@@ -226,14 +182,14 @@ async function activate(context) {
         AI_FREE_DISABLE_TELEGRAM: "1",
     };
     
-    serverProcess = spawn('node', [
+    serverProcess = spawn(nodeRuntime.command, [
         serverPath,
         '--no-window',
         '--port', String(port),
         '--workspace', workspacePath
     ], {
         cwd: projectRoot,
-        env,
+        env: { ...env, ...nodeRuntime.envPatch },
         windowsHide: true
     });
 
