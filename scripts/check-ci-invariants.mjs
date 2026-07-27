@@ -65,6 +65,32 @@ check("desktop and VS Code diagnostics are synchronized", () => {
   );
 });
 
+check("desktop and VS Code Camoufox runtimes are synchronized", () => {
+  assert.equal(
+    read("plugin-for-vscode/src/browser/camoufox-runtime.mjs"),
+    read("src/browser/camoufox-runtime.mjs"),
+  );
+  assert.equal(
+    read("plugin-for-vscode/src/window-app/in-app-browser.mjs"),
+    read("src/window-app/in-app-browser.mjs"),
+  );
+});
+
+check("desktop and VS Code ChatGPT transports are synchronized", () => {
+  for (const relativePath of [
+    "providers/chatgpt/browser-proxy.mjs",
+    "providers/chatgpt/client.mjs",
+    "providers/chatgpt/agent-adapter.mjs",
+    "providers/chatgpt/cloudflare-challenge.mjs",
+  ]) {
+    assert.equal(
+      read(`plugin-for-vscode/src/${relativePath}`),
+      read(`src/${relativePath}`),
+      `${relativePath} differs`,
+    );
+  }
+});
+
 check("desktop and VS Code EconomyOS clients are synchronized", () => {
   assert.equal(
     read("plugin-for-vscode/src/providers/economyos/client.mjs"),

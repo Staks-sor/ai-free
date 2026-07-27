@@ -2,7 +2,11 @@
 // интерфейс chatgpt.com в фоновом браузере. Никаких PoW/Turnstile в Node —
 // React-фронтенд сам подписывает запросы. Вся механика в browser-proxy.mjs.
 
-import { getChatGPTBrowserProxy, resetChatGPTBrowserProxy } from "./browser-proxy.mjs";
+import {
+  getChatGPTBrowserProxy,
+  resetChatGPTBrowserProxy,
+  scheduleChatGPTBrowserIdleClose,
+} from "./browser-proxy.mjs";
 
 export class ChatGPTChatClient {
   constructor({ accessToken, cookies, cookieHeader, userAgent, debug = false, proxyFactory = getChatGPTBrowserProxy }) {
@@ -23,16 +27,20 @@ export class ChatGPTChatClient {
   // model/parentMessageId не используются: модель берётся та, что выбрана в веб-UI,
   // а цепочка контекста ведётся самим ChatGPT через conversationId.
   // images: [{ name, mimeType, dataBase64 }] — прикрепляются в веб-композер ChatGPT.
-  async complete({ prompt, onText = null, conversationId = null, images = [] }) {
+  async complete({ prompt, model = null, onText = null, conversationId = null, images = [] }) {
     try {
-      const proxy = await this.proxyFactory({ debug: this.debug });
-      return await proxy.sendChat({ prompt, conversationId, onText, images });
-    } catch (error) {
-      if (!isChatGPTTransportError(error)) throw error;
-      if (this.debug) console.log(`[chatgpt-client] browser transport reset: ${error.message}`);
-      resetChatGPTBrowserProxy();
-      const proxy = await this.proxyFactory({ debug: this.debug });
-      return proxy.sendChat({ prompt, conversationId, onText, images });
+      try {
+        const proxy = await this.proxyFactory({ debug: this.debug });
+        return await proxy.sendChat({ prompt, model, conversationId, onText, images });
+      } catch (error) {
+        if (!isChatGPTTransportError(error)) throw error;
+        if (this.debug) console.log(`[chatgpt-client] browser transport reset: ${error.message}`);
+        resetChatGPTBrowserProxy();
+        const proxy = await this.proxyFactory({ debug: this.debug });
+        return proxy.sendChat({ prompt, model, conversationId, onText, images });
+      }
+    } finally {
+      scheduleChatGPTBrowserIdleClose();
     }
   }
 }

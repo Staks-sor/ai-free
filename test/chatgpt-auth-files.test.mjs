@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
-import { sanitizeCookiesForStorage, pickEssentialChatGPTCookies, estimateCookieHeaderBytes, isChatGPTAuthUsable, getChatGPTSessionToken } from "../src/providers/chatgpt/auth-files.mjs";
+import { sanitizeCookiesForStorage, pickEssentialChatGPTCookies, estimateCookieHeaderBytes, isChatGPTAuthUsable, getChatGPTSessionToken, playwrightCookiesFromSaved } from "../src/providers/chatgpt/auth-files.mjs";
 
 describe("ChatGPT cookie sanitization", () => {
   it("accepts current Auth.js session cookie names", () => {
@@ -89,6 +89,18 @@ describe("ChatGPT cookie sanitization", () => {
 
   it("keeps opaque access tokens usable", () => {
     assert.equal(isChatGPTAuthUsable({ accessToken: "opaque-current-token", cookies: [] }), true);
+  });
+
+  it("preserves exact cookie domains when restoring an OAuth session", () => {
+    const restored = playwrightCookiesFromSaved([
+      { name: "oai-client-auth-session", value: "root", domain: "openai.com", path: "/" },
+      { name: "oai-client-auth-session", value: "auth", domain: ".auth.openai.com", path: "/" },
+    ]);
+    assert.deepEqual(restored.map(({ domain, path }) => ({ domain, path })), [
+      { domain: "openai.com", path: "/" },
+      { domain: ".auth.openai.com", path: "/" },
+    ]);
+    assert.equal(restored.some((cookie) => "url" in cookie), false);
   });
 
 });

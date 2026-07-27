@@ -50,6 +50,7 @@ import {
   resetChatGPTLiveSession,
   renderEmbedChatGPTLiveHtml,
   setChatGPTPanelViewport,
+  stopChatGPTInAppBrowser,
   warmChatGPTInAppBrowser,
 } from "./chatgpt-live-panel.mjs";
 import {
@@ -105,9 +106,9 @@ export async function runWindowApp({
   openWindow = true,
   consoleLog = false,
 }) {
-  // ChatGPT по умолчанию использует отдельный видимый Chrome: так авторизация и Cloudflare работают стабильнее.
+  // ChatGPT по умолчанию работает во встроенной панели AI Free через Camoufox.
   if (process.env.CHATGPT_EMBED_IN_UI == null) {
-    process.env.CHATGPT_EMBED_IN_UI = "0";
+    process.env.CHATGPT_EMBED_IN_UI = "1";
   }
 
   {
@@ -589,7 +590,7 @@ export async function runWindowApp({
     if (provider === "chatgpt") {
       // Шаг цепочки — в свежем веб-диалоге (conversationId: null), чтобы не тянуть
       // старый контекст чата. ChatGPT сам создаст новый разговор под этот шаг.
-      const result = await chatGPTApiCall((c) => c.complete({ prompt, conversationId: null }));
+      const result = await chatGPTApiCall((c) => c.complete({ prompt, model: conversation.model, conversationId: null }));
       const cleanText = extractPipelineResult(String(result.text || "").trim());
       conversation.messages.push({
         role: "assistant",
@@ -810,6 +811,16 @@ export async function runWindowApp({
         }
       }
 
+      if (req.method === "POST" && url.pathname === "/api/chatgpt/stop-live") {
+        try {
+          const result = await stopChatGPTInAppBrowser();
+          chatGPTClient = null;
+          return sendJson(res, result);
+        } catch (error) {
+          return sendJson(res, { error: error.message }, 500);
+        }
+      }
+
       if (req.method === "GET" && url.pathname === "/api/chatgpt/live-stream") {
         return handleChatGPTLiveStream(req, res);
       }
@@ -931,7 +942,9 @@ export async function runWindowApp({
 
       // Список провайдеров + статус auth. UI рисует picker по этому ответу.
       if (req.method === "GET" && url.pathname === "/api/providers") {
-        await refreshChatGPTAuthFromOpenBrowser();
+        if (!providerLoginJobs.has("chatgpt")) {
+          await refreshChatGPTAuthFromOpenBrowser();
+        }
         const { listProviders } = await import("../providers/registry.mjs");
         const providers = listProviders().map((p) => ({
           id: p.id,
@@ -963,16 +976,6 @@ export async function runWindowApp({
           return sendJson(res, { error: `Unknown provider: ${providerId}` }, 404);
         }
         try {
-          if (providerId === "chatgpt" && process.env.CHATGPT_EMBED_IN_UI === "1") {
-            const { resetChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
-            resetChatGPTBrowserProxy();
-            chatGPTClient = null;
-            return sendJson(res, {
-              ok: true,
-              embedLogin: true,
-              hasAuth: provider.hasAuth(),
-            });
-          }
           if (providerLoginJobs.has(providerId)) {
             return sendJson(res, {
               ok: true,
@@ -982,7 +985,9 @@ export async function runWindowApp({
             });
           }
           const loginJob = (async () => {
-            await provider.login();
+            await provider.login(providerId === "chatgpt" && process.env.CHATGPT_EMBED_IN_UI === "1"
+              ? { forceExternal: true, closeAfterLogin: true }
+              : {});
             if (providerId === "qwen") {
               const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
               await resetQwenBrowserProxy();
@@ -1926,6 +1931,7 @@ export async function runWindowApp({
               const { createChatGPTAgentAdapter } = await import("../providers/chatgpt/agent-adapter.mjs");
               const adapter = createChatGPTAgentAdapter(chatGPTClient, {
                 conversationId: conversation.sessionId || null,
+                model: conversation.model || null,
                 images: chatGPTCodeImages,
                 onConversationId: (id) => {
                   conversation.sessionId = id;

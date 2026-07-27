@@ -8,6 +8,7 @@ import { AI_FREE_VERSION, SETTINGS_FILE } from "../config.mjs";
 import { loadSettings } from "../state/settings.mjs";
 import { getStateFile } from "../state/window-state.mjs";
 import { listProviders } from "../providers/registry.mjs";
+import { probeRuntimeCommand } from "../updater.mjs";
 
 const execFileAsync = promisify(execFile);
 const COMMANDS = ["node", "npm", "git", "python3", "python", "pio", "arduino-cli", "esptool.py"];
@@ -119,21 +120,7 @@ export function formatDiagnosticReport(data) {
 }
 
 async function checkCommand(command) {
-  const args = command === "node" ? ["--version"] : ["--version"];
-  try {
-    const { stdout, stderr } = await execFileAsync(command, args, {
-      timeout: 6000,
-      maxBuffer: 100_000,
-    });
-    const version = String(stdout || stderr || "").split(/\r?\n/)[0]?.trim() || "ok";
-    return { command, ok: true, version };
-  } catch (error) {
-    return {
-      command,
-      ok: false,
-      error: error.code === "ENOENT" ? "not found" : (error.message || "failed"),
-    };
-  }
+  return probeRuntimeCommand(command);
 }
 
 async function collectGitInfo(workspaceRoot) {

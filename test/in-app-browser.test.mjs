@@ -17,7 +17,7 @@ describe("in-app-browser", () => {
     assert.equal(IN_APP_BROWSER_VIEWPORT.height, 900);
   });
 
-  it("defaults to google-chrome-cdp launch label", () => {
-    assert.equal(getInAppBrowserLaunchLabel(), "google-chrome-cdp");
+  it("defaults to Camoufox launch label", () => {
+    assert.equal(getInAppBrowserLaunchLabel(), "camoufox");
   });
 });

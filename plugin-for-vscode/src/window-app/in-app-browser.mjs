@@ -1,17 +1,14 @@
-// In-app браузер AI Free = настоящий Google Chrome (spawn + CDP), не Patchright persistent.
-// Окно Chrome скрыто за экраном; пользователь видит MJPEG в 🧠 → Браузер.
+// Встроенный браузер AI Free: Camoufox без отдельного окна, UI передаётся через MJPEG.
+// Если runtime недоступен, используется bundled Chromium, но не системный Google Chrome.
 
+import os from "node:os";
+import path from "node:path";
 import { CHATGPT_BASE_URL, CHATGPT_BROWSER_PROFILE } from "../providers/chatgpt/config.mjs";
-import {
-  ensureChatGPTProfileReady,
-  isChromeProfileErrorPage,
-  launchNormalChromeForChatGPT,
-  prepareChromeProfileForLaunch,
-  resetChatGPTProfileReady,
-} from "../providers/chatgpt/browser-login.mjs";
+import { launchCamoufoxSession } from "../browser/camoufox-runtime.mjs";
 import { getChatGPTChromium } from "../providers/chatgpt/engine.mjs";
 
 export const IN_APP_BROWSER_PROFILE = CHATGPT_BROWSER_PROFILE;
+export const IN_APP_BROWSER_FALLBACK_PROFILE = path.join(os.homedir(), ".deepseek-cli", "internal-browser-profile");
 export const IN_APP_BROWSER_VIEWPORT = { width: 580, height: 900 };
 
 const SLOT_PAGES = new Map();
@@ -19,64 +16,53 @@ const SLOT_PAGES = new Map();
 let sessionPromise = null;
 /** @type {Promise<{ context, page, close, mode }> | null} */
 let launchingPromise = null;
-let launchLabel = "google-chrome-cdp";
+let launchLabel = "camoufox";
 
-function useHeadlessChrome() {
-  return process.env.CHATGPT_EMBED_HEADED === "0";
+function preferCamoufox() {
+  return String(process.env.AI_FREE_BROWSER_ENGINE || "camoufox").toLowerCase() !== "chromium";
 }
 
-async function launchChromeSession() {
-  await ensureChatGPTProfileReady(IN_APP_BROWSER_PROFILE);
-
+async function launchBundledChromiumSession() {
   const { ensureBrowserBinaries } = await import("../browser/ensure-binaries.mjs");
   await ensureBrowserBinaries();
-
   const chromium = await getChatGPTChromium();
-  const headless = useHeadlessChrome();
-  const launchOpts = {
-    initialUrl: `${CHATGPT_BASE_URL}/`,
-    clearCookies: false,
-    headless,
-    embedded: true,
-    offscreen: !headless,
-    skipKillStale: true,
-    windowSize: IN_APP_BROWSER_VIEWPORT,
+  const context = await chromium.launchPersistentContext(IN_APP_BROWSER_FALLBACK_PROFILE, {
+    headless: true,
+    viewport: IN_APP_BROWSER_VIEWPORT,
+    locale: "ru-RU",
+    reducedMotion: "reduce",
+  });
+  const page = context.pages()[0] || await context.newPage();
+  return {
+    context,
+    page,
+    close: () => context.close(),
+    mode: "bundled-chromium",
   };
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (attempt > 0) {
-      await prepareChromeProfileForLaunch(IN_APP_BROWSER_PROFILE, { clearCookies: false });
-    }
-
-    const session = await launchNormalChromeForChatGPT(chromium, IN_APP_BROWSER_PROFILE, launchOpts);
-    if (!session) continue;
-
-    if (await isChromeProfileErrorPage(session.page, session.context)) {
-      try { await session.close(); } catch {}
-      continue;
-    }
-
-    launchLabel = session.mode === "chrome-cdp-embedded" ? "google-chrome-cdp" : String(session.mode);
-    return session;
-  }
-
-  throw new Error(
-    "Chrome не запустился (профиль занят). Нажмите «Сброс» в панели или выполните: pkill -9 -f user-data-dir=.chatgpt-cli",
-  );
 }
 
-async function ensureChromeSession() {
+async function launchInternalSession() {
+  if (preferCamoufox()) {
+    try {
+      const session = await launchCamoufoxSession({ viewport: IN_APP_BROWSER_VIEWPORT });
+      launchLabel = session.mode;
+      return session;
+    } catch (error) {
+      console.warn(`[in-app-browser] Camoufox unavailable, using bundled Chromium: ${error.message}`);
+    }
+  }
+  const session = await launchBundledChromiumSession();
+  launchLabel = session.mode;
+  return session;
+}
+
+async function ensureInternalSession() {
   if (sessionPromise) {
     try {
       const session = await sessionPromise;
       const page = session.page;
       if (page && !page.isClosed?.()) {
-        if (await isChromeProfileErrorPage(page, session.context)) {
-          try { await session.close(); } catch {}
-          sessionPromise = null;
-        } else {
-          return session;
-        }
+        return session;
       } else {
         sessionPromise = null;
       }
@@ -86,7 +72,7 @@ async function ensureChromeSession() {
   }
 
   if (!launchingPromise) {
-    launchingPromise = launchChromeSession()
+    launchingPromise = launchInternalSession()
       .then((session) => {
         sessionPromise = Promise.resolve(session);
         return session;
@@ -108,11 +94,11 @@ export function getInAppBrowserLaunchLabel() {
 }
 
 export function isInAppBrowserHeadless() {
-  return useHeadlessChrome();
+  return true;
 }
 
 export async function getInAppBrowserContext() {
-  const session = await ensureChromeSession();
+  const session = await ensureInternalSession();
   return session.context;
 }
 
@@ -124,7 +110,7 @@ async function resolveSlotPage(slot) {
     return cached;
   }
 
-  const session = await ensureChromeSession();
+  const session = await ensureInternalSession();
   const { context } = session;
 
   if (key === "chatgpt") {
@@ -154,7 +140,7 @@ export async function getInAppBrowserPage(slot = "web") {
 }
 
 export async function closeInAppBrowser() {
-  const pending = sessionPromise;
+  const pending = sessionPromise || launchingPromise;
   sessionPromise = null;
   launchingPromise = null;
   SLOT_PAGES.clear();
@@ -167,19 +153,17 @@ export async function closeInAppBrowser() {
 
 export async function resetInAppBrowser() {
   await closeInAppBrowser();
-  resetChatGPTProfileReady();
-  await prepareChromeProfileForLaunch(IN_APP_BROWSER_PROFILE, { clearCookies: false });
-  await ensureChromeSession();
+  await ensureInternalSession();
   return { ok: true, engine: getInAppBrowserLaunchLabel() };
 }
 
 export async function attachInAppBrowserSession(slot = "chatgpt") {
-  const session = await ensureChromeSession();
+  const session = await ensureInternalSession();
   const page = await resolveSlotPage(slot);
   return {
     context: session.context,
     page,
     close: async () => {},
-    mode: "chrome-cdp",
+    mode: session.mode,
   };
 }

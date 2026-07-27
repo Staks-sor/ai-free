@@ -43,24 +43,52 @@ function scheduleAuthSync() {
 }
 
 export async function warmChatGPTInAppBrowser() {
+  const { isChatGPTReliableLoginActive } = await import("../providers/chatgpt/browser-login.mjs");
+  if (isChatGPTReliableLoginActive()) return { ok: true, externalLogin: true };
   const { startChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
   startChatGPTBrowserProxy();
   return { ok: true };
 }
 
+export async function stopChatGPTInAppBrowser() {
+  const { closeChatGPTBrowserProxy, syncChatGPTAuthFromActiveProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
+  await syncChatGPTAuthFromActiveProxy().catch(() => null);
+  await closeChatGPTBrowserProxy();
+  return { ok: true, stopped: true };
+}
+
 export async function prepareChatGPTPanelPage() {
+  const { isChatGPTReliableLoginActive } = await import("../providers/chatgpt/browser-login.mjs");
+  if (isChatGPTReliableLoginActive()) {
+    throw new Error("ChatGPT login is active in Chrome.");
+  }
   const { getChatGPTBrowserProxy } = await import("../providers/chatgpt/browser-proxy.mjs");
   const proxy = await getChatGPTBrowserProxy();
   const page = proxy.getPage();
   await page.setViewportSize(getChatGPTPanelViewport());
   // Только открыть chatgpt.com — без ожидания Cloudflare (вход вручную в панели).
-  if (!/chatgpt\.com/i.test(page.url())) {
+  // Страницы OAuth не перенаправляем обратно: пользователь должен закончить вход.
+  if (!/^https?:/i.test(page.url())) {
     await page.goto(`${CHATGPT_BASE_URL}/`, { waitUntil: "domcontentloaded", timeout: 90_000 }).catch(() => {});
   }
   return proxy;
 }
 
 export async function handleChatGPTSyncSession() {
+  const { isChatGPTReliableLoginActive } = await import("../providers/chatgpt/browser-login.mjs");
+  if (isChatGPTReliableLoginActive()) {
+    return {
+      ok: true,
+      hasAuth: false,
+      saved: false,
+      ready: false,
+      challenge: false,
+      loginRequired: true,
+      externalLogin: true,
+      initializing: false,
+      recovering: false,
+    };
+  }
   const {
     getChatGPTBrowserProxy,
     getChatGPTBrowserProxyStatus,
@@ -106,18 +134,19 @@ export async function handleChatGPTSyncSession() {
       challenge: false,
       initializing: false,
       recovering: false,
-      error: proxyStatus.error || "Не удалось запустить Chrome. Нажмите «Сброс».",
+      error: proxyStatus.error || "Не удалось запустить Camoufox. Нажмите «Сброс».",
     };
   }
 
   const proxy = await getChatGPTBrowserProxy();
   const auth = await syncChatGPTAuthFromActiveProxy();
   const fresh = auth || readChatGPTAuth(CHATGPT_AUTH_FILE);
-  const hasAuth = isChatGPTAuthUsable(fresh);
-  const saved = hasAuth && (!beforeUsable || JSON.stringify(before?.cookies || []) !== JSON.stringify(fresh?.cookies || []));
+  const storedAuth = isChatGPTAuthUsable(fresh);
   const pageState = typeof proxy.getPageState === "function"
     ? await proxy.getPageState()
     : { hasComposer: false, challenge: false, url: proxy.getPage().url() };
+  const hasAuth = storedAuth && pageState.loginRequired !== true;
+  const saved = hasAuth && (!beforeUsable || JSON.stringify(before?.cookies || []) !== JSON.stringify(fresh?.cookies || []));
   const ready = hasAuth && pageState.hasComposer === true;
 
   if (ready || pageState.challenge || !hasAuth) {
@@ -131,6 +160,7 @@ export async function handleChatGPTSyncSession() {
     hasAuth
     && !ready
     && !pageState.challenge
+    && !pageState.loginRequired
     && stuckForMs >= STUCK_RELOAD_AFTER_MS
     && Date.now() - lastAutoReloadAt >= AUTO_RELOAD_COOLDOWN_MS
   );
@@ -150,6 +180,8 @@ export async function handleChatGPTSyncSession() {
     saved: Boolean(saved),
     ready,
     challenge: pageState.challenge === true,
+    loginRequired: pageState.loginRequired === true,
+    pageUrl: pageState.url || proxy.getPage().url(),
     initializing: false,
     recovering: Boolean(recoveryPromise),
     stuckForMs,
@@ -241,9 +273,9 @@ export async function handleChatGPTLiveStream(req, res) {
     return;
   }
 
-  const page = proxy.getPage();
   while (!closed) {
     try {
+      const page = proxy.getPage();
       const buf = await page.screenshot({ type: "jpeg", quality: 60, timeout: 15_000 });
       res.write(`--${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${buf.length}\r\n\r\n`);
       res.write(buf);
@@ -311,7 +343,8 @@ export function renderEmbedChatGPTLiveHtml() {
 </head>
 <body>
   <header class="bar">
-    <span id="status">Google Chrome внутри ai-free — кликните в экран и войдите вручную</span>
+    <span id="status">Camoufox внутри AI Free — при первом запуске браузер загрузится автоматически</span>
+    <button type="button" class="btn" id="chromeLoginBtn">Войти через Chrome</button>
     <button type="button" class="btn" id="resetBtn">Сброс</button>
     <button type="button" class="btn" id="syncBtn">Синхронизировать</button>
     <button type="button" class="btn" id="reloadBtn">↻</button>
@@ -321,7 +354,7 @@ export function renderEmbedChatGPTLiveHtml() {
       <img id="live" src="/api/chatgpt/live-stream" alt="ChatGPT live">
       <div id="clickLayer" title="Клик для фокуса"></div>
     </div>
-    <div class="hint" id="hint">Настоящий Chrome (скрыт за экраном). Войдите и пройдите Cloudflare здесь — сессия сохранится в ~/.chatgpt-cli/auth.json</div>
+    <div class="hint" id="hint">Войдите и пройдите Cloudflare прямо здесь — сессия сохранится для следующих запусков</div>
   </div>
   <script>
     let VW = ${defaults.width};
@@ -335,6 +368,28 @@ export function renderEmbedChatGPTLiveHtml() {
     let captureKeys = false;
     let streamNonce = Date.now();
     let viewportSyncTimer = null;
+    let browserStopped = false;
+    let externalLoginRunning = false;
+
+    async function stopBrowserAfterSync() {
+      if (browserStopped) return;
+      await fetch("/api/chatgpt/stop-live", { method: "POST" }).catch(() => {});
+      browserStopped = true;
+      live.removeAttribute("src");
+      live.style.display = "none";
+      clickLayer.style.pointerEvents = "none";
+      statusEl.textContent = "Сессия сохранена — Camoufox остановлен";
+      hintEl.textContent = "Для входа заново нажмите «Синхронизировать». При сообщении браузер запустится скрыто и остановится после работы.";
+    }
+
+    function restartBrowserPanel() {
+      browserStopped = false;
+      live.style.display = "block";
+      clickLayer.style.pointerEvents = "auto";
+      streamNonce = Date.now();
+      live.src = "/api/chatgpt/live-stream?t=" + streamNonce;
+      fetch("/api/chatgpt/warm", { method: "POST" }).catch(() => {});
+    }
 
     function applyViewportSize(w, h) {
       if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) return;
@@ -440,20 +495,30 @@ export function renderEmbedChatGPTLiveHtml() {
     });
 
     async function syncSession() {
+      if (browserStopped) {
+        restartBrowserPanel();
+        statusEl.textContent = "Запускаю Camoufox внутри панели…";
+        return;
+      }
       statusEl.textContent = "Синхронизация…";
       try {
         const r = await fetch("/api/chatgpt/sync-session", { method: "POST" });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(data.error || r.statusText);
-        if (data.initializing) {
-          statusEl.textContent = "Запускаю Chrome внутри панели…";
-          hintEl.textContent = "Обычно 5–15 секунд. Отдельное окно Chrome не должно появляться.";
+        if (data.externalLogin) {
+          statusEl.textContent = "Завершите вход в открытом окне Chrome…";
+          hintEl.textContent = "Окно закроется автоматически после проверки активной сессии.";
+        } else if (data.initializing) {
+          statusEl.textContent = "Запускаю Camoufox внутри панели…";
+          hintEl.textContent = "Обычно 5–15 секунд. Отдельное окно браузера не появляется.";
         } else if (data.ready) {
-          statusEl.textContent = "Готово — сессия сохранена, можно писать в чат ai-free";
-          hintEl.textContent = "Cookies и токен в ~/.chatgpt-cli/auth.json";
+          await stopBrowserAfterSync();
         } else if (data.challenge) {
           statusEl.textContent = "Cloudflare — отметьте «I'm human» кликом в экран";
           hintEl.textContent = "Кликните в чёрную область, затем по чекбоксу на скрине.";
+        } else if (data.loginRequired) {
+          statusEl.textContent = "Завершите вход в ChatGPT";
+          hintEl.textContent = "Выберите учётную запись в окне ниже и дождитесь открытия обычного чата.";
         } else if (data.recovering) {
           statusEl.textContent = "ChatGPT завис при загрузке — перезапускаю страницу…";
           hintEl.textContent = "Авторизация есть, интерфейс ещё не загрузился.";
@@ -470,18 +535,23 @@ export function renderEmbedChatGPTLiveHtml() {
     }
 
     async function syncSessionQuiet() {
+      if (browserStopped || externalLoginRunning) return;
       try {
         const r = await fetch("/api/chatgpt/sync-session", { method: "POST" });
         const data = await r.json().catch(() => ({}));
-        if (data.initializing) {
-          statusEl.textContent = "Запускаю Chrome внутри панели…";
+        if (data.externalLogin) {
+          statusEl.textContent = "Завершите вход в открытом окне Chrome…";
+        } else if (data.initializing) {
+          statusEl.textContent = "Запускаю Camoufox внутри панели…";
         } else if (!r.ok || data.ok === false) {
-          statusEl.textContent = "Chrome: " + (data.error || "ошибка запуска — нажмите «Сброс»");
+          statusEl.textContent = "Camoufox: " + (data.error || "ошибка запуска — нажмите «Сброс»");
         } else if (data.ready) {
-          statusEl.textContent = "ChatGPT готов — можно писать в чат";
-          hintEl.textContent = "Авторизация и интерфейс ChatGPT готовы.";
+          await stopBrowserAfterSync();
         } else if (data.challenge) {
           statusEl.textContent = "Cloudflare ещё не пройден — завершите проверку";
+        } else if (data.loginRequired) {
+          statusEl.textContent = "Выберите учётную запись и завершите вход";
+          hintEl.textContent = "Camoufox не закроется, пока обычный чат ChatGPT не откроется.";
         } else if (data.recovering) {
           statusEl.textContent = "ChatGPT завис при загрузке — перезапускаю страницу…";
         } else if (data.hasAuth) {
@@ -495,7 +565,56 @@ export function renderEmbedChatGPTLiveHtml() {
 
     fetch("/api/chatgpt/warm", { method: "POST" }).catch(() => {});
 
+    async function startReliableLogin() {
+      if (externalLoginRunning) return;
+      externalLoginRunning = true;
+      browserStopped = true;
+      live.removeAttribute("src");
+      live.style.display = "none";
+      clickLayer.style.pointerEvents = "none";
+      statusEl.textContent = "Открываю обычный Chrome для надёжного входа…";
+      hintEl.textContent = "Завершите вход в открывшемся окне. Оно закроется только после проверки активной сессии.";
+      await fetch("/api/chatgpt/stop-live", { method: "POST" }).catch(() => {});
+
+      try {
+        const response = await fetch("/api/providers/chatgpt/login", { method: "POST" });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.ok === false) throw new Error(result.error || response.statusText);
+      } catch (error) {
+        externalLoginRunning = false;
+        statusEl.textContent = "Не удалось открыть Chrome: " + error.message;
+        return;
+      }
+
+      const poll = async () => {
+        if (!externalLoginRunning) return;
+        try {
+          const response = await fetch("/api/providers");
+          const data = await response.json().catch(() => ({}));
+          const provider = (data.providers || []).find((item) => item.id === "chatgpt");
+          if (provider?.loginState === "error") {
+            externalLoginRunning = false;
+            statusEl.textContent = "Вход не завершён: " + (provider.loginError || "неизвестная ошибка");
+            hintEl.textContent = "Нажмите «Войти через Chrome» и повторите вход.";
+            return;
+          }
+          if (provider?.loginState === "completed") {
+            externalLoginRunning = false;
+            restartBrowserPanel();
+            statusEl.textContent = "Сессия проверена — запускаю ChatGPT внутри AI Free…";
+            hintEl.textContent = "Обычный Chrome закрыт. Дальше ChatGPT работает через скрытый браузер.";
+            return;
+          }
+        } catch {}
+        setTimeout(poll, 2000);
+      };
+      setTimeout(poll, 1500);
+    }
+
     async function resetLiveSession() {
+      browserStopped = false;
+      live.style.display = "block";
+      clickLayer.style.pointerEvents = "auto";
       statusEl.textContent = "Перезапуск…";
       try {
         const r = await fetch("/api/chatgpt/reset-live", { method: "POST" });
@@ -511,6 +630,7 @@ export function renderEmbedChatGPTLiveHtml() {
 
     document.getElementById("resetBtn").addEventListener("click", resetLiveSession);
     document.getElementById("syncBtn").addEventListener("click", syncSession);
+    document.getElementById("chromeLoginBtn").addEventListener("click", startReliableLogin);
     document.getElementById("reloadBtn").addEventListener("click", async () => {
       statusEl.textContent = "Перезагружаю страницу ChatGPT…";
       try {

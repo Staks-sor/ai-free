@@ -41,9 +41,9 @@ export const PROVIDERS = {
     description: "chatgpt.com — бесплатный веб-интерфейс OpenAI",
     authFile: CHATGPT_AUTH_FILE,
     hasAuth: () => isChatGPTAuthUsable(readChatGPTAuth(CHATGPT_AUTH_FILE)),
-    async login() {
+    async login(options = {}) {
       const { loginChatGPTAndSave } = await import("./chatgpt/browser-login.mjs");
-      await loginChatGPTAndSave();
+      await loginChatGPTAndSave(CHATGPT_AUTH_FILE, options);
     },
   },
   economyos: {

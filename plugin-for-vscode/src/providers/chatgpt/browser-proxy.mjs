@@ -34,11 +34,14 @@ import {
 } from "./cloudflare-challenge.mjs";
 import { killStaleChromeForProfile, launchNormalChromeForChatGPT, getChatGPTBrowserLaunchOptions } from "./browser-login.mjs";
 import { getChatGPTChromium, getChatGPTEngineName } from "./engine.mjs";
+import { findProviderModel } from "../model-catalog.mjs";
 
 const EMBED_PANEL_VIEWPORT = { width: 580, height: 900 };
 
 let proxyPromise = null;
 let proxyStatus = { state: "idle", error: "" };
+let idleCloseTimer = null;
+const BROWSER_IDLE_CLOSE_MS = Math.max(5_000, Number(process.env.CHATGPT_BROWSER_IDLE_MS || 20_000));
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -105,6 +108,10 @@ export function normalizeChatGPTAssistantText(text) {
 }
 
 export async function closeChatGPTBrowserProxy() {
+  if (idleCloseTimer) {
+    clearTimeout(idleCloseTimer);
+    idleCloseTimer = null;
+  }
   const current = proxyPromise;
   proxyPromise = null;
   proxyStatus = { state: "idle", error: "" };
@@ -113,6 +120,19 @@ export async function closeChatGPTBrowserProxy() {
     const proxy = await current;
     await proxy.close?.();
   } catch {}
+  if (process.env.CHATGPT_EMBED_IN_UI !== "0") {
+    const { closeInAppBrowser } = await import("../../window-app/in-app-browser.mjs");
+    await closeInAppBrowser().catch(() => {});
+  }
+}
+
+export function scheduleChatGPTBrowserIdleClose(delayMs = BROWSER_IDLE_CLOSE_MS) {
+  if (idleCloseTimer) clearTimeout(idleCloseTimer);
+  idleCloseTimer = setTimeout(() => {
+    idleCloseTimer = null;
+    closeChatGPTBrowserProxy().catch(() => {});
+  }, Math.max(1_000, Number(delayMs) || BROWSER_IDLE_CLOSE_MS));
+  idleCloseTimer.unref?.();
 }
 
 export function resetChatGPTBrowserProxy() {
@@ -120,6 +140,10 @@ export function resetChatGPTBrowserProxy() {
 }
 
 export function getChatGPTBrowserProxy({ debug = false } = {}) {
+  if (idleCloseTimer) {
+    clearTimeout(idleCloseTimer);
+    idleCloseTimer = null;
+  }
   if (!proxyPromise) {
     proxyStatus = { state: "starting", error: "" };
     proxyPromise = createProxy({ debug })
@@ -196,6 +220,37 @@ async function createProxy({ debug, adoptedSession = null }) {
   let sendCount = 0;
   let authPollTimer = null;
   let authWatchersAttached = false;
+  let pageLifecycleAttached = false;
+  const observedPages = new WeakSet();
+
+  function observeActivePage(candidate) {
+    if (!candidate || candidate.isClosed?.()) return;
+    page = candidate;
+
+    if (observedPages.has(candidate)) return;
+    observedPages.add(candidate);
+
+    candidate.on("load", () => {
+      if (!authWatchersAttached) return;
+      setTimeout(() => { syncAuthFromBrowser().catch(() => {}); }, 1500);
+    });
+    candidate.on("close", () => {
+      if (page !== candidate || !context) return;
+      const fallback = context.pages().filter((item) => !item.isClosed?.()).at(-1);
+      if (fallback) observeActivePage(fallback);
+    });
+  }
+
+  function attachPageLifecycle() {
+    if (!context || pageLifecycleAttached) return;
+    pageLifecycleAttached = true;
+    context.on("page", (candidate) => {
+      // OAuth providers commonly open a separate page. The embedded panel must
+      // follow it and return to ChatGPT when that page closes.
+      observeActivePage(candidate);
+    });
+    observeActivePage(page);
+  }
 
   async function syncAuthFromBrowser() {
     try {
@@ -213,6 +268,21 @@ async function createProxy({ debug, adoptedSession = null }) {
           return r.json();
         });
       } catch {}
+
+      if (session?.error === "RefreshAccessTokenError") {
+        const withoutExpiredSession = cookies.filter((cookie) =>
+          !/^(?:__Secure-)?(?:next-auth|authjs)\.session-token(?:\.\d+)?$/.test(String(cookie?.name || "")),
+        );
+        writeChatGPTAuth(CHATGPT_AUTH_FILE, {
+          cookies: withoutExpiredSession,
+          accessToken: "",
+          sessionToken: "",
+          profileDir: CHATGPT_BROWSER_PROFILE,
+          userAgent: authState.data?.userAgent || userAgent,
+        });
+        authState.data = readChatGPTAuth(CHATGPT_AUTH_FILE);
+        return null;
+      }
 
       const accessToken = session?.accessToken || authState.data?.accessToken || "";
       const sessionToken = session?.sessionToken || sessionTokenFromCookie || authState.data?.sessionToken || "";
@@ -241,6 +311,14 @@ async function createProxy({ debug, adoptedSession = null }) {
   }
 
   async function pruneBrowserCookiesIfNeeded({ force = false } = {}) {
+    if (!force && page && !page.isClosed?.()) {
+      const currentUrl = page.url();
+      if (/^https?:/i.test(currentUrl) && !/https?:\/\/([^/]+\.)?chatgpt\.com(?:[/:]|$)/i.test(currentUrl)) {
+        return false;
+      }
+      const currentState = await detectCloudflareChallenge(page).catch(() => null);
+      if (currentState?.loginRequired) return false;
+    }
     const raw = await context.cookies().catch(() => []);
     const essential = pickEssentialChatGPTCookies(raw);
     const rawBytes = estimateCookieHeaderBytes(raw);
@@ -340,12 +418,14 @@ async function createProxy({ debug, adoptedSession = null }) {
     context = adoptedSession.context;
     page = adoptedSession.page;
     browserSession = adoptedSession;
+    attachPageLifecycle();
     if (debug) console.log("[chatgpt-proxy] adopted login browser — окно остаётся открытым");
     await syncAuthFromBrowser();
   } else {
     const r = await launchBrowser();
     context = r.ctx;
     page = r.pg;
+    attachPageLifecycle();
     try {
       await pruneBrowserCookiesIfNeeded();
       if (!/chatgpt\.com/.test(page.url())) {
@@ -389,7 +469,12 @@ async function createProxy({ debug, adoptedSession = null }) {
   process.once("exit", () => { close(); });
 
   async function detectPageState() {
-    return detectCloudflareChallenge(page);
+    const state = await detectCloudflareChallenge(page);
+    const url = page.url();
+    if (/^https?:/i.test(url) && !/https?:\/\/([^/]+\.)?chatgpt\.com(?:[/:]|$)/i.test(url)) {
+      return { ...state, url, hasComposer: false, loginRequired: true };
+    }
+    return { ...state, url };
   }
 
   async function waitThroughCloudflareChallenge({ maxMs = CLOUDFLARE_WAIT_MS } = {}) {
@@ -434,10 +519,15 @@ async function createProxy({ debug, adoptedSession = null }) {
     let reloaded = false;
     const startedAt = Date.now();
     while (Date.now() < deadline) {
-      const found = await findComposerLocator();
-      if (found) return found;
-
       const state = await detectPageState();
+      if (!state.loginRequired) {
+        const found = await findComposerLocator();
+        if (found) return found;
+      } else if (Date.now() - startedAt > 2500) {
+        throw new Error(
+          "ChatGPT: вход не завершён. Откройте 🧠 → Браузер → ChatGPT, выберите учётную запись и дождитесь обычного чата. authentication",
+        );
+      }
       if (state.challenge) {
         if (!(await waitThroughCloudflareChallenge())) {
           throw new Error(
@@ -501,16 +591,10 @@ async function createProxy({ debug, adoptedSession = null }) {
         .catch(() => {}),
     ]);
 
-    if (!onText) {
-      await page
-        .waitForSelector('[data-testid="stop-button"]', { state: "detached", timeout: GENERATION_TIMEOUT_MS })
-        .catch(() => {});
-      await page.waitForTimeout(900);
-      return;
-    }
-
     let lastText = "";
     let sawGeneration = false;
+    let sawStopButton = false;
+    let stablePolls = 0;
     const deadline = Date.now() + GENERATION_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
@@ -522,25 +606,25 @@ async function createProxy({ debug, adoptedSession = null }) {
 
       if (stopCount > 0 || assistantCount > beforeAssistantCount) {
         sawGeneration = true;
+        if (stopCount > 0) sawStopButton = true;
         const text = await readStreamingAssistantText();
         if (text && text !== lastText) {
-          onText(text);
+          onText?.(text);
           lastText = text;
+          stablePolls = 0;
+        } else if (text && stopCount === 0) {
+          stablePolls += 1;
         }
       }
 
-      if (sawGeneration && stopCount === 0) {
-        await page.waitForTimeout(350);
-        const text = await readStreamingAssistantText();
-        if (text && text !== lastText) {
-          onText(text);
-          lastText = text;
-        }
-        const stopAgain = await page.locator('[data-testid="stop-button"]').count().catch(() => 0);
-        if (stopAgain === 0) break;
+      // Новый DOM сначала создаёт пустой assistant-контейнер, а кнопку Stop иногда
+      // вообще не показывает. Завершаем только после стабильного непустого текста.
+      const stableEnough = sawStopButton ? stablePolls >= 2 : stablePolls >= 6;
+      if (sawGeneration && lastText && stopCount === 0 && stableEnough) {
+        break;
       }
 
-      await page.waitForTimeout(280);
+      await page.waitForTimeout(300);
     }
     await page.waitForTimeout(400);
   }
@@ -797,7 +881,42 @@ async function createProxy({ debug, adoptedSession = null }) {
     await page.waitForTimeout(800);
   }
 
-  async function sendChatOnce({ prompt, conversationId, onText, images = [] }) {
+  async function selectChatGPTModel(modelId) {
+    const model = findProviderModel("chatgpt", modelId);
+    const labels = Array.isArray(model?.webLabels) ? model.webLabels : [];
+    if (!labels.length) return false;
+
+    const picker = page.getByTestId("model-switcher-dropdown-button").first();
+    if (!(await picker.count().catch(() => 0))) return false;
+    const current = String(await picker.innerText().catch(() => "")).trim().toLowerCase();
+    if (labels.some((label) => current.includes(label.toLowerCase()))) return true;
+
+    await picker.click({ timeout: 10_000 });
+    await page.waitForTimeout(300);
+    for (const label of labels) {
+      const candidates = [
+        page.getByRole("menuitem", { name: label, exact: true }),
+        page.getByRole("option", { name: label, exact: true }),
+        page.getByText(label, { exact: true }),
+      ];
+      for (const candidate of candidates) {
+        const count = await candidate.count().catch(() => 0);
+        for (let index = 0; index < count; index += 1) {
+          const item = candidate.nth(index);
+          if (!(await item.isVisible().catch(() => false))) continue;
+          await item.click({ timeout: 10_000 });
+          await page.waitForTimeout(500);
+          return true;
+        }
+      }
+    }
+    await page.keyboard.press("Escape").catch(() => {});
+    throw new Error(
+      `ChatGPT: режим «${model?.label || modelId}» недоступен для этого аккаунта. Выберите другой режим.`,
+    );
+  }
+
+  async function sendChatOnce({ prompt, model, conversationId, onText, images = [] }) {
     sendCount += 1;
     if (sendCount % 4 === 0) {
       await pruneBrowserCookiesIfNeeded();
@@ -817,6 +936,7 @@ async function createProxy({ debug, adoptedSession = null }) {
     }
 
     const composer = await getComposer();
+    await selectChatGPTModel(model);
     const beforeAssistantCount = await page
       .locator('[data-message-author-role="assistant"]')
       .count()
@@ -900,11 +1020,11 @@ async function createProxy({ debug, adoptedSession = null }) {
     };
   }
 
-  async function sendChat({ prompt, conversationId = null, onText = null, images = [] }) {
+  async function sendChat({ prompt, model = null, conversationId = null, onText = null, images = [] }) {
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return await sendChatOnce({ prompt, conversationId, onText, images });
+        return await sendChatOnce({ prompt, model, conversationId, onText, images });
       } catch (error) {
         lastError = error;
         if (!isTransientBrowserError(error) || attempt === 1) throw error;
@@ -953,10 +1073,6 @@ async function createProxy({ debug, adoptedSession = null }) {
         if (!response.url().includes("/api/auth/session") || response.status() !== 200) return;
         await tryPersist();
       } catch {}
-    });
-
-    page.on("load", () => {
-      setTimeout(() => { tryPersist().catch(() => {}); }, 1500);
     });
 
     const poll = async () => {

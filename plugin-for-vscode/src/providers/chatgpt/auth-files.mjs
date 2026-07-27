@@ -84,13 +84,8 @@ export function playwrightCookiesFromSaved(cookies) {
     const value = String(c.value);
     if (chunkedBases.has(name)) continue;
 
-    let url = "https://chatgpt.com";
-    const domain = String(c.domain || "");
-    if (domain.includes("openai.com")) {
-      url = "https://openai.com";
-    } else if (domain.includes("auth0.com")) {
-      url = "https://auth0.com";
-    }
+    const domain = String(c.domain || "").trim();
+    const pathName = String(c.path || "/");
 
     let sameSite = undefined;
     const rawSameSite = String(c.sameSite || "").toLowerCase();
@@ -99,10 +94,15 @@ export function playwrightCookiesFromSaved(cookies) {
     else if (rawSameSite === "none") sameSite = "None";
 
     const baseEntry = {
-      url: url,
       httpOnly: Boolean(c.httpOnly),
       secure: Boolean(c.secure),
     };
+    if (domain) {
+      baseEntry.domain = domain;
+      baseEntry.path = pathName;
+    } else {
+      baseEntry.url = "https://chatgpt.com";
+    }
 
     if (sameSite) {
       baseEntry.sameSite = sameSite;

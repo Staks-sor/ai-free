@@ -61,6 +61,15 @@ describe("architecture invariants", () => {
     );
   });
 
+  it("exposes current ChatGPT modes and hides retired ChatGPT models", () => {
+    const ids = uiModelCatalog().providers.chatgpt.models.map((model) => model.id);
+    assert.ok(ids.includes("gpt-5.5-instant"));
+    assert.ok(ids.includes("gpt-5.6-sol-high"));
+    assert.ok(ids.includes("gpt-5.6-sol-pro-extended"));
+    assert.ok(!ids.includes("gpt-4o"));
+    assert.ok(!ids.includes("o3-mini"));
+  });
+
   it("reads displayed versions from product package.json files", () => {
     const rootPackage = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     const pluginPackage = JSON.parse(

@@ -11,7 +11,7 @@
 //
 // parentMessageId от code-agent игнорируем — цепочку контекста держит conversationId.
 
-export function createChatGPTAgentAdapter(chatGPTClient, { conversationId = null, onConversationId = null, images = [] } = {}) {
+export function createChatGPTAgentAdapter(chatGPTClient, { conversationId = null, model = null, onConversationId = null, images = [] } = {}) {
   let convId = conversationId || null;
   // Картинки прикрепляем только на ПЕРВОМ шаге — чтобы модель увидела их вместе
   // с задачей. На последующих шагах (результаты инструментов) картинок нет.
@@ -23,7 +23,7 @@ export function createChatGPTAgentAdapter(chatGPTClient, { conversationId = null
     async complete({ prompt }) {
       const imagesToSend = pendingImages;
       pendingImages = [];
-      const result = await chatGPTClient.complete({ prompt, conversationId: convId, images: imagesToSend });
+      const result = await chatGPTClient.complete({ prompt, model, conversationId: convId, images: imagesToSend });
       if (result.conversationId && result.conversationId !== convId) {
         convId = result.conversationId;
         onConversationId?.(convId);

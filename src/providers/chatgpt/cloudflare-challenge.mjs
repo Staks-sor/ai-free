@@ -5,13 +5,23 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function cloudflareChallengeEvaluator() {
   const title = String(document.title || "").toLowerCase();
   const bodyText = String(document.body?.innerText || "").slice(0, 4000).toLowerCase();
+  const isVisible = (element) => Boolean(element && (() => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  })());
+  const loginModal = document.querySelector(
+    '#modal-no-auth-login, [data-testid="modal-no-auth-login"], [data-testid="login-modal"]',
+  );
+  const loginButton = document.querySelector('[data-testid="login-button"]');
+  const loginRequired = isVisible(loginModal) || isVisible(loginButton);
   const hasComposer = Boolean(
-    document.querySelector("#prompt-textarea")
+    !loginRequired && (document.querySelector("#prompt-textarea")
       || document.querySelector('div[contenteditable="true"]')
-      || document.querySelector("textarea"),
+      || document.querySelector("textarea")),
   );
   if (hasComposer) {
-    return { hasComposer: true, challenge: false, url: location.href };
+    return { hasComposer: true, challenge: false, loginRequired: false, url: location.href };
   }
   const hasTurnstile = Boolean(
     document.querySelector('iframe[src*="challenges.cloudflare.com"]')
@@ -25,6 +35,7 @@ export function cloudflareChallengeEvaluator() {
   return {
     hasComposer: false,
     challenge: hasTurnstile || hasChallengeText,
+    loginRequired,
     url: location.href,
   };
 }
@@ -33,7 +44,7 @@ export async function detectCloudflareChallenge(page) {
   try {
     return await page.evaluate(cloudflareChallengeEvaluator);
   } catch {
-    return { hasComposer: false, challenge: false, url: page.url() };
+    return { hasComposer: false, challenge: false, loginRequired: false, url: page.url() };
   }
 }
 

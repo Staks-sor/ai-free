@@ -18,7 +18,11 @@ describe("chatgpt-live-panel", () => {
     assert.match(html, /\/api\/chatgpt\/live-input/);
     assert.match(html, /\/api\/chatgpt\/reload-live/);
     assert.match(html, /\/api\/chatgpt\/reset-live/);
+    assert.match(html, /\/api\/chatgpt\/stop-live/);
+    assert.doesNotMatch(html, /Запускаю Chrome|Chrome внутри панели/);
     assert.match(html, /resetBtn/);
+    assert.match(html, /chromeLoginBtn/);
+    assert.match(html, /\/api\/providers\/chatgpt\/login/);
     assert.match(html, /clickLayer/);
   });
 });

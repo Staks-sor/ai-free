@@ -22,15 +22,20 @@ describe("getChatGPTBrowserLaunchOptions", () => {
     }
   });
 
-  it("defaults to external visible Chrome when no embed", () => {
+  it("defaults to the in-app browser", () => {
     assert.deepEqual(getChatGPTBrowserLaunchOptions(), {
-      useExternalChrome: true,
+      useExternalChrome: false,
       headless: false,
-      offscreen: false,
+      offscreen: true,
       internalHeadless: false,
       preferBundled: false,
       applyStealth: false,
     });
+  });
+
+  it("keeps external Chrome as an explicit legacy mode", () => {
+    process.env.CHATGPT_EMBED_IN_UI = "0";
+    assert.equal(getChatGPTBrowserLaunchOptions().useExternalChrome, true);
   });
 
   it("embed UI defers to in-app real Chrome (useExternalChrome false)", () => {

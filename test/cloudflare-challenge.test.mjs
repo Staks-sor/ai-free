@@ -4,9 +4,11 @@ import { cloudflareChallengeEvaluator } from "../src/providers/chatgpt/cloudflar
 
 describe("cloudflareChallengeEvaluator", () => {
   const savedDocument = global.document;
+  const savedGetComputedStyle = global.getComputedStyle;
 
   afterEach(() => {
     global.document = savedDocument;
+    global.getComputedStyle = savedGetComputedStyle;
   });
 
   it("does not flag challenge when composer is visible", () => {
@@ -30,5 +32,23 @@ describe("cloudflareChallengeEvaluator", () => {
     global.location = { href: "https://chatgpt.com/" };
     const state = cloudflareChallengeEvaluator();
     assert.equal(state.challenge, true);
+  });
+
+  it("does not treat a composer behind the login modal as ready", () => {
+    const modal = { getBoundingClientRect: () => ({ width: 500, height: 500 }) };
+    global.getComputedStyle = () => ({ display: "block", visibility: "visible" });
+    global.document = {
+      title: "ChatGPT",
+      body: { innerText: "С возвращением" },
+      querySelector: (selector) => {
+        if (selector.includes("modal-no-auth-login")) return modal;
+        if (selector.includes("prompt-textarea")) return {};
+        return null;
+      },
+    };
+    global.location = { href: "https://chatgpt.com/" };
+    const state = cloudflareChallengeEvaluator();
+    assert.equal(state.loginRequired, true);
+    assert.equal(state.hasComposer, false);
   });
 });

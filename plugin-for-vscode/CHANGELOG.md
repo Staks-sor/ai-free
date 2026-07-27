@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.8
+
+- Fixed Windows Node.js/npm discovery when AI Free is launched from a GUI with a restricted `PATH`.
+- Unified diagnostics and updater command resolution so an npm installation detected by Status is also used for updates.
+- Added standard MSI, `%APPDATA%`, `%LOCALAPPDATA%` and running-Node fallback paths for `npm.cmd`.
+- Reworked ChatGPT authorization into a verified one-time Chrome login followed by a persistent hidden Camoufox session.
+- Rejected stale ChatGPT sessions containing `RefreshAccessTokenError` instead of reporting a false successful login.
+- Preserved exact OAuth cookie domains, login popups and session state across desktop and VS Code.
+- Prevented closing the authorization window from terminating the AI Free process.
+
 ## 0.4.6
 
 - Fixed the packaged extension failing at startup because `diagnostics.mjs` was missing from the VSIX.

@@ -48,6 +48,16 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+export function windowsNodeInstallRoots({ env = process.env, execPath = process.execPath } = {}) {
+  return unique([
+    execPath && path.dirname(execPath),
+    env.ProgramW6432 && path.join(env.ProgramW6432, "nodejs"),
+    env.ProgramFiles && path.join(env.ProgramFiles, "nodejs"),
+    env["ProgramFiles(x86)"] && path.join(env["ProgramFiles(x86)"], "nodejs"),
+    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs", "nodejs"),
+  ]);
+}
+
 function windowsCommandScript(command) {
   return process.platform === "win32" && /\.(cmd|bat)$/i.test(String(command || ""));
 }
@@ -65,12 +75,26 @@ function commandCandidatePaths(command) {
     ]);
   }
   if (command === "npm") {
+    const roots = windowsNodeInstallRoots();
     return unique([
       "npm",
       "npm.cmd",
       env.APPDATA && path.join(env.APPDATA, "npm", "npm.cmd"),
-      env.ProgramFiles && path.join(env.ProgramFiles, "nodejs", "npm.cmd"),
-      env["ProgramFiles(x86)"] && path.join(env["ProgramFiles(x86)"], "nodejs", "npm.cmd"),
+      ...roots.map((root) => path.join(root, "npm.cmd")),
+      ...roots.map((root) => {
+        const node = path.join(root, "node.exe");
+        const cli = path.join(root, "node_modules", "npm", "bin", "npm-cli.js");
+        return fs.existsSync(node) && fs.existsSync(cli)
+          ? { command: node, prefixArgs: [cli], shell: false }
+          : null;
+      }),
+    ]);
+  }
+  if (command === "node") {
+    return unique([
+      "node",
+      process.execPath,
+      ...windowsNodeInstallRoots().map((root) => path.join(root, "node.exe")),
     ]);
   }
   return [command];
@@ -105,14 +129,14 @@ async function executableWorks(executable, args = ["--version"]) {
   }
 }
 
-async function resolveCommand(command) {
+export async function resolveCommand(command) {
   for (const candidate of commandCandidatePaths(command)) {
     if (await executableWorks(candidate)) return normalizeExecutable(candidate);
   }
   return null;
 }
 
-async function resolveNpmCommand() {
+export async function resolveNpmCommand() {
   const npmExecPath = process.env.npm_execpath;
   const npmNodePath = process.env.npm_node_execpath;
   if (npmExecPath && fs.existsSync(npmExecPath) && npmNodePath && fs.existsSync(npmNodePath)) {
@@ -120,6 +144,27 @@ async function resolveNpmCommand() {
     if (await executableWorks(executable)) return executable;
   }
   return resolveCommand("npm");
+}
+
+export async function probeRuntimeCommand(command) {
+  const executable = command === "npm" ? await resolveNpmCommand() : await resolveCommand(command);
+  if (!executable) return { command, ok: false, error: "not found", resolved: "" };
+  const resolved = normalizeExecutable(executable);
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      resolved.command,
+      [...resolved.prefixArgs, "--version"],
+      { shell: resolved.shell, timeout: 10_000, maxBuffer: 100_000 },
+    );
+    return {
+      command,
+      ok: true,
+      version: String(stdout || stderr || "").split(/\r?\n/)[0]?.trim() || "ok",
+      resolved: executableDisplayName(resolved, command),
+    };
+  } catch (error) {
+    return { command, ok: false, error: error.message || "failed", resolved: executableDisplayName(resolved, command) };
+  }
 }
 
 function executableDisplayName(executable, fallback) {
