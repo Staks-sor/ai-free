@@ -59,7 +59,7 @@ People usually look for this project as a **free AI coding assistant**, **local 
   <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20EconomyOS-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, EconomyOS">
 </p>
 
-<p align="center"><strong>AI Free 0.4.8</strong></p>
+<p align="center"><strong>AI Free 0.4.9</strong></p>
 
 > Локальный AI-клиент, который превращает веб-чаты DeepSeek, Qwen и ChatGPT в инструмент для разработчика: окно чатов, CLI, совместимые API, `/code`-агент, память, skills и IDE-интеграции.
 
@@ -106,9 +106,9 @@ People usually look for this project as a **free AI coding assistant**, **local 
 
 ### Версия продукта
 
-Текущий релиз — **AI Free 0.4.8**. Desktop/CLI/API и расширение VS Code выпускаются под единым номером версии. Он синхронно хранится в корневом `package.json` и `plugin-for-vscode/package.json`; общий релизный тег имеет формат `vX.Y.Z`.
+Текущий релиз — **AI Free 0.4.9**. Desktop/CLI/API и расширение VS Code выпускаются под единым номером версии. Он синхронно хранится в корневом `package.json` и `plugin-for-vscode/package.json`; общий релизный тег имеет формат `vX.Y.Z`.
 
-Что вошло в `0.4.8`: [release notes](docs/RELEASE_NOTES_0.4.8.md).
+Что вошло в `0.4.9`: [release notes](docs/RELEASE_NOTES_0.4.9.md).
 
 ---
 

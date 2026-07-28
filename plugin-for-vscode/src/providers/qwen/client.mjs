@@ -609,18 +609,62 @@ export function formatQwenStreamDisplay(thinkingText, answerText) {
   return answer || "…";
 }
 
+function createQwenResponseSelector() {
+  let targetResponseId = null;
+  let sawCreatedEvent = false;
+  const responseIndexes = new Map();
+
+  return {
+    accept(parsed) {
+      const created = parsed?.["response.created"];
+      if (created && typeof created === "object") {
+        sawCreatedEvent = true;
+        const responseId = created.response_id == null ? "" : String(created.response_id);
+        const responseIndex = Number(created.response_index);
+        if (responseId && Number.isFinite(responseIndex)) {
+          responseIndexes.set(responseId, responseIndex);
+        }
+        if (responseId && responseIndex === 0) {
+          targetResponseId = responseId;
+        } else if (responseId && !targetResponseId && !Number.isFinite(responseIndex)) {
+          targetResponseId = responseId;
+        }
+        return !responseId || responseId === targetResponseId;
+      }
+
+      const responseId = parsed?.response_id == null ? "" : String(parsed.response_id);
+      if (!responseId) return true;
+      if (targetResponseId) return responseId === targetResponseId;
+
+      const responseIndex = responseIndexes.get(responseId);
+      if (responseIndex === 0) {
+        targetResponseId = responseId;
+        return true;
+      }
+      if (Number.isFinite(responseIndex) || sawCreatedEvent) return false;
+
+      // Older Qwen streams may omit response.created. In that format the first
+      // text-bearing response is the only discriminator available.
+      targetResponseId = responseId;
+      return true;
+    },
+  };
+}
+
 export function createQwenIncrementalParser({ onText = null, onThinking = null } = {}) {
   let buffer = "";
   let fullText = "";
   let thinkingBuf = "";
   let lastMessageId = null;
   let error = null;
+  const responseSelector = createQwenResponseSelector();
 
   function consumeEvent(raw) {
     const ev = parseSseEvent(raw);
     if (!ev.data || ev.data === "[DONE]") return;
     let parsed;
     try { parsed = JSON.parse(ev.data); } catch { return; }
+    if (!responseSelector.accept(parsed)) return;
     const errMsg = formatQwenStreamError(parsed);
     if (errMsg) {
       error = errMsg;
@@ -708,7 +752,7 @@ function emptyQwenParseFallback(text, rawAccumulated, eventCount) {
 // Парсит полный текст ответа (от browser-proxy — он отдаёт весь body одним куском).
 // Поддерживает оба варианта: одиночный JSON и SSE-стрим из много "data: {...}" блоков.
 // Если передан onText callback, вызывает его для каждого найденного текстового кусочка.
-function parseQwenResponseText(text, contentType, onText) {
+export function parseQwenResponseText(text, contentType, onText) {
   const ct = String(contentType || "").toLowerCase();
 
   // Одиночный JSON-ответ (обычно — ошибка или non-streaming endpoint).
@@ -738,12 +782,14 @@ function parseQwenResponseText(text, contentType, onText) {
   let fullText = "";
   let thinkingBuf = "";
   let lastMessageId = null;
+  const responseSelector = createQwenResponseSelector();
 
   for (const raw of events) {
     const ev = parseSseEvent(raw);
     if (!ev.data || ev.data === "[DONE]") continue;
     let parsed;
     try { parsed = JSON.parse(ev.data); } catch { continue; }
+    if (!responseSelector.accept(parsed)) continue;
     const errMsg = formatQwenStreamError(parsed);
     if (errMsg) {
       return { text: errMsg, lastMessageId, thinkingText: "" };
@@ -779,6 +825,7 @@ async function parseQwenStream(res, onText, debug) {
   let thinkingBuf = "";
   let eventCount = 0;
   let firstFewRaw = []; // первые 3 события сохраняем целиком для диагностики
+  const responseSelector = createQwenResponseSelector();
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -806,6 +853,8 @@ async function parseQwenStream(res, onText, debug) {
         if (debug) console.error("[qwen-sse] non-JSON event:", event.data.slice(0, 300));
         continue;
       }
+
+      if (!responseSelector.accept(parsed)) continue;
 
       const streamErr = formatQwenStreamError(parsed);
       if (streamErr) {

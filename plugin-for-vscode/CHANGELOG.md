@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.9
+
+- Fixed Qwen responses becoming duplicated or interleaved when one SSE request contains multiple `response_id` streams.
+- Selects Qwen's primary `response_index: 0` result instead of concatenating alternate response candidates.
+- Applies the same response selection to incremental streaming, buffered SSE and direct stream parsing.
+- Added regression coverage based on the response structure reported in GitHub issue #13.
+
 ## 0.4.8
 
 - Fixed Windows Node.js/npm discovery when AI Free is launched from a GUI with a restricted `PATH`.
