@@ -11,8 +11,11 @@
 //
 // Состояние НЕ персистится — при рестарте сервера задачи теряются (это OK для MVP).
 
+import { createFileLogger } from "../logging/logger.mjs";
+
 const DEFAULT_STALE_TASK_MS = 20 * 60 * 1000;
 const runningTasks = new Map(); // conversationId → { startedAt, kind, label, staleAfterMs }
+const taskLogger = createFileLogger({ component: "task-runner" });
 
 function resolveStaleTaskMs(value) {
   const parsed = Number(value ?? process.env.AI_FREE_TASK_STALE_MS ?? DEFAULT_STALE_TASK_MS);
@@ -29,6 +32,11 @@ function getFreshTask(conversationId) {
   const task = runningTasks.get(conversationId);
   if (!task) return null;
   if (isTaskStale(task)) {
+    taskLogger.warn("background_task.stale", {
+      conversationId,
+      kind: task.kind,
+      durationMs: Date.now() - task.startedAt,
+    });
     console.warn(
       `[task-runner] clearing stale task ${task.kind} for ${conversationId} after ${Date.now() - task.startedAt}ms`,
     );
@@ -47,18 +55,34 @@ export function startTask(conversationId, kind, taskFn, label = "") {
     throw new Error(`Task ${existing.kind} already running for ${conversationId}`);
   }
   const controller = new AbortController();
+  const startedAt = Date.now();
   runningTasks.set(conversationId, {
-    startedAt: Date.now(),
+    startedAt,
     kind,
     label,
     staleAfterMs: resolveStaleTaskMs(),
     controller,
   });
+  taskLogger.info("background_task.start", { conversationId, kind, label });
 
   // Fire-and-forget. .finally() гарантирует очистку даже при throw.
   Promise.resolve()
     .then(() => taskFn(controller.signal))
+    .then(() => {
+      taskLogger.info("background_task.success", {
+        conversationId,
+        kind,
+        label,
+        durationMs: Date.now() - startedAt,
+      });
+    })
     .catch((err) => {
+      taskLogger.error("background_task.error", err, {
+        conversationId,
+        kind,
+        label,
+        durationMs: Date.now() - startedAt,
+      });
       console.error(`[task-runner] task ${kind} for ${conversationId} crashed:`, err);
     })
     .finally(() => {
@@ -72,6 +96,11 @@ export function stopTask(conversationId) {
   const task = runningTasks.get(conversationId);
   if (!task) return false;
   try { task.controller?.abort(); } catch {}
+  taskLogger.info("background_task.stop", {
+    conversationId,
+    kind: task.kind,
+    durationMs: Date.now() - task.startedAt,
+  });
   runningTasks.delete(conversationId);
   return true;
 }

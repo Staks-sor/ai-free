@@ -25,6 +25,8 @@ export async function runAgentTask(
         memoryContext: "",
         memoryUsedCount: 0,
         graphUsedCount: 0,
+        projectInstructionsContext: "",
+        projectInstructionsCount: 0,
         allowedTools: BROWSER_AGENT_TOOLS,
         skill: null,
       }
@@ -53,6 +55,8 @@ export async function runAgentTask(
     skillId: context.skillId,
     memoryEnabled: context.memoryEnabled,
     memoryContext: context.memoryContext,
+    projectInstructionsContext: context.projectInstructionsContext,
+    projectInstructionsCount: context.projectInstructionsCount,
     browserContext,
     memoryUsedCount: context.memoryUsedCount,
     graphUsedCount: context.graphUsedCount,

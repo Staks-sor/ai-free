@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.11
+
+- Fixed OpenAI-compatible streams ending successfully without text or tool calls.
+- Retries one empty DeepSeek stream on a fresh session before returning an explicit error.
+- Preserves final DeepSeek SSE events even when the upstream omits the trailing blank line.
+- Maps tool results back to names by `tool_call_id` and normalizes common edit-argument aliases.
+- Prevents agents from repeating invalid tool calls or no-op writes and from deferring available edits to the user.
+- Added privacy-safe persistent JSONL diagnostics for desktop and VS Code.
+- Rebuilt the light theme with distinct navigation, content, modal and composer surfaces.
+- Added hierarchical `AGENTS.md` project instructions with nested directory scopes.
+- Reloads project instructions before every agent task without storing stale copies in long-term memory.
+- Applies the same agent context and theme implementation to desktop and VS Code.
+
 ## 0.4.9
 
 - Fixed Qwen responses becoming duplicated or interleaved when one SSE request contains multiple `response_id` streams.

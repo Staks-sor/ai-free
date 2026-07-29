@@ -41,6 +41,7 @@ export const NATIVE_CODE_TOOLS = definitions.map(([name, description, parameters
 export function createNativeCodeSystemPrompt(workspaceRoot, options = {}) {
   const context = [
     formatContextSection("Recent conversation", options.conversationContext),
+    formatContextSection("Project instructions (AGENTS.md; nested scopes override parents)", options.projectInstructionsContext),
     formatContextSection("Relevant long-term memory (compressed)", options.memoryContext),
     formatContextSection("Active skill", options.skillPrompt),
     formatContextSection("Browser state", options.browserContext),

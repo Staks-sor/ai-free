@@ -24,12 +24,25 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleRequest } from "./openai-handler.mjs";
 import { resolveOpenAICompatApiKey } from "../src/state/settings.mjs";
+import { createFileLogger } from "../src/logging/logger.mjs";
 
 export const DEFAULT_API_PORT = 4318;
 export const DEFAULT_API_HOST = "127.0.0.1"; // намеренно НЕ слушаем на 0.0.0.0 — только локально
+const apiLogger = createFileLogger({ component: "openai-api" });
 
 export function createOpenAICompatServer() {
   return http.createServer(async (req, res) => {
+    const startedAt = Date.now();
+    const requestPath = String(req.url || "/").split("?", 1)[0];
+    res.once("finish", () => {
+      apiLogger.info("api.request.complete", {
+        method: req.method,
+        path: requestPath,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - startedAt,
+        provider: req.openAICompatProvider || null,
+      });
+    });
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
     // CORS — на всякий случай, для веб-клиентов на localhost.
     setOpenAICorsHeaders(res);
@@ -49,6 +62,11 @@ export function createOpenAICompatServer() {
     try {
       await handleRequest(req, res);
     } catch (e) {
+      apiLogger.error("api.request.error", e, {
+        method: req.method,
+        path: requestPath,
+        durationMs: Date.now() - startedAt,
+      });
       console.error("[api]", e);
       if (!res.headersSent) {
         res.statusCode = 500;
@@ -71,6 +89,7 @@ export function startOpenAICompatServer({
 } = {}) {
   const server = createOpenAICompatServer();
   server.listen(port, host, () => {
+    apiLogger.info("api.server.started", { host, port });
     console.log(`OpenAI-compat API: http://${host}:${port}`);
     console.log(`Models:    GET  http://${host}:${port}/v1/models`);
     console.log(`Chat:      POST http://${host}:${port}/v1/chat/completions`);

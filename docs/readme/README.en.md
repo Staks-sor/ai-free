@@ -25,7 +25,7 @@
   <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20EconomyOS-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, EconomyOS">
 </p>
 
-<p align="center"><strong>AI Free 0.4.9</strong></p>
+<p align="center"><strong>AI Free 0.4.11</strong></p>
 
 > A CLI and desktop app that brings free AI web chats into one interface. Currently supports **DeepSeek, Qwen, and ChatGPT**. Runs on macOS, Linux, and Windows.
 
@@ -133,6 +133,8 @@ Provider sessions and settings are stored outside the repository:
 Tokens and cookies remain on the local machine. The chat and API servers listen on `127.0.0.1`.
 
 ## 🧰 Troubleshooting
+
+Detailed privacy-safe JSONL logs are stored in `%USERPROFILE%\.ai-free\logs\ai-free.log` on Windows and `~/.ai-free/logs/ai-free.log` on macOS/Linux. Logs include request timing, HTTP status, provider/model metadata, retries, background tasks, tool calls and full error stacks. Prompt/response text is not stored and credentials are redacted. Rotation defaults to five files of 5 MiB each.
 
 - Reconnect DeepSeek with `npm run login`.
 - Reconnect Qwen with `npm run login-qwen`.

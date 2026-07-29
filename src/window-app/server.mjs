@@ -91,10 +91,12 @@ import {
   getProviderDefaultModel,
   uiModelCatalog,
 } from "../providers/model-catalog.mjs";
+import { createFileLogger } from "../logging/logger.mjs";
 
 const ECONOMYOS_VISION_MODEL = "z-ai-glm-5v-turbo";
 const ECONOMYOS_CATALOG_TTL_MS = 10 * 60 * 1_000;
 const ECONOMYOS_CATALOG_RETRY_MS = 2 * 60 * 1_000;
+const appLogger = createFileLogger({ component: "window-server" });
 
 export async function runWindowApp({
   client,
@@ -106,6 +108,14 @@ export async function runWindowApp({
   openWindow = true,
   consoleLog = false,
 }) {
+  appLogger.info("server.starting", {
+    workspaceRoot,
+    port,
+    modelType,
+    thinkingEnabled,
+    searchEnabled,
+    openWindow,
+  });
   // ChatGPT по умолчанию работает во встроенной панели AI Free через Camoufox.
   if (process.env.CHATGPT_EMBED_IN_UI == null) {
     process.env.CHATGPT_EMBED_IN_UI = "1";
@@ -685,6 +695,18 @@ export async function runWindowApp({
   }
 
   const server = http.createServer(async (req, res) => {
+    const requestId = randomUUID();
+    const requestStartedAt = Date.now();
+    const requestPath = String(req.url || "/").split("?", 1)[0];
+    res.once("finish", () => {
+      appLogger.info("http.request.complete", {
+        requestId,
+        method: req.method,
+        path: requestPath,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - requestStartedAt,
+      });
+    });
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -1593,6 +1615,18 @@ export async function runWindowApp({
           Array.isArray(body.displayImages) && body.displayImages.length ? body.displayImages : body.images,
         );
         const storedImageUrls = storedImages.map((image) => image.url);
+        appLogger.info("chat.message.received", {
+          requestId,
+          conversationId: conversation.id,
+          provider: conversation.provider || "deepseek",
+          model: conversation.model || null,
+          source: userMessageSource || "desktop",
+          promptChars: prompt.length,
+          imageCount: storedImages.length,
+          pipeline: body.pipeline === true || conversation.pipelineMode === true,
+          coderMode: body.coderMode === true || conversation.coderMode === true,
+          searchEnabled: body.searchEnabled === true,
+        });
         const createUserMessage = (extra = {}) => ({
           role: "user",
           content: prompt,
@@ -2568,6 +2602,12 @@ export async function runWindowApp({
 
       return sendJson(res, { error: "Not found" }, 404);
     } catch (error) {
+      appLogger.error("http.request.error", error, {
+        requestId,
+        method: req.method,
+        path: requestPath,
+        durationMs: Date.now() - requestStartedAt,
+      });
       return sendJson(res, { error: error.message }, 500);
     }
   });
@@ -2585,6 +2625,7 @@ export async function runWindowApp({
   });
 
   const url = `http://127.0.0.1:${port}`;
+  appLogger.info("server.started", { url, workspaceRoot, port });
   const startupConversation = state.conversations.find((item) => item.id === state.activeConversationId);
   if (startupConversation?.provider === "qwen") {
     setImmediate(() => {
@@ -2638,8 +2679,12 @@ export async function runWindowApp({
   };
 
   registerShutdownServerCloser((done) => {
+    appLogger.info("server.stopping", { port });
     telegramBot?.stop?.();
-    server.close(() => done());
+    server.close(() => {
+      appLogger.info("server.stopped", { port });
+      done();
+    });
     setTimeout(done, 2000).unref();
   });
 

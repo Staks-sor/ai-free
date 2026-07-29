@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
 
-import { parseModelToolCalls } from "../api/tool-calls.mjs";
+import { normalizeToolCallsForSchemas, parseModelToolCalls } from "../api/tool-calls.mjs";
 
 describe("model tool-call bridge", () => {
   it("parses markdown tool_calls blocks into normalized calls", () => {
@@ -57,5 +57,39 @@ describe("model tool-call bridge", () => {
         arguments: JSON.stringify({ path: "src/app.js", content: { ok: true } }),
       },
     ]);
+  });
+
+  it("normalizes common argument aliases to the client tool schema", () => {
+    const result = normalizeToolCallsForSchemas([
+      { name: "Edit", arguments: JSON.stringify({ filePath: "a.js", oldText: "before", newText: "after" }) },
+    ], [{
+      type: "function",
+      function: {
+        name: "Edit",
+        parameters: {
+          type: "object",
+          properties: { file_path: {}, old_string: {}, new_string: {} },
+          required: ["file_path", "old_string", "new_string"],
+        },
+      },
+    }]);
+
+    assert.deepEqual(JSON.parse(result.calls[0].arguments), {
+      file_path: "a.js",
+      old_string: "before",
+      new_string: "after",
+    });
+    assert.deepEqual(result.errors, []);
+  });
+
+  it("reports required arguments that cannot be recovered", () => {
+    const result = normalizeToolCallsForSchemas([
+      { name: "Edit", arguments: JSON.stringify({ file_path: "a.js", old_string: "before" }) },
+    ], [{
+      type: "function",
+      function: { name: "Edit", parameters: { type: "object", required: ["file_path", "old_string", "new_string"] } },
+    }]);
+
+    assert.deepEqual(result.errors, [{ name: "Edit", missing: ["new_string"] }]);
   });
 });

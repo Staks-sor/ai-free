@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
 
 import {
+  buildPromptFromChatBody,
   handleRequest,
   requestSearchEnabled,
   StreamParser,
@@ -148,6 +149,46 @@ describe("OpenAI-compatible handler", () => {
 
     const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
     assert.equal(events.at(-1).choices[0].finish_reason, "stop");
+  });
+
+  it("never terminates an empty stream without an explanatory content delta", () => {
+    const res = makeWritableResponse();
+    const parser = new StreamParser("deepseek-v4-pro", res);
+
+    parser.onEnd();
+
+    const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
+    assert.equal(events[0].choices[0].delta.role, "assistant");
+    assert.match(
+      events.map((event) => event.choices[0].delta.content || "").join(""),
+      /empty|without response|пуст/i,
+    );
+    assert.equal(events.at(-1).choices[0].finish_reason, "stop");
+  });
+
+  it("maps tool result ids back to tool names and explains validation recovery", () => {
+    const prompt = buildPromptFromChatBody({
+      tools: [{
+        type: "function",
+        function: {
+          name: "Edit",
+          parameters: {
+            type: "object",
+            properties: { file_path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } },
+            required: ["file_path", "old_string", "new_string"],
+          },
+        },
+      }],
+      messages: [
+        { role: "assistant", content: "", tool_calls: [{ id: "call_1", function: { name: "Edit", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "call_1", content: "params must have required property 'new_string'" },
+        { role: "tool", tool_call_id: "call_2", content: "No changes detected." },
+      ],
+    }, "deepseek-v4-pro", { provider: "deepseek", model: "expert" });
+
+    assert.match(prompt, /TOOL RESULT FOR Edit/);
+    assert.match(prompt, /missing required argument/i);
+    assert.match(prompt, /No changes detected/i);
   });
 });
 

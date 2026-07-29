@@ -14,6 +14,30 @@ import {
   buildNoToolCorrectionPrompt,
   shouldRejectTextOnlyCodeResult,
 } from "./loop-helpers.mjs";
+import { createFileLogger, withLogSpan } from "../logging/logger.mjs";
+
+const agentLogger = createFileLogger({ component: "code-agent" });
+const completeModelWithLogging = withLogSpan(
+  agentLogger,
+  "agent.model_complete",
+  (client, request) => client.complete(request),
+  {
+    details: (_client, request) => ({
+      model: request?.model || null,
+      promptChars: String(request?.prompt || "").length,
+      toolCount: Array.isArray(request?.tools) ? request.tools.length : 0,
+      hasToolResult: Boolean(request?.toolResult),
+    }),
+  },
+);
+const executeToolWithLogging = withLogSpan(
+  agentLogger,
+  "agent.tool_execute",
+  (workspaceRoot, call, executionOptions) => executeWorkspaceTool(workspaceRoot, call, executionOptions),
+  {
+    details: (_workspaceRoot, call) => ({ tool: call?.tool || "unknown" }),
+  },
+);
 
 export async function runCodeTask(
   client,
@@ -27,14 +51,25 @@ export async function runCodeTask(
   const skillId = options.skillId || null;
   const skillPrompt = options.skillPrompt || null;
   const memoryContext = options.memoryContext || "";
+  const projectInstructionsContext = options.projectInstructionsContext || "";
   const browserContext = options.browserContext || "";
   const allowedTools = options.allowedTools || null;
+  agentLogger.info("agent.task.start", {
+    workspaceRoot,
+    taskChars: String(task || "").length,
+    model: baseOptions?.model || null,
+    browserOnly,
+    skillId,
+    memoryUsedCount: Number(options.memoryUsedCount) || 0,
+    graphUsedCount: Number(options.graphUsedCount) || 0,
+  });
 
   const nativeTools = client?.supportsNativeTools === true;
   const nativeSystemPrompt = nativeTools ? createNativeCodeSystemPrompt(workspaceRoot, {
     conversationContext: baseOptions?.conversationContext,
     skillPrompt,
     memoryContext,
+    projectInstructionsContext,
     browserContext,
   }) : "";
   const availableNativeTools = nativeTools
@@ -53,6 +88,7 @@ export async function runCodeTask(
           skillId,
           skillPrompt,
           memoryContext,
+          projectInstructionsContext,
           browserContext,
           allowedTools,
         }));
@@ -102,7 +138,7 @@ export async function runCodeTask(
         parentMessageId: parent,
         toolLogs: [...toolLogs],
       });
-      const result = await client.complete({
+      const result = await completeModelWithLogging(client, {
         ...baseOptions,
         ...(repairingMissingTool ? { searchEnabled: false } : {}),
         prompt,
@@ -179,7 +215,7 @@ export async function runCodeTask(
           ...(loadSettings().commandPermissions || {}),
           ...(options.executionPermissions || {}),
         };
-        toolResult = await executeWorkspaceTool(workspaceRoot, call, {
+        toolResult = await executeToolWithLogging(workspaceRoot, call, {
           workspaceRoot,
           allowDestructiveActions: commandPermissions.allowDestructiveActions === true,
           allowExternalWrites: commandPermissions.allowExternalWrites === true,

@@ -28,7 +28,12 @@ export function buildContinuationPrompt({
 
   const nextStep = browserOnly
     ? "Continue the browser task. Request one browser tool as JSON, or call finish."
-    : "Continue the task. If more file access is needed, request one tool call as JSON. If finished, call finish.";
+    : [
+        "Continue the task. If more file access is needed, request one tool call as JSON. If finished, call finish.",
+        "If a write reports no changes, the requested content is already present: do not repeat the same write; verify the next requirement or finish.",
+        "If a tool validation fails, correct every missing required argument and do not repeat the identical invalid call.",
+        "When a workspace tool can perform the requested action, use it now; do not tell the user to edit files manually.",
+      ].join(" ");
   parts.push(nextStep);
   return parts.join("\n\n");
 }

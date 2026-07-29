@@ -7,6 +7,9 @@ import {
   resetChatGPTBrowserProxy,
   scheduleChatGPTBrowserIdleClose,
 } from "./browser-proxy.mjs";
+import { createFileLogger } from "../../logging/logger.mjs";
+
+const providerLogger = createFileLogger({ component: "provider.chatgpt" });
 
 export class ChatGPTChatClient {
   constructor({ accessToken, cookies, cookieHeader, userAgent, debug = false, proxyFactory = getChatGPTBrowserProxy }) {
@@ -28,17 +31,48 @@ export class ChatGPTChatClient {
   // а цепочка контекста ведётся самим ChatGPT через conversationId.
   // images: [{ name, mimeType, dataBase64 }] — прикрепляются в веб-композер ChatGPT.
   async complete({ prompt, model = null, onText = null, conversationId = null, images = [] }) {
+    const startedAt = Date.now();
+    providerLogger.info("provider.chatgpt.request", {
+      model,
+      conversationId,
+      promptChars: String(prompt || "").length,
+      imageCount: images.length,
+    });
     try {
       try {
         const proxy = await this.proxyFactory({ debug: this.debug });
-        return await proxy.sendChat({ prompt, model, conversationId, onText, images });
+        const result = await proxy.sendChat({ prompt, model, conversationId, onText, images });
+        providerLogger.info("provider.chatgpt.success", {
+          model,
+          responseChars: String(result?.text || "").length,
+          durationMs: Date.now() - startedAt,
+        });
+        return result;
       } catch (error) {
         if (!isChatGPTTransportError(error)) throw error;
+        providerLogger.warn("provider.chatgpt.retry", {
+          model,
+          reason: error.message,
+          durationMs: Date.now() - startedAt,
+        });
         if (this.debug) console.log(`[chatgpt-client] browser transport reset: ${error.message}`);
         resetChatGPTBrowserProxy();
         const proxy = await this.proxyFactory({ debug: this.debug });
-        return proxy.sendChat({ prompt, model, conversationId, onText, images });
+        const result = await proxy.sendChat({ prompt, model, conversationId, onText, images });
+        providerLogger.info("provider.chatgpt.success", {
+          model,
+          retried: true,
+          responseChars: String(result?.text || "").length,
+          durationMs: Date.now() - startedAt,
+        });
+        return result;
       }
+    } catch (error) {
+      providerLogger.error("provider.chatgpt.error", error, {
+        model,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
     } finally {
       scheduleChatGPTBrowserIdleClose();
     }

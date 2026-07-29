@@ -5,7 +5,7 @@ import { loadSettings } from "../state/settings.mjs";
 import { getSkillPrompt } from "../skills/registry.mjs";
 import { formatAllowedToolsHint } from "../skills/permissions.mjs";
 
-export const CODE_AGENT_PROMPT_VERSION = 18;
+export const CODE_AGENT_PROMPT_VERSION = 19;
 
 export function createCodeSystemPrompt(
   workspaceRoot,
@@ -16,6 +16,7 @@ export function createCodeSystemPrompt(
     skillId = null,
     skillPrompt = null,
     memoryContext = "",
+    projectInstructionsContext = "",
     browserContext = "",
     allowedTools = null,
   } = {},
@@ -42,6 +43,11 @@ export function createCodeSystemPrompt(
     ? `\n\n=== MEMORY (past project context) ===\n${memory}\n=== END MEMORY ===\n`
     : "";
 
+  const projectInstructions = String(projectInstructionsContext || "").trim();
+  const projectInstructionsSection = projectInstructions
+    ? `\n\n=== PROJECT INSTRUCTIONS (AGENTS.md) ===\nApply each file only within its declared scope. More deeply nested files take precedence when instructions conflict.\n${projectInstructions}\n=== END PROJECT INSTRUCTIONS ===\n`
+    : "";
+
   const browser = String(browserContext || "").trim();
   const browserSection = browser
     ? `\n\n=== BROWSER (shared in-app browser, 🧠 → Web) ===\n${browser}\n=== END BROWSER ===\n`
@@ -59,7 +65,7 @@ Refs like e3 come from browser_snapshot tree/refs. Screenshot saved to ~/.deepse
 Code agent prompt/tool version: ${CODE_AGENT_PROMPT_VERSION}
 Workspace root: ${workspaceRoot}
 ${searchGuidance}
-${extra ? `\nAdditional system instructions:\n${extra}\n` : ""}${skillSection}${memorySection}${browserSection}${browserFirstHint}${toolsHint ? `\n${toolsHint}\n` : ""}
+${extra ? `\nAdditional system instructions:\n${extra}\n` : ""}${projectInstructionsSection}${skillSection}${memorySection}${browserSection}${browserFirstHint}${toolsHint ? `\n${toolsHint}\n` : ""}
 
 IMPORTANT — about permissions and paths:
 - You HAVE full read/write access to EVERYTHING inside the workspace root above.

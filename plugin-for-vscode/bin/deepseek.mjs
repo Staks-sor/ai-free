@@ -8,6 +8,8 @@ import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 import { spawnSync } from "node:child_process";
+import { AI_FREE_VERSION } from "../src/config.mjs";
+import { createFileLogger, installProcessErrorLogging } from "../src/logging/logger.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, "..");
@@ -15,6 +17,8 @@ const projectRoot = path.resolve(here, "..");
 // Help / version не требуют зависимостей — пропускаем bootstrap, иначе юзер
 // не сможет даже посмотреть `--help` без интернета.
 const argv = process.argv.slice(2);
+const bootstrapLogger = createFileLogger({ component: "bootstrap", surface: "vscode" });
+installProcessErrorLogging(bootstrapLogger, { version: AI_FREE_VERSION, mode: argv });
 const isHelpOnly = argv.some((a) => a === "-h" || a === "--help" || a === "--version");
 const isVsCodeMode = process.env.AI_FREE_VSCODE === "1";
 
@@ -54,6 +58,7 @@ if (!isHelpOnly && !fs.existsSync(playwrightPkg)) {
 const { run } = await import("../src/cli/run.mjs");
 
 run().catch((error) => {
+  bootstrapLogger.error("app.run.error", error);
   console.error(`Error: ${error.message}`);
   process.exit(1);
 });

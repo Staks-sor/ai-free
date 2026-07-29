@@ -6,6 +6,9 @@ import { BASE_URL, COMPLETION_PATH, DEFAULT_AUTH_FILE } from "../../config.mjs";
 import { baseHeaders } from "./headers.mjs";
 import { solvePow } from "./pow.mjs";
 import { streamSse } from "./sse.mjs";
+import { createFileLogger } from "../../logging/logger.mjs";
+
+const providerLogger = createFileLogger({ component: "provider.deepseek" });
 
 // Экспорт для тестов и документации статусов upload/fetch_files.
 const FILE_STATUS_READY = [
@@ -109,6 +112,11 @@ export class DeepSeekChatClient {
       } catch (error) {
         if (!error?.isAuthError || !this.authManager) throw error;
         if (attempt >= 2) throw error;
+        providerLogger.warn("provider.deepseek.retry", {
+          operation: "reauth",
+          attempt: attempt + 1,
+          forceVisible: escalate,
+        });
         if (this.debug) {
           console.error(`[auth] attempt ${attempt + 1} got auth error; refreshing (escalate=${escalate}).`);
         }
@@ -125,10 +133,19 @@ export class DeepSeekChatClient {
   }
 
   async _jsonOnce(path, { method = "GET", body, headers = {} } = {}) {
+    const startedAt = Date.now();
+    providerLogger.debug("provider.deepseek.request", { operation: "json", method, path });
     const res = await fetch(`${BASE_URL}${path}`, {
       method,
       headers: { ...baseHeaders(this.cookieHeader, this.token, { hifLeim: this.hifLeim }), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    providerLogger.info("provider.deepseek.response", {
+      operation: "json",
+      method,
+      path,
+      statusCode: res.status,
+      durationMs: Date.now() - startedAt,
     });
 
     const text = await res.text();
@@ -420,8 +437,32 @@ export class DeepSeekChatClient {
 
   // Completion с ref_file_ids: при biz_code 9 повторно ждём готовность файлов и ретраим.
   async complete(args) {
+    const startedAt = Date.now();
     const refFileIds = Array.isArray(args?.refFileIds) ? args.refFileIds.filter(Boolean) : [];
-    return await this._withReauth(() => this._completeWithInvalidMessageRetry(args, refFileIds));
+    providerLogger.info("provider.deepseek.request", {
+      operation: "completion",
+      model: args?.modelType || null,
+      promptChars: String(args?.prompt || "").length,
+      imageCount: refFileIds.length,
+      thinkingEnabled: args?.thinkingEnabled === true,
+      searchEnabled: args?.searchEnabled === true,
+    });
+    try {
+      const result = await this._withReauth(() => this._completeWithInvalidMessageRetry(args, refFileIds));
+      providerLogger.info("provider.deepseek.success", {
+        operation: "completion",
+        model: args?.modelType || null,
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (error) {
+      providerLogger.error("provider.deepseek.error", error, {
+        operation: "completion",
+        model: args?.modelType || null,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
   }
 
   async _completeWithInvalidMessageRetry(args, refFileIds) {
@@ -502,6 +543,12 @@ async _completeOnce({
         "X-DS-PoW-Response": pow,
       },
       body: JSON.stringify(body),
+    });
+    providerLogger.info("provider.deepseek.response", {
+      operation: "completion",
+      model: modelType,
+      statusCode: res.status,
+      contentType: String(res.headers.get("content-type") || ""),
     });
 
     const contentType = String(res.headers.get("content-type") || "");

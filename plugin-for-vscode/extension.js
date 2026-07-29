@@ -178,6 +178,7 @@ async function activate(context) {
     const env = {
         ...process.env,
         AI_FREE_VSCODE: "1",
+        AI_FREE_LOG_SURFACE: "vscode",
         AI_FREE_VSCODE_WORKSPACE: workspacePath,
         AI_FREE_DISABLE_TELEGRAM: "1",
     };

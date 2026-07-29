@@ -29,6 +29,9 @@ import {
 } from "./session-errors.mjs";
 import { getQwenBrowserProxy, resetQwenBrowserProxy } from "./browser-proxy.mjs";
 import { buildQwenCompletionPayload } from "./completion-payload.mjs";
+import { createFileLogger } from "../../logging/logger.mjs";
+
+const providerLogger = createFileLogger({ component: "provider.qwen" });
 
 export function isQwenTransientBrowserTransportError(error) {
   const message = String(error?.message || error || "");
@@ -240,18 +243,37 @@ export class QwenChatClient {
     // + читаемое сообщение пользователю), чтобы не висеть долго в UI.
     autoRetry = false,
   }) {
-    return await this.#completeWithRecovery({
+    const startedAt = Date.now();
+    providerLogger.info("provider.qwen.request", {
+      operation: "completion",
+      model,
       chatId,
-      prompt,
-      parentId,
+      promptChars: String(prompt || "").length,
       thinking,
       search,
-      onText,
-      onThinking,
-      model,
-      allowNewChatRecovery,
       autoRetry,
     });
+    try {
+      const result = await this.#completeWithRecovery({
+        chatId, prompt, parentId, thinking, search, onText, onThinking, model,
+        allowNewChatRecovery, autoRetry,
+      });
+      providerLogger.info("provider.qwen.success", {
+        operation: "completion",
+        model,
+        responseChars: String(result?.text || "").length,
+        recovered: Boolean(result?.recoveredChatId),
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (error) {
+      providerLogger.error("provider.qwen.error", error, {
+        operation: "completion",
+        model,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
   }
 
   // Внутренняя реализация complete с восстановлением через новый чат.
@@ -318,6 +340,12 @@ export class QwenChatClient {
           QWEN_AUTO_RETRY_BASE_DELAY_MS * 2 ** (attempt - 2),
           QWEN_AUTO_RETRY_MAX_DELAY_MS,
         );
+        providerLogger.warn("provider.qwen.retry", {
+          operation: "fresh_chat_recovery",
+          attempt,
+          maxAttempts: maxFreshAttempts,
+          waitMs: delay,
+        });
         if (this.debug) console.log(`[qwen] auto-retry: waiting ${Math.round(delay / 1000)}s before attempt ${attempt}/${maxFreshAttempts}…`);
         await waitForQwenChat(delay);
       }
@@ -433,6 +461,15 @@ export class QwenChatClient {
             })
             : await proxy.proxyFetch({ url, body: bodyStr, chatId });
 
+          providerLogger.info("provider.qwen.response", {
+            operation: "completion",
+            transport: "browser",
+            attempt: attempt + 1,
+            statusCode: result.status,
+            contentType: result.contentType,
+            responseBytes: result.text?.length || 0,
+          });
+
           if (this.debug) {
             try {
               fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
@@ -460,6 +497,11 @@ export class QwenChatClient {
             chatInProgressSeen = true;
             if (attempt < 2) {
               const waitMs = 1_500 * (attempt + 1);
+              providerLogger.warn("provider.qwen.retry", {
+                operation: "chat_in_progress",
+                attempt: attempt + 1,
+                waitMs,
+              });
               if (this.debug) console.log(`[qwen] chat is still finalizing; retrying same turn in ${waitMs}ms…`);
               await waitForQwenChat(waitMs);
               continue;
@@ -476,6 +518,11 @@ export class QwenChatClient {
 
           return { result: finalizeQwenCompletionResult(parsed, result.text, "completion (browser)"), chatInProgressStuck: false };
         } catch (error) {
+          providerLogger.error("provider.qwen.error", error, {
+            operation: "completion_round",
+            transport: "browser",
+            attempt: attempt + 1,
+          });
           if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) {
             // Транспортная/авторизационная ошибка не считается «in progress».
             if (chatInProgressSeen) return { result: null, chatInProgressStuck: true };

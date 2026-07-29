@@ -26,12 +26,16 @@ import { QwenChatClient } from "../src/providers/qwen/client.mjs";
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
-import { parseModelToolCalls } from "./tool-calls.mjs";
+import { normalizeToolCallsForSchemas, parseModelToolCalls } from "./tool-calls.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
 import { EconomyOSClient } from "../src/providers/economyos/client.mjs";
 import { getEconomyOSSettings } from "../src/state/settings.mjs";
+import { createFileLogger } from "../src/logging/logger.mjs";
+import { runWithEmptyStreamRetry } from "./stream-retry.mjs";
+
+const compatLogger = createFileLogger({ component: "openai-handler" });
 
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.
 let qwenClient = null;
@@ -166,6 +170,14 @@ async function handleChatCompletions(req, res) {
 
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   if (!messages.length) return sendError(res, 400, "Missing 'messages' array");
+  compatLogger.info("api.chat.request", {
+    provider: mapping.provider,
+    model: modelName,
+    stream: body.stream === true,
+    messageCount: messages.length,
+    messageChars: countMessageCharacters(messages),
+    toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+  });
 
   const basePrompt = buildPromptFromChatBody(
     { ...body, tools: toolsForModelPrompt(body.tools) },
@@ -183,6 +195,7 @@ async function handleChatCompletions(req, res) {
           return handleQwenStream(client, null, prompt, modelName, mapping.model, res, {
             thinking,
             search,
+            tools: body.tools,
             createChat: (currentClient) => currentClient.createChat({ model: mapping.model, title: "API request" }),
             refreshClient: async (error) => {
               const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
@@ -206,7 +219,7 @@ async function handleChatCompletions(req, res) {
           search,
           model: mapping.model,
         });
-        return sendJson(res, toOpenAIResponse(modelName, result.text));
+        return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
       };
 
       let client = await getQwenClient();
@@ -232,7 +245,7 @@ async function handleChatCompletions(req, res) {
       const sessionId = await client.createSession();
 
       if (body.stream === true) {
-        return handleDeepSeekStream(client, sessionId, prompt, modelName, mapping.model, res, { thinking, search });
+        return handleDeepSeekStream(client, sessionId, prompt, modelName, mapping.model, res, { thinking, search, tools: body.tools });
       }
 
       const result = await client.complete({
@@ -242,32 +255,47 @@ async function handleChatCompletions(req, res) {
         thinkingEnabled: thinking,
         searchEnabled: search,
       });
-      return sendJson(res, toOpenAIResponse(modelName, result.text));
+      return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
     }
     if (mapping.provider === "chatgpt") {
       const client = await getChatGPTClient();
       if (body.stream === true) {
-        return handleChatGPTStream(client, prompt, modelName, mapping.model, res);
+        return handleChatGPTStream(client, prompt, modelName, mapping.model, res, { tools: body.tools });
       }
       const result = await client.complete({
         prompt,
         model: mapping.model,
       });
-      return sendJson(res, toOpenAIResponse(modelName, result.text));
+      return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
     }
     if (mapping.provider === "economyos") {
       const client = await getEconomyOSClient();
       if (body.stream === true) {
-        return handleEconomyOSStream(client, prompt, modelName, mapping.model, res);
+        return handleEconomyOSStream(client, prompt, modelName, mapping.model, res, { tools: body.tools });
       }
       const result = await client.complete({ prompt, model: mapping.model });
-      return sendJson(res, toOpenAIResponse(modelName, result.text));
+      return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
     }
     return sendError(res, 500, `Unknown provider: ${mapping.provider}`);
   } catch (e) {
+    compatLogger.error("api.chat.upstream_error", e, {
+      provider: mapping.provider,
+      model: modelName,
+      stream: body.stream === true,
+    });
     console.error("[API] Upstream error:", e.message);
     return sendError(res, 500, humanizeUpstreamError(e.message));
   }
+}
+
+function countMessageCharacters(messages) {
+  return messages.reduce((total, message) => {
+    if (typeof message?.content === "string") return total + message.content.length;
+    if (!Array.isArray(message?.content)) return total;
+    return total + message.content.reduce((sum, part) => (
+      sum + (typeof part?.text === "string" ? part.text.length : 0)
+    ), 0);
+  }, 0);
 }
 
 function withWebSearchInstruction(prompt) {
@@ -278,7 +306,7 @@ function withWebSearchInstruction(prompt) {
   ].join("\n");
 }
 
-function buildPromptFromChatBody(body, modelName, mapping) {
+export function buildPromptFromChatBody(body, modelName, mapping) {
   // OpenAI присылает ВСЮ историю каждый раз. Мы её сжимаем в один prompt —
   // конкатенируем с лейблами ролей. Это упрощение прототипа; для качества контекста
   // потом сделаем proper multi-turn через persistent sessionId + parent_id chain.
@@ -339,16 +367,27 @@ Rules:
 2. If you just want to talk to the user, do not emit any tool_calls block.
 3. Never insert text INSIDE the JSON array. JSON must be valid.
 4. Tool "name" MUST match exactly one of the names in Available tools below.
+5. Every argument listed in a tool schema's "required" array MUST be present. After a validation error, correct each missing required argument; never repeat the identical invalid call.
+6. A tool result saying "No changes detected" means the requested content is already present. Do not repeat that write; verify the next requirement or finish.
+7. For an action request, do the work with tools now. Never tell the user to edit files manually when a matching tool is available.
 ${reasonerNote}
 Available tools:
 ${JSON.stringify(body.tools, null, 2)}
 [END TOOL INSTRUCTIONS]\n\n---\n\n`;
   }
 
+  const toolNameByCallId = new Map();
+  for (const message of messages) {
+    for (const call of message?.tool_calls || []) {
+      if (call?.id && call?.function?.name) toolNameByCallId.set(call.id, call.function.name);
+    }
+  }
+
   prompt += messages
     .map((m) => {
       if (m.role === "tool") {
-        return `[TOOL RESULT FOR ${m.name}]:\n${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`;
+        const toolName = m.name || toolNameByCallId.get(m.tool_call_id) || "unknown tool";
+        return `[TOOL RESULT FOR ${toolName}]:\n${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`;
       }
       if (m.role === "system") {
         return `[SYSTEM]:\n${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`;
@@ -785,6 +824,7 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res, {
   search = false,
   createChat = null,
   refreshClient = null,
+  tools = [],
 } = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
@@ -793,7 +833,7 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res, {
 
   const requestId = `qwen_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   const startedAt = Date.now();
-  const parser = new StreamParser(modelName, res);
+  const parser = new StreamParser(modelName, res, { tools });
   let sawDelta = false;
   let firstDeltaAt = 0;
   const heartbeat = setInterval(() => {
@@ -894,13 +934,13 @@ function logQwenTiming(requestId, stage, fields = {}) {
 }
 
 // Обработка streaming-запроса к ChatGPT.
-async function handleChatGPTStream(client, prompt, modelName, model, res) {
+async function handleChatGPTStream(client, prompt, modelName, model, res, { tools = [] } = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  const parser = new StreamParser(modelName, res);
+  const parser = new StreamParser(modelName, res, { tools });
   try {
     await client.complete({
       prompt,
@@ -916,13 +956,13 @@ async function handleChatGPTStream(client, prompt, modelName, model, res) {
   }
 }
 
-async function handleEconomyOSStream(client, prompt, modelName, model, res) {
+async function handleEconomyOSStream(client, prompt, modelName, model, res, { tools = [] } = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  const parser = new StreamParser(modelName, res);
+  const parser = new StreamParser(modelName, res, { tools });
   try {
     await client.complete({
       prompt,
@@ -939,21 +979,33 @@ async function handleEconomyOSStream(client, prompt, modelName, model, res) {
 }
 
 // Обработка streaming-запроса к DeepSeek.
-async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res, { thinking = false, search = false } = {}) {
+async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res, { thinking = false, search = false, tools = [] } = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  const parser = new StreamParser(modelName, res);
+  const parser = new StreamParser(modelName, res, { tools });
   try {
-    await client.complete({
-      sessionId,
-      prompt,
-      modelType: model,
-      thinkingEnabled: thinking,
-      searchEnabled: search,
-      onText: (textDelta) => parser.onText(textDelta),
+    let activeSessionId = sessionId;
+    await runWithEmptyStreamRetry({
+      operation: ({ onDelta }) => client.complete({
+        sessionId: activeSessionId,
+        prompt,
+        modelType: model,
+        thinkingEnabled: thinking,
+        searchEnabled: search,
+        onText: onDelta,
+      }),
+      onDelta: (textDelta) => parser.onText(textDelta),
+      beforeRetry: async ({ attempt, error }) => {
+        compatLogger.warn("api.deepseek.empty_stream_retry", {
+          model: modelName,
+          attempt,
+          reason: error.message,
+        });
+        activeSessionId = await client.createSession();
+      },
     });
     parser.onEnd();
     res.write("data: [DONE]\n\n");
@@ -965,7 +1017,7 @@ async function handleDeepSeekStream(client, sessionId, prompt, modelName, model,
 }
 
 // Формат OpenAI chat completion response.
-function toOpenAIResponse(model, text) {
+function toOpenAIResponse(model, text, tools = []) {
   const ts = Math.floor(Date.now() / 1000);
   
   let tool_calls = undefined;
@@ -973,9 +1025,10 @@ function toOpenAIResponse(model, text) {
   let finish_reason = "stop";
 
   const parsed = parseModelToolCalls(text);
-  if (parsed.calls.length) {
+  const normalized = normalizeToolCallsForSchemas(parsed.calls, tools);
+  if (normalized.calls.length) {
     content = parsed.content;
-    tool_calls = parsed.calls.map((call) => ({
+    tool_calls = normalized.calls.map((call) => ({
       id: `call_${Math.random().toString(36).slice(2, 10)}`,
       type: "function",
       function: {
@@ -1232,7 +1285,7 @@ function anthropicToolsToOpenAITools(tools) {
 }
 
 export class StreamParser {
-  constructor(modelName, res) {
+  constructor(modelName, res, { tools = [] } = {}) {
     this.modelName = modelName;
     this.res = res;
     this.buffer = "";
@@ -1242,6 +1295,8 @@ export class StreamParser {
     this.first = true;
     this.ended = false;
     this.id = `chatcmpl-${Math.floor(Date.now() / 1000)}${Math.random().toString(36).slice(2, 10)}`;
+    this.tools = tools;
+    this.outputCount = 0;
   }
 
   onText(textDelta) {
@@ -1296,6 +1351,11 @@ export class StreamParser {
     if (this.ended) return;
     this.ended = true;
     let finishReason = "stop";
+    if (this.first && !this.buffer && !this.toolsBuffer) {
+      this.sendChunk({ role: "assistant" }, true);
+      this.first = false;
+      this.sendChunk({ content: "[Error] Upstream model stream ended without response content. Retry the request." });
+    }
     if (!this.isTools && !this.isXmlTools && this.buffer) {
       // Just in case it never closes or emits normal text
       this.sendChunk({ content: this.buffer });
@@ -1444,11 +1504,16 @@ export class StreamParser {
       choices: [{ index: 0, delta }],
     };
     sendSseEvent(this.res, chunk);
+    if (delta.content || delta.tool_calls?.length) this.outputCount += 1;
     if (this.res.flush) this.res.flush();
   }
 
   sendToolCalls(calls) {
-    calls.forEach((call, index) => {
+    const normalized = normalizeToolCallsForSchemas(calls, this.tools);
+    if (normalized.errors.length) {
+      compatLogger.warn("api.tool_call.validation", { errors: normalized.errors });
+    }
+    normalized.calls.forEach((call, index) => {
       const name = call.name || call.tool;
       if (!name) return;
       this.sendChunk({

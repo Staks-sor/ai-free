@@ -9,6 +9,7 @@ import { loadSettings } from "../state/settings.mjs";
 import { getStateFile } from "../state/window-state.mjs";
 import { listProviders } from "../providers/registry.mjs";
 import { probeRuntimeCommand } from "../updater.mjs";
+import { resolveLogDirectory } from "../logging/logger.mjs";
 
 const execFileAsync = promisify(execFile);
 const COMMANDS = ["node", "npm", "git", "python3", "python", "pio", "arduino-cli", "esptool.py"];
@@ -34,6 +35,7 @@ export async function collectDiagnostics({ workspaceRoot, state, runningTaskIds 
     };
   });
   const conversations = Array.isArray(state?.conversations) ? state.conversations : [];
+  const logFile = path.join(resolveLogDirectory(), "ai-free.log");
   const activeConversation = conversations.find((item) => item.id === state?.activeConversationId) || null;
   const summary = {
     generatedAt: new Date().toISOString(),
@@ -58,6 +60,10 @@ export async function collectDiagnostics({ workspaceRoot, state, runningTaskIds 
       activeProvider: activeConversation?.provider || "",
       activeModel: activeConversation?.model || "",
       runningTaskIds,
+    },
+    logging: {
+      file: logFile,
+      exists: fs.existsSync(logFile),
     },
     providers,
     commands,
@@ -95,6 +101,9 @@ export function formatDiagnosticReport(data) {
   lines.push(`- Conversations: ${data.state.conversations}`);
   lines.push(`- Active provider/model: ${data.state.activeProvider || "-"} / ${data.state.activeModel || "-"}`);
   lines.push(`- Running tasks: ${data.state.runningTaskIds.length ? data.state.runningTaskIds.join(", ") : "-"}`);
+  lines.push("");
+  lines.push("Logging");
+  lines.push(`- Log file: ${redactHome(data.logging.file)} (${existsLabel(data.logging.exists)})`);
   lines.push("");
   lines.push("Providers");
   for (const provider of data.providers) {

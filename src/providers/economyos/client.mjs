@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import { ECONOMYOS_DEFAULT_BASE_URL } from "../../state/settings.mjs";
+import { createFileLogger } from "../../logging/logger.mjs";
+
+const providerLogger = createFileLogger({ component: "provider.economyos" });
 
 export class EconomyOSClient {
   constructor({ apiKey, baseUrl = ECONOMYOS_DEFAULT_BASE_URL, fetchImpl = globalThis.fetch, nativeRequestIntervalMs = 2_500 } = {}) {
@@ -37,9 +40,15 @@ export class EconomyOSClient {
   }
 
   async listModels({ signal = null } = {}) {
+    const startedAt = Date.now();
     const response = await this.fetchImpl(`${this.baseUrl}/models`, {
       headers: this.#headers(),
       signal,
+    });
+    providerLogger.info("provider.economyos.request", {
+      operation: "list_models",
+      statusCode: response.status,
+      durationMs: Date.now() - startedAt,
     });
     if (!response.ok) throw await responseError(response, "EconomyOS model catalog");
     const payload = await response.json();
@@ -47,6 +56,7 @@ export class EconomyOSClient {
   }
 
   async complete({ prompt, model, sessionId = null, messages = null, images = [], systemPrompt = "", tools = null, toolResult = null, onText = null, signal = null } = {}) {
+    const requestStartedAt = Date.now();
     const history = Array.isArray(messages)
       ? normalizeMessages(messages)
       : [...(this.sessions.get(sessionId) || [])];
@@ -84,10 +94,27 @@ export class EconomyOSClient {
         ? (chunk) => { emitted = true; onText(chunk); }
         : null;
       try {
+        providerLogger.debug("provider.economyos.request", {
+          operation: "completion",
+          model: String(model || "z-ai-glm-4-7-flash"),
+          attempt: attempt + 1,
+          maxAttempts,
+          promptChars: userPrompt.length,
+          messageCount: history.length,
+          imageCount: images.length,
+          toolCount: Array.isArray(tools) ? tools.length : 0,
+        });
         // Pace every completion, not only tool calls. Team/pipeline agents can otherwise
         // start several ordinary completions at once and trigger provider-wide 429s.
         await this.#paceNativeRequest(signal);
         const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, request);
+        providerLogger.info("provider.economyos.response", {
+          operation: "completion",
+          model: String(model || "z-ai-glm-4-7-flash"),
+          attempt: attempt + 1,
+          statusCode: response.status,
+          durationMs: Date.now() - requestStartedAt,
+        });
         if (!response.ok) throw await responseError(response, "EconomyOS completion");
         const contentType = String(response.headers.get("content-type") || "");
         const parsed = contentType.includes("text/event-stream")
@@ -95,9 +122,23 @@ export class EconomyOSClient {
           : await readJsonResponse(response, emit);
         text = parsed.text;
         if (sessionId) this.sessions.set(sessionId, [...history, parsed.assistantMessage]);
+        providerLogger.info("provider.economyos.success", {
+          model: String(model || "z-ai-glm-4-7-flash"),
+          attempt: attempt + 1,
+          responseChars: text.length,
+          hasToolCall: Boolean(parsed.toolCall),
+          durationMs: Date.now() - requestStartedAt,
+        });
         return { text, toolCall: parsed.toolCall, lastAssistantMessageId: randomUUID() };
         break;
       } catch (error) {
+        providerLogger.error("provider.economyos.error", error, {
+          model: String(model || "z-ai-glm-4-7-flash"),
+          attempt: attempt + 1,
+          maxAttempts,
+          retryable: isTransientTransportError(error),
+          durationMs: Date.now() - requestStartedAt,
+        });
         if (signal?.aborted || emitted || !isTransientTransportError(error)) throw error;
         if (attempt >= maxAttempts - 1) {
           const failure = new Error(
@@ -111,7 +152,13 @@ export class EconomyOSClient {
           failure.status = error?.status || 0;
           throw failure;
         }
-        await delay(retryDelayMs(error, attempt), signal);
+        const waitMs = retryDelayMs(error, attempt);
+        providerLogger.warn("provider.economyos.retry", {
+          model: String(model || "z-ai-glm-4-7-flash"),
+          nextAttempt: attempt + 2,
+          waitMs,
+        });
+        await delay(waitMs, signal);
       }
     }
 

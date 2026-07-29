@@ -35,6 +35,7 @@ People usually look for this project as a **free AI coding assistant**, **local 
 - **Developer interfaces:** desktop UI, CLI, OpenAI-compatible API and Anthropic-compatible API.
 - **Code agent:** `/code` mode with workspace file access and controlled command permissions.
 - **Memory and skills:** long-term memory, memory graph and reusable task workflows.
+- **Project instructions:** hierarchical `AGENTS.md` files are reloaded before every code-agent task; nested files apply to their own directory tree.
 - **IDE-friendly:** works with tools such as Continue, Kilo Code and PyCharm ACP-compatible flows.
 - **Local-first sessions:** provider browser sessions and app state are stored on your machine.
 
@@ -59,7 +60,7 @@ People usually look for this project as a **free AI coding assistant**, **local 
   <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20EconomyOS-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, EconomyOS">
 </p>
 
-<p align="center"><strong>AI Free 0.4.9</strong></p>
+<p align="center"><strong>AI Free 0.4.11</strong></p>
 
 > Локальный AI-клиент, который превращает веб-чаты DeepSeek, Qwen и ChatGPT в инструмент для разработчика: окно чатов, CLI, совместимые API, `/code`-агент, память, skills и IDE-интеграции.
 
@@ -91,9 +92,10 @@ People usually look for this project as a **free AI coding assistant**, **local 
 - ⌨️ **CLI-режим:** REPL в терминале для скриптовых сценариев и быстрых вопросов.
 - 🛠️ **`/code` агент:** доступ к файлам workspace и разрешённым командам.
 - **🧠 Memory:** долговременная память агента — SQLite FTS5 + Markdown vault (`~/.ai-free/memory/`). Переключатель в topbar, просмотр в Settings → Агент.
+- **`AGENTS.md`:** правила проекта загружаются перед каждой агентской задачей. Корневой файл действует на весь workspace, вложенный — на свою директорию и её подкаталоги и имеет приоритет над родительским.
 - **🔗 Memory graph:** связи task ↔ file ↔ bug ↔ fix; расширяет контекст при повторных задачах.
 - **⚡ Skills:** встроенные `code-review`, `bug-fix`, `video-script`; auto-match по задаче; `/skill <id> <task>`.
-- **Agent orchestrator:** перед `/code` собирает memory + skill в system prompt.
+- **Agent orchestrator:** перед `/code` собирает актуальные `AGENTS.md`, memory и skill в system prompt.
 - 🔌 **Совместимые API** (`localhost:4318`): OpenAI и Anthropic для Kilo Code, Continue и других IDE.
 - 🎙️ **Голосовой ввод:** Parakeet V3 скачивается отдельно только при первом использовании.
 - 📁 **Файловый браузер:** при создании чата можно выбрать папку или создать новую.
@@ -106,9 +108,9 @@ People usually look for this project as a **free AI coding assistant**, **local 
 
 ### Версия продукта
 
-Текущий релиз — **AI Free 0.4.9**. Desktop/CLI/API и расширение VS Code выпускаются под единым номером версии. Он синхронно хранится в корневом `package.json` и `plugin-for-vscode/package.json`; общий релизный тег имеет формат `vX.Y.Z`.
+Текущий релиз — **AI Free 0.4.11**. Desktop/CLI/API и расширение VS Code выпускаются под единым номером версии. Он синхронно хранится в корневом `package.json` и `plugin-for-vscode/package.json`; общий релизный тег имеет формат `vX.Y.Z`.
 
-Что вошло в `0.4.9`: [release notes](docs/RELEASE_NOTES_0.4.9.md).
+Что вошло в `0.4.11`: [release notes](docs/RELEASE_NOTES_0.4.11.md).
 
 ---
 
@@ -616,6 +618,17 @@ ACP-агент ходит в наш OpenAI-compatible API (`http://127.0.0.1:431
 - `/code` — команды без shell, в пределах workspace, whitelist. `curl`/`wget`/`bash` заблокированы по умолчанию.
 - Серверы чатов и API слушают только `127.0.0.1` (`4317`, `4318`).
 - Chromium-профили DeepSeek и Qwen **разделены** — сессии не смешиваются; открывает только Playwright по запросу программы.
+
+## 🧾 Подробные логи
+
+Desktop и VS Code записывают единый структурированный журнал JSONL:
+
+- Windows: `%USERPROFILE%\.ai-free\logs\ai-free.log`
+- macOS/Linux: `~/.ai-free/logs/ai-free.log`
+
+Журнал содержит запуск и остановку процессов, HTTP-статусы, выбранные провайдеры и модели, длительность запросов, повторы, фоновые задачи, вызовы инструментов и полные stack trace ошибок. Текст запросов и ответов не сохраняется; API-ключи, cookies, токены и пароли маскируются. По умолчанию хранится не больше пяти файлов по 5 МиБ.
+
+Настройка через переменные окружения: `AI_FREE_LOG_LEVEL`, `AI_FREE_LOG_DIR`, `AI_FREE_LOG_MAX_BYTES`, `AI_FREE_LOG_MAX_FILES`. Путь к текущему журналу также указан в **Настройки → Статус → Скопировать отчёт**.
 
 ---
 

@@ -29,6 +29,7 @@ import {
   runCodeTask,
 } from "../src/code-agent/run.mjs";
 import {
+  buildContinuationPrompt,
   buildNoToolCorrectionPrompt,
 } from "../src/code-agent/loop-helpers.mjs";
 import { createCodeSystemPrompt } from "../src/code-agent/prompt.mjs";
@@ -38,6 +39,15 @@ import { LANGUAGES, createTranslator, getMessages } from "../src/i18n/index.mjs"
 import { COMMAND_CATALOG } from "../src/state/settings.mjs";
 
 describe("code agent prompt", () => {
+  it("does not repeat no-op writes or defer available workspace edits to the user", () => {
+    const prompt = buildContinuationPrompt({
+      tool: "write_file",
+      toolResult: { ok: true, message: "No changes detected." },
+    });
+    assert.match(prompt, /do not repeat/i);
+    assert.match(prompt, /do not tell the user to edit files manually/i);
+  });
+
   it("does not tell the model that internet is unavailable when provider search is enabled", () => {
     const prompt = createCodeSystemPrompt("/tmp/project", "посмотри новости", "", { searchEnabled: true });
     assert.match(prompt, /Provider web search is ENABLED/);

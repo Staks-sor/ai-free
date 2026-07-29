@@ -18,6 +18,48 @@ export function parseXmlToolCalls(text) {
   return block?.calls || [];
 }
 
+const ARGUMENT_ALIASES = Object.freeze({
+  file_path: ["filePath", "path"],
+  old_string: ["oldString", "old_text", "oldText"],
+  new_string: ["newString", "new_text", "newText", "replacement", "replacement_text"],
+  content: ["file_content", "fileContent", "text"],
+});
+
+export function normalizeToolCallsForSchemas(calls, tools = []) {
+  const schemas = new Map((Array.isArray(tools) ? tools : []).map((tool) => {
+    const fn = tool?.function || tool;
+    return [fn?.name, fn?.parameters || fn?.input_schema || {}];
+  }).filter(([name]) => name));
+  const errors = [];
+
+  const normalizedCalls = (Array.isArray(calls) ? calls : []).map((call) => {
+    const schema = schemas.get(call?.name);
+    if (!schema) return call;
+    let args;
+    try {
+      args = typeof call.arguments === "string" ? JSON.parse(call.arguments) : { ...(call.arguments || {}) };
+    } catch {
+      return call;
+    }
+    if (!args || typeof args !== "object" || Array.isArray(args)) return call;
+
+    for (const property of Object.keys(schema.properties || {})) {
+      if (args[property] !== undefined) continue;
+      const alias = (ARGUMENT_ALIASES[property] || []).find((candidate) => args[candidate] !== undefined);
+      if (alias) {
+        args[property] = args[alias];
+        delete args[alias];
+      }
+    }
+
+    const missing = (schema.required || []).filter((property) => args[property] === undefined);
+    if (missing.length) errors.push({ name: call.name, missing });
+    return { ...call, arguments: JSON.stringify(args) };
+  });
+
+  return { calls: normalizedCalls, errors };
+}
+
 function extractToolCallsBlock(source) {
   const fence = source.match(/```tool_calls\s*([\s\S]*?)```/i);
   if (!fence) return null;

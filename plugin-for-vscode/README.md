@@ -2,12 +2,13 @@
 
 AI Free brings DeepSeek, Qwen, ChatGPT and optional EconomyOS by Virtuals into the VS Code sidebar as project-aware coding agents.
 
-Current release: **0.4.9**.
+Current release: **0.4.11**.
 
 ## Features
 
 - DeepSeek and Qwen providers.
 - Agent-first workflow for the currently opened VS Code workspace.
+- Hierarchical `AGENTS.md` project instructions, reloaded before every agent task.
 - EconomyOS BYOK integration with selectable Virtuals Compute models and no shared project key.
 - Separate agents and chat history per project.
 - Model picker with current DeepSeek and Qwen model aliases.
@@ -22,6 +23,10 @@ Current release: **0.4.9**.
 ## Notes
 
 The extension stores existing provider sessions in the same local AI Free storage as the main app. It does not rename or migrate `~/.deepseek-cli` or `~/.qwen-cli`.
+
+## Detailed logs
+
+The extension writes privacy-safe JSONL diagnostics to `%USERPROFILE%\.ai-free\logs\ai-free.log` on Windows and `~/.ai-free/logs/ai-free.log` on macOS/Linux. It records process lifecycle, HTTP status and timing, provider/model selection, retries, background tasks, tool calls and full error stack traces. Prompts and responses are not persisted, and credentials are redacted. Rotation defaults to five files of 5 MiB each.
 
 ## Uninstall
 

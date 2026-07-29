@@ -3,6 +3,7 @@ node_modules/
 .DS_Store
 .deepseek-cli/
 *.vsix
+.repro-snapshot.tar.gz
 cookies*.json
 *cookie*.json
 deepseek-token*.txt

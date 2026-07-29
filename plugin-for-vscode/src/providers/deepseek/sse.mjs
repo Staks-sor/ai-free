@@ -10,6 +10,34 @@ export async function streamSse(res, debug, onText = null) {
   let fullText = "";
   let lastAssistantMessageId = null;
   const fragments = new Map();
+  let eventCount = 0;
+  const eventTypes = new Set();
+
+  const processEvent = (rawEvent) => {
+    const event = parseSseEvent(rawEvent);
+    if (!event.data) return;
+    eventCount += 1;
+    if (event.event) eventTypes.add(event.event);
+
+    if (debug) console.error("[event]", event.event || "message", event.data.slice(0, 500));
+
+    let parsed;
+    try {
+      parsed = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    const upstreamError = extractStreamError(parsed);
+    if (upstreamError) throw new Error(`DeepSeek stream error: ${upstreamError}`);
+
+    const { text, messageId } = extractDeltaText(parsed, fragments, event.event);
+    if (messageId !== null) lastAssistantMessageId = messageId;
+    if (text) {
+      fullText += text;
+      onText?.(text);
+    }
+  };
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -17,31 +45,33 @@ export async function streamSse(res, debug, onText = null) {
     buffer += decoder.decode(value, { stream: true });
 
     let boundary;
-    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-      const rawEvent = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const event = parseSseEvent(rawEvent);
-      if (!event.data) continue;
-
-      if (debug) console.error("[event]", event.event || "message", event.data.slice(0, 500));
-
-      let parsed;
-      try {
-        parsed = JSON.parse(event.data);
-      } catch {
-        continue;
-      }
-
-      const { text, messageId } = extractDeltaText(parsed, fragments, event.event);
-      if (messageId !== null) lastAssistantMessageId = messageId;
-      if (text) {
-        fullText += text;
-        onText?.(text);
-      }
+    while ((boundary = buffer.match(/\r?\n\r?\n/))) {
+      const boundaryIndex = boundary.index ?? 0;
+      const rawEvent = buffer.slice(0, boundaryIndex);
+      buffer = buffer.slice(boundaryIndex + boundary[0].length);
+      processEvent(rawEvent);
     }
   }
 
+  buffer += decoder.decode();
+  if (buffer.trim()) processEvent(buffer);
+  if (!fullText) {
+    const types = [...eventTypes].join(", ") || "message";
+    const error = new Error(`DeepSeek stream ended without response content (events=${eventCount}, types=${types}).`);
+    error.code = "EMPTY_UPSTREAM_STREAM";
+    throw error;
+  }
+
   return { lastAssistantMessageId, text: fullText };
+}
+
+function extractStreamError(value) {
+  if (!value || typeof value !== "object") return "";
+  if (value.error) return String(value.error?.message || value.error);
+  const code = value.code ?? value.data?.biz_code;
+  const message = value.message || value.msg || value.data?.biz_msg;
+  if (code != null && Number(code) !== 0) return `${message || "upstream failure"} (code=${code})`;
+  return "";
 }
 
 // Разбор одного SSE-фрейма: `event: name\ndata: json\n\n`.

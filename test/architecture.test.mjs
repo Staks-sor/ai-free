@@ -15,6 +15,35 @@ import {
 } from "../api/models.mjs";
 
 describe("architecture invariants", () => {
+  it("keeps desktop and VS Code agent context implementations in sync", () => {
+    const files = [
+      "agent-orchestrator/context-assembler.mjs",
+      "agent-orchestrator/index.mjs",
+      "agent-orchestrator/project-instructions.mjs",
+      "code-agent/native-tools.mjs",
+      "code-agent/loop-helpers.mjs",
+      "code-agent/prompt.mjs",
+      "code-agent/run.mjs",
+      "window-app/ui-styles.mjs",
+    ];
+    for (const file of files) {
+      const desktop = fs.readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+      const plugin = fs.readFileSync(new URL(`../plugin-for-vscode/src/${file}`, import.meta.url), "utf8");
+      assert.equal(plugin, desktop, file);
+    }
+  });
+
+  it("keeps desktop and VS Code compatible API bridges in sync", () => {
+    for (const file of ["openai-handler.mjs", "tool-calls.mjs", "stream-retry.mjs"]) {
+      const desktop = fs.readFileSync(new URL(`../api/${file}`, import.meta.url), "utf8");
+      const plugin = fs.readFileSync(new URL(`../plugin-for-vscode/api/${file}`, import.meta.url), "utf8");
+      assert.equal(plugin, desktop, file);
+    }
+    const desktopSse = fs.readFileSync(new URL("../src/providers/deepseek/sse.mjs", import.meta.url), "utf8");
+    const pluginSse = fs.readFileSync(new URL("../plugin-for-vscode/src/providers/deepseek/sse.mjs", import.meta.url), "utf8");
+    assert.equal(pluginSse, desktopSse, "providers/deepseek/sse.mjs");
+  });
+
   it("keeps root and VS Code model catalogs in sync", () => {
     const rootCatalog = fs.readFileSync(new URL("../src/providers/model-catalog.mjs", import.meta.url), "utf8");
     const pluginCatalog = fs.readFileSync(
@@ -78,5 +107,6 @@ describe("architecture invariants", () => {
     assert.equal(ROOT_VERSION, rootPackage.version);
     assert.equal(PLUGIN_VERSION, pluginPackage.version);
     assert.equal(ROOT_VERSION, PLUGIN_VERSION);
+    assert.equal(ROOT_VERSION, "0.4.11");
   });
 });

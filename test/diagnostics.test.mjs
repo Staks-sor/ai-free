@@ -22,6 +22,10 @@ describe("diagnostics report", () => {
         activeModel: "qwen3.7-plus",
         runningTaskIds: [],
       },
+      logging: {
+        file: path.join(os.homedir(), ".ai-free", "logs", "ai-free.log"),
+        exists: true,
+      },
       providers: [{ name: "Qwen", status: "ready", authFileLabel: "~/.qwen-cli/auth.json" }],
       commands: [{ command: "node", ok: true, version: "v20.0.0" }],
       git: { available: true, branch: "main", commit: "abc123", dirty: false },
@@ -33,5 +37,6 @@ describe("diagnostics report", () => {
     assert.match(report, /Root: ~\/project/);
     assert.doesNotMatch(report, new RegExp(os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(report, /Qwen: ready/);
+    assert.match(report, /Log file: ~\/\.ai-free\/logs\/ai-free\.log \(exists\)/);
   });
 });

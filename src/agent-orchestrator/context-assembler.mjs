@@ -1,9 +1,10 @@
-// Сбор контекста перед запуском code-agent: skill + memory.
+// Сбор контекста перед запуском code-agent: project instructions + skill + memory.
 
 import { buildMemoryContextResult } from "../memory/context-builder.mjs";
 import { matchSkillByTask } from "../skills/skill-matcher.mjs";
 import { loadSkill } from "../skills/registry.mjs";
 import { getAllowedTools } from "../skills/permissions.mjs";
+import { loadProjectInstructions } from "./project-instructions.mjs";
 
 export function assembleAgentContext({
   task,
@@ -28,6 +29,7 @@ export function assembleAgentContext({
   }
 
   const memory = buildMemoryContextResult(task, workspaceRoot, { memoryEnabled });
+  const projectInstructions = loadProjectInstructions(workspaceRoot);
 
   return {
     skillId: resolvedSkillId,
@@ -36,6 +38,8 @@ export function assembleAgentContext({
     memoryContext: memory.context,
     memoryUsedCount: memory.usedCount,
     graphUsedCount: memory.graphUsed || 0,
+    projectInstructionsContext: projectInstructions.context,
+    projectInstructionsCount: projectInstructions.files.length,
     allowedTools: getAllowedTools(skill),
   };
 }

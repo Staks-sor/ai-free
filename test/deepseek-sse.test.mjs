@@ -3,7 +3,7 @@
 
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
-import { extractDeltaText, parseSseEvent } from "../src/providers/deepseek/sse.mjs";
+import { extractDeltaText, parseSseEvent, streamSse } from "../src/providers/deepseek/sse.mjs";
 
 describe("parseSseEvent", () => {
   it("parses standard event:/data: pair", () => {
@@ -102,5 +102,27 @@ describe("extractDeltaText", () => {
     assert.equal(first.text, "hello");
     // На втором проходе вычитаем уже виденное — должен прийти только новый кусок.
     assert.equal(second.text, " world");
+  });
+});
+
+describe("streamSse", () => {
+  it("processes the final SSE event even without a trailing blank line", async () => {
+    const response = new Response('data: {"v":"tail"}');
+    const result = await streamSse(response, false);
+    assert.equal(result.text, "tail");
+  });
+
+  it("processes CRLF-separated SSE frames", async () => {
+    const response = new Response('data: {"v":"one"}\r\n\r\ndata: {"v":" two"}\r\n\r\n');
+    const result = await streamSse(response, false);
+    assert.equal(result.text, "one two");
+  });
+
+  it("rejects an upstream stream that contains no usable response", async () => {
+    const response = new Response('event: ping\ndata: {"status":"ok"}\n\n');
+    await assert.rejects(
+      () => streamSse(response, false),
+      /ended without response content/i,
+    );
   });
 });
