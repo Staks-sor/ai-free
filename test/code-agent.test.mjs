@@ -552,12 +552,74 @@ describe("runCodeTask running clarifications", () => {
           return { text: '{"tool":"finish","message":"done"}', lastAssistantMessageId: "m2" };
         },
       };
+      let clarificationTaken = false;
       const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "inspect", null, {
-        takeInterrupts: () => ["не показывай шаги, дай только итог"],
+        takeInterrupts: () => {
+          if (clarificationTaken) return [];
+          clarificationTaken = true;
+          return ["не показывай шаги, дай только итог"];
+        },
       });
       assert.equal(result.message, "done");
       assert.match(prompts[1], /Important user clarification/);
       assert.match(prompts[1], /не показывай шаги/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runCodeTask late running clarifications", () => {
+  it("does not finish when a clarification arrives during the finish tool", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    const prompts = [];
+    let calls = 0;
+    try {
+      const fakeClient = {
+        async complete(options) {
+          calls += 1;
+          prompts.push(options.prompt);
+          if (calls === 1) return { text: '{"tool":"finish","message":"old result"}', lastAssistantMessageId: "m1" };
+          return { text: '{"tool":"finish","message":"updated result"}', lastAssistantMessageId: "m2" };
+        },
+      };
+      let taken = false;
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "fix it", null, {
+        takeInterrupts: () => {
+          if (taken) return [];
+          taken = true;
+          return ["исправь ещё и дублирование"];
+        },
+      });
+      assert.equal(result.message, "updated result");
+      assert.equal(calls, 2);
+      assert.match(prompts[1], /исправь ещё и дублирование/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not accept a text-only answer when a clarification arrived during generation", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    let calls = 0;
+    try {
+      const fakeClient = {
+        async complete() {
+          calls += 1;
+          if (calls === 1) return { text: "old answer", lastAssistantMessageId: "m1" };
+          return { text: "updated answer", lastAssistantMessageId: "m2" };
+        },
+      };
+      let taken = false;
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "hello", null, {
+        takeInterrupts: () => {
+          if (taken) return [];
+          taken = true;
+          return ["ответь короче"];
+        },
+      });
+      assert.equal(result.message, "updated answer");
+      assert.equal(calls, 2);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -1007,9 +1007,7 @@ export async function runWindowApp({
             });
           }
           const loginJob = (async () => {
-            await provider.login(providerId === "chatgpt" && process.env.CHATGPT_EMBED_IN_UI === "1"
-              ? { forceExternal: true, closeAfterLogin: true }
-              : {});
+            await provider.login({});
             if (providerId === "qwen") {
               const { resetQwenBrowserProxy } = await import("../providers/qwen/browser-proxy.mjs");
               await resetQwenBrowserProxy();
@@ -2896,22 +2894,25 @@ function capturePermissionRequest(conversation, toolResult) {
   };
 }
 
-function captureRunningClarification(conversation, prompt) {
+export function captureRunningClarification(conversation, prompt) {
   const now = new Date().toISOString();
-  conversation.messages.push({ role: "user", content: prompt, createdAt: now, interrupt: true });
-  conversation.messages.push({
-    role: "assistant",
-    content: "⚠️ Уточнение принято. Агент учтёт его на следующем шаге текущей задачи.",
-    createdAt: now,
-    interruptAck: true,
-  });
+  const clarification = String(prompt || "").trim();
   const pending = Array.isArray(conversation.pendingInterrupts) ? conversation.pendingInterrupts : [];
-  pending.push({ content: prompt, createdAt: now });
+  const lastUserMessage = [...(conversation.messages || [])]
+    .reverse()
+    .find((message) => message?.role === "user");
+  if (clarification && String(lastUserMessage?.content || "").trim() !== clarification) {
+    conversation.messages.push({ role: "user", content: clarification, createdAt: now, interrupt: true });
+  }
+  const lastPending = pending[pending.length - 1];
+  if (clarification && String(lastPending?.content || "").trim() !== clarification) {
+    pending.push({ content: clarification, createdAt: now });
+  }
   conversation.pendingInterrupts = pending.slice(-10);
   conversation.updatedAt = now;
 }
 
-function takeRunningClarifications(conversation) {
+export function takeRunningClarifications(conversation) {
   const pending = Array.isArray(conversation.pendingInterrupts) ? conversation.pendingInterrupts : [];
   if (!pending.length) return [];
   conversation.pendingInterrupts = [];

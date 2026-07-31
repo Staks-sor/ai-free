@@ -12,6 +12,7 @@
 // Состояние НЕ персистится — при рестарте сервера задачи теряются (это OK для MVP).
 
 import { createFileLogger } from "../logging/logger.mjs";
+import { createTaskTrace } from "../logging/task-trace.mjs";
 
 const DEFAULT_STALE_TASK_MS = 20 * 60 * 1000;
 const runningTasks = new Map(); // conversationId → { startedAt, kind, label, staleAfterMs }
@@ -49,26 +50,36 @@ function getFreshTask(conversationId) {
 // Запускает задачу в фоне. Если задача для этого conversationId уже идёт — бросает.
 // taskFn получает AbortSignal — задача должна проверять signal.aborted и корректно
 // завершаться при отмене (кнопка «Стоп»).
-export function startTask(conversationId, kind, taskFn, label = "") {
+export function startTask(conversationId, kind, taskFn, label = "", traceContext = {}) {
   const existing = getFreshTask(conversationId);
   if (existing) {
     throw new Error(`Task ${existing.kind} already running for ${conversationId}`);
   }
   const controller = new AbortController();
   const startedAt = Date.now();
+  const trace = createTaskTrace({
+    logger: taskLogger,
+    conversationId,
+    agentId: conversationId,
+    ...traceContext,
+  });
+  trace.record("task_created", { kind, label });
   runningTasks.set(conversationId, {
     startedAt,
     kind,
     label,
     staleAfterMs: resolveStaleTaskMs(),
     controller,
+    trace,
   });
   taskLogger.info("background_task.start", { conversationId, kind, label });
+  trace.record("task_started", { kind, label });
 
   // Fire-and-forget. .finally() гарантирует очистку даже при throw.
   Promise.resolve()
     .then(() => taskFn(controller.signal))
     .then(() => {
+      trace.finish(controller.signal.aborted ? "cancelled" : "success");
       taskLogger.info("background_task.success", {
         conversationId,
         kind,
@@ -77,6 +88,9 @@ export function startTask(conversationId, kind, taskFn, label = "") {
       });
     })
     .catch((err) => {
+      trace.finish(controller.signal.aborted ? "cancelled" : "error", {
+        errorCode: err?.code || err?.name || "TASK_FAILED",
+      });
       taskLogger.error("background_task.error", err, {
         conversationId,
         kind,
@@ -96,6 +110,7 @@ export function stopTask(conversationId) {
   const task = runningTasks.get(conversationId);
   if (!task) return false;
   try { task.controller?.abort(); } catch {}
+  task.trace?.finish("cancelled");
   taskLogger.info("background_task.stop", {
     conversationId,
     kind: task.kind,

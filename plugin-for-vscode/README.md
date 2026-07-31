@@ -2,7 +2,7 @@
 
 AI Free brings DeepSeek, Qwen, ChatGPT and optional EconomyOS by Virtuals into the VS Code sidebar as project-aware coding agents.
 
-Current release: **0.4.11**.
+Current release: **0.4.13**.
 
 ## Features
 

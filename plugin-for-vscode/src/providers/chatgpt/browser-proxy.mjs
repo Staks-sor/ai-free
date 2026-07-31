@@ -41,7 +41,14 @@ const EMBED_PANEL_VIEWPORT = { width: 580, height: 900 };
 let proxyPromise = null;
 let proxyStatus = { state: "idle", error: "" };
 let idleCloseTimer = null;
-const BROWSER_IDLE_CLOSE_MS = Math.max(5_000, Number(process.env.CHATGPT_BROWSER_IDLE_MS || 20_000));
+export function getChatGPTBrowserIdleCloseDelay(env = process.env) {
+  const configured = String(env.CHATGPT_BROWSER_IDLE_MS || "").trim();
+  if (!configured) return null;
+  const delayMs = Number(configured);
+  return Number.isFinite(delayMs) && delayMs > 0 ? Math.max(5_000, delayMs) : null;
+}
+
+const BROWSER_IDLE_CLOSE_MS = getChatGPTBrowserIdleCloseDelay();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -51,7 +58,26 @@ const NAV_TIMEOUT_MS = Number(process.env.CHATGPT_NAV_TIMEOUT_MS || 35_000);
 const READY_DELAY_MS = Number(process.env.CHATGPT_READY_DELAY_MS || 1500);
 const COMPOSER_TIMEOUT_MS = Number(process.env.CHATGPT_COMPOSER_TIMEOUT_MS || 25_000);
 const GENERATION_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATION_TIMEOUT_MS || 300_000);
+const GENERATION_START_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATION_START_TIMEOUT_MS || 45_000);
 const CLOUDFLARE_WAIT_MS = Number(process.env.CHATGPT_CLOUDFLARE_WAIT_MS || 30_000);
+
+export async function countVisibleChatGPTControls(locator) {
+  const count = await locator.count().catch(() => 0);
+  let visibleCount = 0;
+  for (let index = 0; index < count; index += 1) {
+    if (await locator.nth(index).isVisible().catch(() => false)) visibleCount += 1;
+  }
+  return visibleCount;
+}
+
+export function getChatGPTGenerationWaitFailure({ elapsedMs, sawGeneration, pageError, startTimeoutMs = GENERATION_START_TIMEOUT_MS }) {
+  const errorText = String(pageError || "").trim();
+  if (errorText) return `ChatGPT сообщил об ошибке: ${errorText}`;
+  if (!sawGeneration && elapsedMs >= startTimeoutMs) {
+    return `ChatGPT не начал формировать ответ за ${Math.round(startTimeoutMs / 1000)} секунд.`;
+  }
+  return "";
+}
 
 function getChatGPTLaunchProfile() {
   return getChatGPTBrowserLaunchOptions();
@@ -61,6 +87,10 @@ function isTransientBrowserError(error) {
   if (isOversizedHeaderError(error)) return false;
   const message = String(error?.message || error || "");
   return /Execution context was destroyed|most likely because of a navigation|Target closed|Page closed|Context closed|Browser has been closed|net::ERR_ABORTED|net::ERR_NETWORK_CHANGED|Failed to fetch/i.test(message);
+}
+
+export function shouldRetryChatGPTBrowserSend(error, promptSubmitted) {
+  return !promptSubmitted && isTransientBrowserError(error);
 }
 
 // Cloudflare/анти-бот блокирует сам документ (>=400) — типично для headless.
@@ -107,6 +137,58 @@ export function normalizeChatGPTAssistantText(text) {
   return trimmed;
 }
 
+const CHATGPT_COMPOSER_SELECTORS = [
+  "#prompt-textarea",
+  'div[contenteditable="true"]',
+  "textarea#prompt-textarea",
+  "textarea",
+];
+
+function isStaleComposerError(error) {
+  return /detached|not attached|not enabled|not visible|Timeout.*exceeded|Element is not/i.test(
+    String(error?.message || error || ""),
+  );
+}
+
+// ChatGPT replaces its fallback textarea while the SPA hydrates or changes model.
+// Never keep that locator across UI transitions: acquire an enabled element for each attempt.
+export async function fillChatGPTComposer(page, prompt, { timeoutMs = COMPOSER_TIMEOUT_MS } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+
+  while (Date.now() < deadline) {
+    for (const selector of CHATGPT_COMPOSER_SELECTORS) {
+      const matches = page.locator(selector);
+      const count = await matches.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const composer = matches.nth(index);
+        const visible = await composer.isVisible().catch(() => false);
+        const enabled = visible && await composer.isEnabled().catch(() => false);
+        if (!enabled) continue;
+
+        try {
+          await composer.click({ timeout: 2_000 });
+          try {
+            await composer.fill(prompt, { timeout: 5_000 });
+          } catch (error) {
+            if (isStaleComposerError(error)) throw error;
+            await page.keyboard.insertText(prompt);
+          }
+          return composer;
+        } catch (error) {
+          lastError = error;
+          if (!isStaleComposerError(error)) throw error;
+        }
+      }
+    }
+    await page.waitForTimeout(100);
+  }
+
+  throw new Error(
+    `ChatGPT: поле ввода не стало активным. Обновите окно ChatGPT и повторите запрос.${lastError ? ` ${lastError.message || lastError}` : ""}`,
+  );
+}
+
 export async function closeChatGPTBrowserProxy() {
   if (idleCloseTimer) {
     clearTimeout(idleCloseTimer);
@@ -128,10 +210,14 @@ export async function closeChatGPTBrowserProxy() {
 
 export function scheduleChatGPTBrowserIdleClose(delayMs = BROWSER_IDLE_CLOSE_MS) {
   if (idleCloseTimer) clearTimeout(idleCloseTimer);
+  idleCloseTimer = null;
+  // Keep the dedicated ChatGPT browser alive by default. This lets ChatGPT
+  // rotate its session cookies instead of forcing a fresh login after idle.
+  if (delayMs == null) return;
   idleCloseTimer = setTimeout(() => {
     idleCloseTimer = null;
     closeChatGPTBrowserProxy().catch(() => {});
-  }, Math.max(1_000, Number(delayMs) || BROWSER_IDLE_CLOSE_MS));
+  }, Math.max(5_000, Number(delayMs) || 5_000));
   idleCloseTimer.unref?.();
 }
 
@@ -504,11 +590,14 @@ async function createProxy({ debug, adoptedSession = null }) {
   }
 
   async function findComposerLocator() {
-    const selectors = ["#prompt-textarea", 'div[contenteditable="true"]', "textarea#prompt-textarea", "textarea"];
-    for (const selector of selectors) {
-      const locator = page.locator(selector).first();
-      if (await locator.count().catch(() => 0)) {
-        if (await locator.isVisible().catch(() => false)) return locator;
+    for (const selector of CHATGPT_COMPOSER_SELECTORS) {
+      const matches = page.locator(selector);
+      const count = await matches.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const locator = matches.nth(index);
+        const visible = await locator.isVisible().catch(() => false);
+        const enabled = visible && await locator.isEnabled().catch(() => false);
+        if (enabled) return locator;
       }
     }
     return null;
@@ -577,32 +666,35 @@ async function createProxy({ debug, adoptedSession = null }) {
   }
 
   async function waitForGenerationToFinish(beforeAssistantCount, onText = null) {
-    // Ждём появления нового ответа ассистента или кнопки "стоп".
-    await Promise.race([
-      page
-        .waitForSelector('[data-testid="stop-button"]', { timeout: 25_000 })
-        .catch(() => {}),
-      page
-        .waitForFunction(
-          (n) => document.querySelectorAll('[data-message-author-role="assistant"]').length > n,
-          beforeAssistantCount,
-          { timeout: 25_000 },
-        )
-        .catch(() => {}),
-    ]);
-
     let lastText = "";
     let sawGeneration = false;
     let sawStopButton = false;
     let stablePolls = 0;
-    const deadline = Date.now() + GENERATION_TIMEOUT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + GENERATION_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
-      const stopCount = await page.locator('[data-testid="stop-button"]').count().catch(() => 0);
+      const stopCount = await countVisibleChatGPTControls(
+        page.locator('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Останов"]'),
+      );
       const assistantCount = await page
         .locator('[data-message-author-role="assistant"]')
         .count()
         .catch(() => 0);
+      const pageError = await page.evaluate(() => {
+        const selectors = [
+          '[data-testid="conversation-turn-error"]',
+          '[data-testid="response-error"]',
+          '[role="alert"]',
+        ];
+        for (const selector of selectors) {
+          for (const node of document.querySelectorAll(selector)) {
+            const text = (node.innerText || node.textContent || "").trim();
+            if (text && node.getClientRects().length) return text;
+          }
+        }
+        return "";
+      }).catch(() => "");
 
       if (stopCount > 0 || assistantCount > beforeAssistantCount) {
         sawGeneration = true;
@@ -617,16 +709,24 @@ async function createProxy({ debug, adoptedSession = null }) {
         }
       }
 
+      const failure = getChatGPTGenerationWaitFailure({
+        elapsedMs: Date.now() - startedAt,
+        sawGeneration,
+        pageError,
+      });
+      if (failure) throw new Error(failure);
+
       // Новый DOM сначала создаёт пустой assistant-контейнер, а кнопку Stop иногда
       // вообще не показывает. Завершаем только после стабильного непустого текста.
       const stableEnough = sawStopButton ? stablePolls >= 2 : stablePolls >= 6;
       if (sawGeneration && lastText && stopCount === 0 && stableEnough) {
-        break;
+        await page.waitForTimeout(400);
+        return;
       }
 
       await page.waitForTimeout(300);
     }
-    await page.waitForTimeout(400);
+    throw new Error(`ChatGPT не завершил ответ за ${Math.round(GENERATION_TIMEOUT_MS / 1000)} секунд.`);
   }
 
   async function extractAssistantAnswer(conversationId) {
@@ -916,7 +1016,7 @@ async function createProxy({ debug, adoptedSession = null }) {
     );
   }
 
-  async function sendChatOnce({ prompt, model, conversationId, onText, images = [] }) {
+  async function sendChatOnce({ prompt, model, conversationId, onText, images = [], attemptState = null }) {
     sendCount += 1;
     if (sendCount % 4 === 0) {
       await pruneBrowserCookiesIfNeeded();
@@ -935,7 +1035,7 @@ async function createProxy({ debug, adoptedSession = null }) {
       }
     }
 
-    const composer = await getComposer();
+    await getComposer();
     await selectChatGPTModel(model);
     const beforeAssistantCount = await page
       .locator('[data-message-author-role="assistant"]')
@@ -948,14 +1048,9 @@ async function createProxy({ debug, adoptedSession = null }) {
         await attachImages(tempImagePaths);
       }
 
-      await composer.click();
-      try {
-        await composer.fill(prompt);
-      } catch {
-        // contenteditable иногда не принимает fill — печатаем напрямую.
-        await composer.click();
-        await page.keyboard.insertText(prompt);
-      }
+      // Выбор модели и гидрация SPA могут заменить textarea. Ищем активное
+      // поле заново и автоматически повторяем ввод при detach/disabled.
+      await fillChatGPTComposer(page, prompt);
 
       const sendButton = page.locator('[data-testid="send-button"]').first();
       try {
@@ -971,6 +1066,7 @@ async function createProxy({ debug, adoptedSession = null }) {
       }
     }
 
+    if (attemptState) attemptState.promptSubmitted = true;
     await waitForGenerationToFinish(beforeAssistantCount, onText);
 
     const resolvedConversationId =
@@ -1023,11 +1119,12 @@ async function createProxy({ debug, adoptedSession = null }) {
   async function sendChat({ prompt, model = null, conversationId = null, onText = null, images = [] }) {
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      const attemptState = { promptSubmitted: false };
       try {
-        return await sendChatOnce({ prompt, model, conversationId, onText, images });
+        return await sendChatOnce({ prompt, model, conversationId, onText, images, attemptState });
       } catch (error) {
         lastError = error;
-        if (!isTransientBrowserError(error) || attempt === 1) throw error;
+        if (!shouldRetryChatGPTBrowserSend(error, attemptState.promptSubmitted) || attempt === 1) throw error;
         if (debug) console.log(`[chatgpt-proxy] transient error, reloading and retrying: ${error.message}`);
         try { await gotoHome(); } catch {}
       }
@@ -1077,9 +1174,9 @@ async function createProxy({ debug, adoptedSession = null }) {
 
     const poll = async () => {
       if (!context || page.isClosed()) return;
-      if (!isChatGPTAuthUsable(authState.data)) {
-        await tryPersist().catch(() => {});
-      }
+      // ChatGPT rotates cookies before the old session becomes unusable.
+      // Save every rotation so restarts resume the newest browser session.
+      await tryPersist().catch(() => {});
 
       let isChallenged = false;
       try {

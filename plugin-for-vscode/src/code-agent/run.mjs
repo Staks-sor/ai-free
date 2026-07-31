@@ -1,6 +1,7 @@
 // Главная петля /code-агента. Шлёт system prompt → tool loop → execution → memory.
 
 import { createCodeSystemPrompt } from "./prompt.mjs";
+import { createCompactTaskPrompt } from "./compact-prompt.mjs";
 import { loadSettings } from "../state/settings.mjs";
 import { createBrowserSystemPrompt } from "./browser-prompt.mjs";
 import { parseToolCall } from "./parser.mjs";
@@ -81,7 +82,9 @@ export async function runCodeTask(
   let pendingToolResult = resumeState?.pendingToolResult || null;
   let prompt = resumeState?.prompt ?? (nativeTools
     ? task
-    : browserOnly
+    : options.compactInitialPrompt === true
+      ? createCompactTaskPrompt(task)
+      : browserOnly
       ? createBrowserSystemPrompt(task, { browserContext })
       : createCodeSystemPrompt(workspaceRoot, task, options.systemPrompt, {
           searchEnabled: baseOptions?.searchEnabled === true,
@@ -154,6 +157,18 @@ export async function runCodeTask(
       const call = result.toolCall
         ? { tool: result.toolCall.name, ...result.toolCall.arguments }
         : parseToolCall(result.text);
+
+      // A clarification can arrive while the provider is generating its final
+      // answer. Do not accept a stale text response/finish call in that race:
+      // feed the clarification back into the same task first.
+      if (!call || call.tool === "finish") {
+        const lateClarifications = takeInterrupts(options);
+        if (lateClarifications.length) {
+          parent = nextParent;
+          prompt = buildClarificationPrompt(lateClarifications);
+          continue;
+        }
+      }
 
       if (!call) {
         if (
@@ -252,13 +267,9 @@ export async function runCodeTask(
         return finish({ parentMessageId: parent, message, toolLogs });
       }
 
-      const clarifications = typeof options.takeInterrupts === "function"
-        ? options.takeInterrupts()
-        : [];
-      const clarificationText = Array.isArray(clarifications) && clarifications.length
-        ? `\n\nImportant user clarification received while you were working:\n${clarifications
-          .map((item, index) => `${index + 1}. ${item}`)
-          .join("\n")}\nUpdate your plan and next action to follow this clarification.`
+      const clarifications = takeInterrupts(options);
+      const clarificationText = clarifications.length
+        ? `\n\n${buildClarificationPrompt(clarifications)}`
         : "";
 
       if (nativeTools && result.toolCall?.id) {
@@ -313,6 +324,20 @@ function completeRunResult(payload, {
       memoryPending: memoryEnabled !== false && memoryPending,
     },
   };
+}
+
+function takeInterrupts(options) {
+  if (typeof options.takeInterrupts !== "function") return [];
+  const items = options.takeInterrupts();
+  return Array.isArray(items) ? items.filter((item) => String(item || "").trim()) : [];
+}
+
+function buildClarificationPrompt(clarifications) {
+  return `Important user clarification received while you were working:
+${clarifications
+    .map((item, index) => `${index + 1}. ${item}`)
+    .join("\n")}
+Update your plan and next action to follow this clarification.`;
 }
 
 export function resolveMaxToolSteps(value) {

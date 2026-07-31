@@ -164,13 +164,30 @@ export async function launchCamoufoxSession({ viewport = { width: 580, height: 9
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   let closed = false;
+  let checkpointRunning = false;
+  const persistStorageState = async () => {
+    if (closed || checkpointRunning) return;
+    checkpointRunning = true;
+    try {
+      fs.mkdirSync(CAMOUFOX_RUNTIME_ROOT, { recursive: true });
+      await context.storageState({ path: CAMOUFOX_STORAGE_STATE });
+    } catch {
+      // The context can disappear during application shutdown.
+    } finally {
+      checkpointRunning = false;
+    }
+  };
+  const checkpointTimer = setInterval(() => {
+    persistStorageState().catch(() => {});
+  }, 30_000);
+  checkpointTimer.unref?.();
   const close = async () => {
     if (closed) return;
+    clearInterval(checkpointTimer);
+    await persistStorageState();
     closed = true;
-    fs.mkdirSync(CAMOUFOX_RUNTIME_ROOT, { recursive: true });
-    await context.storageState({ path: CAMOUFOX_STORAGE_STATE }).catch(() => {});
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
   };
-  return { browser, context, page, close, mode: "camoufox" };
+  return { browser, context, page, close, persistStorageState, mode: "camoufox" };
 }

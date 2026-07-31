@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.13
+
+- Reuses persistent DeepSeek, Qwen and ChatGPT code-agent context with compact JSON follow-up prompts.
+- Preserves late user clarifications before accepting a stale final answer or `finish` call.
+- Adds task-level trace IDs and lifecycle events to persistent diagnostics.
+- Keeps the embedded ChatGPT/Camoufox session alive and periodically checkpoints refreshed browser state.
+- Recovers from replaced, disabled or detached ChatGPT composer elements.
+- Detects visible generation errors and start timeouts without resubmitting a prompt that was already sent.
+- Excludes internal tests and local development artifacts from client release packages.
+- Synchronizes all behavior across desktop and VS Code and adds the current desktop screenshot to GitHub documentation.
+
 ## 0.4.11
 
 - Fixed OpenAI-compatible streams ending successfully without text or tool calls.

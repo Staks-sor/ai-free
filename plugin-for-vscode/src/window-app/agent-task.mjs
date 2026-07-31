@@ -8,6 +8,8 @@ export const AGENT_TASK_EMPTY_HELP =
   "• /skill bug-fix исправь падение при старте\n" +
   "• /skill code-review проверь src/code-agent/";
 
+const PERSISTENT_CODE_CONTEXT_PROVIDERS = new Set(["chatgpt", "qwen", "deepseek"]);
+
 export function resolveConversationAgentTask(prompt, conversation, {
   autoCodeMode = false,
   autoBrowserMode = false,
@@ -29,6 +31,8 @@ export function buildAgentTaskOptions(conversation, body, { hardwareMode, system
     browserOnly: agentInput?.browserOnly === true,
     memoryEnabled: conversation.memoryEnabled !== false && body.memoryEnabled !== false,
     autoSkill: !skillId && conversation.autoSkill !== false && body.autoSkill !== false,
+    compactInitialPrompt: PERSISTENT_CODE_CONTEXT_PROVIDERS.has(conversation.provider)
+      && Boolean(conversation.codeParentMessageId),
   };
 }
 

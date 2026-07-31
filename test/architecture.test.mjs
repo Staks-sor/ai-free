@@ -20,10 +20,13 @@ describe("architecture invariants", () => {
       "agent-orchestrator/context-assembler.mjs",
       "agent-orchestrator/index.mjs",
       "agent-orchestrator/project-instructions.mjs",
+      "code-agent/compact-prompt.mjs",
       "code-agent/native-tools.mjs",
       "code-agent/loop-helpers.mjs",
       "code-agent/prompt.mjs",
       "code-agent/run.mjs",
+      "logging/task-trace.mjs",
+      "window-app/agent-task.mjs",
       "window-app/ui-styles.mjs",
     ];
     for (const file of files) {
@@ -107,6 +110,6 @@ describe("architecture invariants", () => {
     assert.equal(ROOT_VERSION, rootPackage.version);
     assert.equal(PLUGIN_VERSION, pluginPackage.version);
     assert.equal(ROOT_VERSION, PLUGIN_VERSION);
-    assert.equal(ROOT_VERSION, "0.4.11");
+    assert.equal(ROOT_VERSION, "0.4.13");
   });
 });

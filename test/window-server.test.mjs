@@ -5,6 +5,8 @@ import { shouldAutoRunBrowserTask } from "../src/window-app/browser-snapshot.mjs
 import {
   appendEconomyOSVisionContext,
   buildLegacyEconomyResume,
+  captureRunningClarification,
+  takeRunningClarifications,
   isEconomyResumePrompt,
   shouldAutoRunCodeTask,
 } from "../src/window-app/server.mjs";
@@ -114,5 +116,22 @@ describe("EconomyOS checkpoint resume", () => {
     assert.match(resume.task, /Fix the provider/);
     assert.match(resume.task, /read_file src\/provider\.mjs/);
     assert.equal(resume.toolLogs.length, 2);
+  });
+});
+
+
+describe("running clarification capture", () => {
+  it("queues the clarification without adding a duplicate user message", () => {
+    const conversation = { messages: [{ role: "user", content: "уточнение" }] };
+    captureRunningClarification(conversation, "уточнение");
+    assert.equal(conversation.messages.length, 1);
+    assert.deepEqual(takeRunningClarifications(conversation), ["уточнение"]);
+  });
+
+  it("deduplicates an immediately repeated clarification", () => {
+    const conversation = { messages: [] };
+    captureRunningClarification(conversation, "уточнение");
+    captureRunningClarification(conversation, "уточнение");
+    assert.deepEqual(takeRunningClarifications(conversation), ["уточнение"]);
   });
 });

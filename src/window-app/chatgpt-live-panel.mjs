@@ -344,7 +344,7 @@ export function renderEmbedChatGPTLiveHtml() {
 <body>
   <header class="bar">
     <span id="status">Camoufox внутри AI Free — при первом запуске браузер загрузится автоматически</span>
-    <button type="button" class="btn" id="chromeLoginBtn">Войти через Chrome</button>
+    <button type="button" class="btn" id="chromeLoginBtn">Быстрый вход</button>
     <button type="button" class="btn" id="resetBtn">Сброс</button>
     <button type="button" class="btn" id="syncBtn">Синхронизировать</button>
     <button type="button" class="btn" id="reloadBtn">↻</button>
@@ -568,47 +568,14 @@ export function renderEmbedChatGPTLiveHtml() {
     async function startReliableLogin() {
       if (externalLoginRunning) return;
       externalLoginRunning = true;
-      browserStopped = true;
-      live.removeAttribute("src");
-      live.style.display = "none";
-      clickLayer.style.pointerEvents = "none";
-      statusEl.textContent = "Открываю обычный Chrome для надёжного входа…";
-      hintEl.textContent = "Завершите вход в открывшемся окне. Оно закроется только после проверки активной сессии.";
-      await fetch("/api/chatgpt/stop-live", { method: "POST" }).catch(() => {});
-
+      if (browserStopped) restartBrowserPanel();
+      statusEl.textContent = "Открываю сохранённую сессию ChatGPT внутри AI Free…";
+      hintEl.textContent = "Если вход уже сохранён, обычный чат откроется автоматически. Иначе завершите вход в панели ниже.";
       try {
-        const response = await fetch("/api/providers/chatgpt/login", { method: "POST" });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || result.ok === false) throw new Error(result.error || response.statusText);
-      } catch (error) {
+        await syncSession();
+      } finally {
         externalLoginRunning = false;
-        statusEl.textContent = "Не удалось открыть Chrome: " + error.message;
-        return;
       }
-
-      const poll = async () => {
-        if (!externalLoginRunning) return;
-        try {
-          const response = await fetch("/api/providers");
-          const data = await response.json().catch(() => ({}));
-          const provider = (data.providers || []).find((item) => item.id === "chatgpt");
-          if (provider?.loginState === "error") {
-            externalLoginRunning = false;
-            statusEl.textContent = "Вход не завершён: " + (provider.loginError || "неизвестная ошибка");
-            hintEl.textContent = "Нажмите «Войти через Chrome» и повторите вход.";
-            return;
-          }
-          if (provider?.loginState === "completed") {
-            externalLoginRunning = false;
-            restartBrowserPanel();
-            statusEl.textContent = "Сессия проверена — запускаю ChatGPT внутри AI Free…";
-            hintEl.textContent = "Обычный Chrome закрыт. Дальше ChatGPT работает через скрытый браузер.";
-            return;
-          }
-        } catch {}
-        setTimeout(poll, 2000);
-      };
-      setTimeout(poll, 1500);
     }
 
     async function resetLiveSession() {
