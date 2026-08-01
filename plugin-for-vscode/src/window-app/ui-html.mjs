@@ -2451,10 +2451,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     }
 
     function renderPermissionRequest(conversation) {
-      const request = conversation.pendingPermissionRequest;
-      if (!request || request.status !== "pending") return;
       const existing = document.getElementById("permissionRequestOverlay");
       if (existing) existing.remove();
+      const request = conversation.pendingPermissionRequest;
+      if (!request || request.status !== "pending") return;
 
       const overlay = document.createElement("div");
       overlay.id = "permissionRequestOverlay";
@@ -2475,7 +2475,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       close.className = "iconBtn";
       close.setAttribute("aria-label", t("app.close"));
       close.textContent = "✕";
-      close.addEventListener("click", () => answerPermissionRequest("reject", overlay));
+      close.addEventListener("click", () => answerPermissionRequest("reject", overlay, conversation.id));
       head.append(title, close);
 
       const body = document.createElement("div");
@@ -2492,12 +2492,12 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       approve.type = "button";
       approve.className = "iconBtn primaryBtn";
       approve.textContent = t("permission.approve");
-      approve.addEventListener("click", () => answerPermissionRequest("approve", overlay));
+      approve.addEventListener("click", () => answerPermissionRequest("approve", overlay, conversation.id));
       const reject = document.createElement("button");
       reject.type = "button";
       reject.className = "iconBtn";
       reject.textContent = t("permission.reject");
-      reject.addEventListener("click", () => answerPermissionRequest("reject", overlay));
+      reject.addEventListener("click", () => answerPermissionRequest("reject", overlay, conversation.id));
       actions.append(approve, reject);
       body.append(text, hint, actions);
       panel.append(head, body);
@@ -2505,12 +2505,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       document.body.appendChild(overlay);
     }
 
-    async function answerPermissionRequest(action, overlay) {
-      if (!activeConversation) return;
-      const data = await api("/api/conversations/" + activeConversation.id + "/permission-request/" + action, { method: "POST" });
-      activeConversation = data.conversation;
+    async function answerPermissionRequest(action, overlay, conversationId) {
+      if (!conversationId) return;
+      const data = await api("/api/conversations/" + conversationId + "/permission-request/" + action, { method: "POST" });
       if (overlay) overlay.remove();
-      renderConversation(activeConversation);
+      if (activeConversation?.id === conversationId) {
+        activeConversation = data.conversation;
+        renderConversation(activeConversation);
+      }
       renderList();
       if (action === "approve") setStatus(t("permission.enabled"));
     }

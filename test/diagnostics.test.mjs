@@ -3,9 +3,13 @@ import { strict as assert } from "node:assert";
 import os from "node:os";
 import path from "node:path";
 
-import { formatDiagnosticReport } from "../src/window-app/diagnostics.mjs";
+import { DIAGNOSTIC_COMMANDS, formatDiagnosticReport } from "../src/window-app/diagnostics.mjs";
 
 describe("diagnostics report", () => {
+  it("checks the .NET runtime used by allowed agent commands", () => {
+    assert.ok(DIAGNOSTIC_COMMANDS.includes("dotnet"));
+  });
+
   it("formats a redacted support report", () => {
     const homePath = path.join(os.homedir(), "project");
     const report = formatDiagnosticReport({

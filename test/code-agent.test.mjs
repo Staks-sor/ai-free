@@ -69,8 +69,10 @@ describe("localized command descriptions", () => {
     for (const language of languages) {
       assert.ok(getCommandDescription("node", language), language);
       assert.ok(getCommandDescription("npm", language), language);
+      assert.ok(getCommandDescription("dotnet", language), language);
       assert.ok(getCommandDescription("rm", language), language);
     }
+    assert.equal(getCommandDescription("dotnet", "en"), ".NET restore, build, test, run, and NuGet package auditing");
     assert.equal(getCommandDescription("node", "es"), "Ejecutar archivos JavaScript con Node");
     assert.equal(getCommandDescription("node", "pt"), "Executar arquivos JavaScript com Node");
     assert.equal(getCommandDescription("node", "fr"), "Exécuter des fichiers JavaScript avec Node");

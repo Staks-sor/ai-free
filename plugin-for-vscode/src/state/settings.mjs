@@ -156,6 +156,20 @@ export const COMMAND_CATALOG = {
   javac:   { description: "Компиляция Java",                                   risk: "medium", enabledByDefault: true },
   mvn:     { description: "Maven",                                             risk: "medium", enabledByDefault: true },
   gradle:  { description: "Gradle",                                              risk: "medium", enabledByDefault: true },
+  dotnet: {
+    description: ".NET: restore, build, test, run и проверка NuGet-пакетов",
+    risk: "medium", enabledByDefault: true,
+    validateArgs: (args) => {
+      const first = String(args[0] || "").toLowerCase();
+      const second = String(args[1] || "").toLowerCase();
+      if (first === "nuget" && ["push", "delete"].includes(second)) {
+        throw new Error(`dotnet nuget ${second} заблокирован: публикация и удаление внешних пакетов требуют отдельного разрешения.`);
+      }
+      if (["tool", "workload"].includes(first) && ["install", "update", "uninstall"].includes(second)) {
+        throw new Error(`dotnet ${first} ${second} заблокирован: изменение глобальных инструментов и workloads запрещено.`);
+      }
+    },
+  },
 
   curl:    { description: "HTTP-запросы",                                      risk: "medium", enabledByDefault: true },
   wget:    { description: "Скачивание по URL",                                 risk: "medium", enabledByDefault: true },

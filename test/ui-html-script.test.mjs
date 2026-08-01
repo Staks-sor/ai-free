@@ -167,4 +167,23 @@ describe("ui-html inline script", () => {
     assert.match(html, /conversationSummaryChanged\(previousActiveSummary, nextActiveSummary\)/);
     assert.match(html, /message\.source === "telegram" \? t\("chat\.you"\) \+ " · Telegram"/);
   });
+
+  it("removes a stale permission overlay when the active chat has no pending request", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(
+      html,
+      /function renderPermissionRequest\(conversation\) \{\s*const existing = document\.getElementById\("permissionRequestOverlay"\);\s*if \(existing\) existing\.remove\(\);\s*const request = conversation\.pendingPermissionRequest;/,
+    );
+  });
+
+  it("answers a permission request in the chat that owns it", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /answerPermissionRequest\("approve", overlay, conversation\.id\)/);
+    assert.match(html, /async function answerPermissionRequest\(action, overlay, conversationId\)/);
+    assert.match(html, /"\/permission-request\/" \+ action/);
+    assert.doesNotMatch(
+      html,
+      /api\("\/api\/conversations\/" \+ activeConversation\.id \+ "\/permission-request\/"/,
+    );
+  });
 });

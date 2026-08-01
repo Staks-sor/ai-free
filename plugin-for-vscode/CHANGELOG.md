@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.14
+
+- Replaces fragile ChatGPT timing loops with generation-aware DOM observation for long tasks.
+- Preserves ChatGPT progress across temporary observer failures and waits up to 30 minutes when generation is still active.
+- Fixes Windows npm discovery for GUI launches, MSI installs and common Node.js version managers.
+- Adds safe `.NET` diagnostics commands and localized `dotnet` permission descriptions.
+- Removes stale permission overlays that could block sending and chat switching after a long task.
+- Prevents an old stopped background task from clearing the state of its replacement.
+- Keeps all fixes synchronized across desktop and VS Code.
+
 ## 0.4.13
 
 - Reuses persistent DeepSeek, Qwen and ChatGPT code-agent context with compact JSON follow-up prompts.

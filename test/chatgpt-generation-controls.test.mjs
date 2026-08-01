@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { countVisibleChatGPTControls } from "../src/providers/chatgpt/browser-proxy.mjs";
+import {
+  CHATGPT_GENERATION_STOP_SELECTOR,
+  countVisibleChatGPTControls,
+} from "../src/providers/chatgpt/browser-proxy.mjs";
 
 describe("ChatGPT generation controls", () => {
+  it("does not confuse response action buttons with active generation", () => {
+    assert.doesNotMatch(CHATGPT_GENERATION_STOP_SELECTOR, /aria-label\*=/);
+    assert.doesNotMatch(CHATGPT_GENERATION_STOP_SELECTOR, /Stop|Останов/);
+    assert.match(CHATGPT_GENERATION_STOP_SELECTOR, /data-testid=["']stop-button["']/);
+  });
   it("ignores detached or hidden stop buttons left by the ChatGPT SPA", async () => {
     const states = [false, true, false];
     const locator = {

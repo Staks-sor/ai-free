@@ -162,6 +162,15 @@ describe("COMMAND_CATALOG integrity", () => {
     assert.ok(typeof COMMAND_CATALOG.find.validateArgs === "function");
     assert.ok(typeof COMMAND_CATALOG.chmod.validateArgs === "function");
   });
+
+  it("exposes safe .NET project diagnostics in permissions by default", () => {
+    const dotnet = COMMAND_CATALOG.dotnet;
+    assert.ok(dotnet, "dotnet should be visible in Settings → Permissions");
+    assert.equal(dotnet.enabledByDefault, true);
+    assert.doesNotThrow(() => dotnet.validateArgs(["list", "package", "--vulnerable"]));
+    assert.throws(() => dotnet.validateArgs(["nuget", "push", "package.nupkg"]));
+    assert.throws(() => dotnet.validateArgs(["tool", "install", "example"]));
+  });
 });
 
 describe("loadSettings fallback", () => {
@@ -180,6 +189,7 @@ describe("loadSettings fallback", () => {
     assert.equal(result.commandPermissions.allowPythonModuleAndEval, true);
     assert.ok(result.allowedCommands.includes("docker"));
     assert.ok(result.allowedCommands.includes("ssh"));
+    assert.ok(result.allowedCommands.includes("dotnet"));
   });
 });
 

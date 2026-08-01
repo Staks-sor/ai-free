@@ -12,12 +12,12 @@ import { probeRuntimeCommand } from "../updater.mjs";
 import { resolveLogDirectory } from "../logging/logger.mjs";
 
 const execFileAsync = promisify(execFile);
-const COMMANDS = ["node", "npm", "git", "python3", "python", "pio", "arduino-cli", "esptool.py"];
+export const DIAGNOSTIC_COMMANDS = ["node", "npm", "git", "python3", "python", "dotnet", "pio", "arduino-cli", "esptool.py"];
 
 export async function collectDiagnostics({ workspaceRoot, state, runningTaskIds = [] } = {}) {
   const settings = loadSettings();
   const [commands, git] = await Promise.all([
-    Promise.all(COMMANDS.map(checkCommand)),
+    Promise.all(DIAGNOSTIC_COMMANDS.map(checkCommand)),
     collectGitInfo(workspaceRoot),
   ]);
   const providers = listProviders().map((provider) => {

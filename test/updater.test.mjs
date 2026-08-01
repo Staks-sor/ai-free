@@ -2,7 +2,11 @@ import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
 import path from "node:path";
 
-import { compareVersions, windowsNodeInstallRoots } from "../src/updater.mjs";
+import {
+  compareVersions,
+  windowsNodeInstallRoots,
+  windowsNpmCommandCandidates,
+} from "../src/updater.mjs";
 
 describe("compareVersions", () => {
   it("orders semantic versions", () => {
@@ -30,5 +34,28 @@ describe("windows Node.js discovery", () => {
     });
     assert.ok(roots.includes(path.join(path.sep, "Portable")));
     assert.ok(roots.includes(path.join("C:\\Program Files", "nodejs")));
+  });
+
+  it("finds npm from npm start, standard installs and common Windows version managers", () => {
+    const env = {
+      APPDATA: "C:\\Users\\User\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\User\\AppData\\Local",
+      USERPROFILE: "C:\\Users\\User",
+      ProgramFiles: "C:\\Program Files",
+      NVM_SYMLINK: "C:\\Program Files\\nodejs",
+      npm_node_execpath: "D:\\Node\\node.exe",
+      npm_execpath: "D:\\Node\\node_modules\\npm\\bin\\npm-cli.js",
+    };
+    const candidates = windowsNpmCommandCandidates({ env, execPath: env.npm_node_execpath });
+    const commands = candidates.map((candidate) => typeof candidate === "string" ? candidate : candidate.command);
+    const direct = candidates.find((candidate) => typeof candidate === "object"
+      && candidate.command === env.npm_node_execpath
+      && candidate.prefixArgs?.[0] === env.npm_execpath);
+
+    assert.ok(direct, "npm start should preserve a direct node + npm-cli fallback");
+    assert.ok(commands.includes(path.join(env.ProgramFiles, "nodejs", "npm.cmd")));
+    assert.ok(commands.includes(path.join(env.NVM_SYMLINK, "npm.cmd")));
+    assert.ok(commands.includes(path.join(env.LOCALAPPDATA, "Volta", "bin", "npm.cmd")));
+    assert.ok(commands.includes(path.join(env.USERPROFILE, "scoop", "apps", "nodejs", "current", "npm.cmd")));
   });
 });

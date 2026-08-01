@@ -57,6 +57,30 @@ describe("background task runner tracing", () => {
       fs.rmSync(logDir, { recursive: true, force: true });
     }
   });
+
+  it("does not let an old stopped task clear a replacement task for the same chat", async () => {
+    const { startTask, isRunning, stopTask } = await import(`../src/window-app/task-runner.mjs?identity-test=${Date.now()}`);
+    const conversationId = `replacement-${Date.now()}`;
+    let finishOldTask;
+    let finishReplacementTask;
+
+    startTask(conversationId, "code", () => new Promise((resolve) => {
+      finishOldTask = resolve;
+    }));
+    await waitUntil(() => typeof finishOldTask === "function");
+    assert.equal(stopTask(conversationId), true);
+
+    startTask(conversationId, "code", () => new Promise((resolve) => {
+      finishReplacementTask = resolve;
+    }));
+    await waitUntil(() => typeof finishReplacementTask === "function");
+    finishOldTask();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(isRunning(conversationId), true);
+    finishReplacementTask();
+    await waitUntil(() => !isRunning(conversationId));
+  });
 });
 
 async function waitUntil(predicate, timeoutMs = 1_000) {

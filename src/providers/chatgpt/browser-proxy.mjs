@@ -57,9 +57,133 @@ const DEFAULT_UA =
 const NAV_TIMEOUT_MS = Number(process.env.CHATGPT_NAV_TIMEOUT_MS || 35_000);
 const READY_DELAY_MS = Number(process.env.CHATGPT_READY_DELAY_MS || 1500);
 const COMPOSER_TIMEOUT_MS = Number(process.env.CHATGPT_COMPOSER_TIMEOUT_MS || 25_000);
-const GENERATION_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATION_TIMEOUT_MS || 300_000);
+const GENERATION_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATION_TIMEOUT_MS || 30 * 60_000);
 const GENERATION_START_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATION_START_TIMEOUT_MS || 45_000);
+const GENERATION_INACTIVITY_TIMEOUT_MS = Number(process.env.CHATGPT_GENERATION_INACTIVITY_TIMEOUT_MS || 90_000);
+const GENERATION_EVENT_WATCHDOG_MS = 1_000;
+const GENERATION_STOP_QUIET_MS = 750;
+const GENERATION_STABLE_QUIET_MS = 8_000;
 const CLOUDFLARE_WAIT_MS = Number(process.env.CHATGPT_CLOUDFLARE_WAIT_MS || 30_000);
+
+// Only this test id identifies active text generation. Broad aria-label matches also
+// catch persistent response actions such as “Stop reading aloud”, which made a
+// completed answer look active until every 300-second wait expired.
+export const CHATGPT_GENERATION_STOP_SELECTOR = '[data-testid="stop-button"]';
+
+export function hasChatGPTResponseChanged(before = {}, current = {}) {
+  if (Number(current.count || 0) > Number(before.count || 0)) return true;
+  if (Number(current.count || 0) < 1) return false;
+  const beforeId = String(before.id || "");
+  const currentId = String(current.id || "");
+  if (currentId && currentId !== beforeId) return true;
+  return String(current.text || "").trim() !== String(before.text || "").trim();
+}
+
+const CHATGPT_OBSERVATION_FIELDS = [
+  "count",
+  "id",
+  "text",
+  "generating",
+  "readyForNextPrompt",
+  "error",
+];
+
+export function advanceChatGPTFallbackObservation(previous, current = {}, now = Date.now()) {
+  const state = Object.fromEntries(CHATGPT_OBSERVATION_FIELDS.map((key) => [key, current[key] ?? ""]));
+  if (!previous) return { ...state, version: 1, changedAt: now };
+  const changed = CHATGPT_OBSERVATION_FIELDS.some((key) => previous[key] !== state[key]);
+  if (!changed) return previous;
+  return {
+    ...state,
+    version: Number(previous.version || 0) + 1,
+    changedAt: now,
+  };
+}
+
+export function selectPreferredChatGPTAssistantText(savedText, domText) {
+  const saved = normalizeChatGPTAssistantText(savedText);
+  const dom = normalizeChatGPTAssistantText(domText);
+  return dom.length > saved.length ? dom : saved;
+}
+
+export function getChatGPTObservationDecision({
+  responseChanged,
+  text,
+  generating,
+  sawGenerating,
+  readyForNextPrompt,
+  quietForMs,
+  quietThresholdMs,
+}) {
+  if (generating) return { done: false, reason: "generating" };
+  if (!sawGenerating && !readyForNextPrompt) return { done: false, reason: "waiting" };
+  if (!responseChanged || !String(text || "").trim() || quietForMs < quietThresholdMs) {
+    return { done: false, reason: "waiting" };
+  }
+  return { done: true, reason: sawGenerating ? "generation-stopped" : "answer-stable" };
+}
+
+// The observer lives inside ChatGPT's page. It reads the DOM only when the SPA
+// changes it and emits a coalesced state event; Node no longer scans the entire
+// conversation every 300 ms.
+export async function installChatGPTDomObserver(page) {
+  return page.evaluate(({ stopSelector }) => {
+    const key = "__aiFreeChatGPTObserver";
+    window[key]?.observer?.disconnect?.();
+    const visible = (node) => Boolean(node && node.getClientRects().length);
+    const read = () => {
+      const nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
+      const last = nodes[nodes.length - 1];
+      const markdown = last?.querySelector(".markdown") || last;
+      const composer = document.querySelector('#prompt-textarea[contenteditable="true"]');
+      let error = "";
+      for (const selector of [
+        '[data-testid="conversation-turn-error"]',
+        '[data-testid="response-error"]',
+        '[role="alert"]',
+      ]) {
+        const match = [...document.querySelectorAll(selector)].find(visible);
+        const value = (match?.innerText || match?.textContent || "").trim();
+        if (value) { error = value; break; }
+      }
+      return {
+        count: nodes.length,
+        id: last?.getAttribute("data-message-id") || "",
+        text: (markdown?.innerText || "").trim(),
+        generating: [...document.querySelectorAll(stopSelector)].some(visible)
+          || Boolean(last?.matches?.('[aria-busy="true"], [data-is-streaming="true"]')),
+        readyForNextPrompt: visible(composer) && composer?.getAttribute("aria-disabled") !== "true",
+        error,
+      };
+    };
+    const initial = read();
+    const store = { observer: null, version: 1, changedAt: Date.now(), state: initial, scheduled: false };
+    const publish = () => {
+      store.scheduled = false;
+      const next = read();
+      const changed = JSON.stringify(next) !== JSON.stringify(store.state);
+      if (!changed) return;
+      store.state = next;
+      store.version += 1;
+      store.changedAt = Date.now();
+      window.dispatchEvent(new CustomEvent("ai-free-chatgpt-state", { detail: store.version }));
+    };
+    store.observer = new MutationObserver(() => {
+      if (store.scheduled) return;
+      store.scheduled = true;
+      queueMicrotask(publish);
+    });
+    store.observer.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["data-message-id", "data-testid", "aria-busy", "hidden", "style", "class"],
+    });
+    window[key] = store;
+    return true;
+  }, { stopSelector: CHATGPT_GENERATION_STOP_SELECTOR });
+}
 
 export async function countVisibleChatGPTControls(locator) {
   const count = await locator.count().catch(() => 0);
@@ -652,81 +776,131 @@ async function createProxy({ debug, adoptedSession = null }) {
     );
   }
 
-  async function readStreamingAssistantText() {
-    const dom = await page
-      .evaluate(() => {
-        const nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
-        const last = nodes[nodes.length - 1];
-        if (!last) return "";
-        const md = last.querySelector(".markdown") || last;
-        return (md.innerText || "").trim();
-      })
-      .catch(() => "");
-    return normalizeChatGPTAssistantText(dom);
+  async function readAssistantObservation() {
+    return page.evaluate(() => {
+      const observed = window.__aiFreeChatGPTObserver;
+      if (!observed) return null;
+      return {
+        ...observed.state,
+        version: observed.version,
+        changedAt: observed.changedAt,
+      };
+    }).catch(() => null);
   }
 
-  async function waitForGenerationToFinish(beforeAssistantCount, onText = null) {
+  let fallbackAssistantObservation = null;
+
+  async function waitForAssistantObservation(version, timeoutMs = GENERATION_EVENT_WATCHDOG_MS) {
+    return page.evaluate(({ afterVersion, timeout }) => new Promise((resolve) => {
+      const key = "__aiFreeChatGPTObserver";
+      const current = window[key];
+      if (!current || current.version > afterVersion) {
+        resolve(current ? { ...current.state, version: current.version, changedAt: current.changedAt } : null);
+        return;
+      }
+      let timer;
+      const done = () => {
+        clearTimeout(timer);
+        window.removeEventListener("ai-free-chatgpt-state", onChange);
+        const latest = window[key];
+        resolve(latest ? { ...latest.state, version: latest.version, changedAt: latest.changedAt } : null);
+      };
+      const onChange = () => done();
+      window.addEventListener("ai-free-chatgpt-state", onChange, { once: true });
+      timer = setTimeout(done, timeout);
+    }), { afterVersion: version, timeout: timeoutMs }).catch(() => null);
+  }
+
+  async function readAssistantSnapshot() {
+    const observed = await readAssistantObservation();
+    if (observed) {
+      fallbackAssistantObservation = observed;
+      return observed;
+    }
+    const current = await page.evaluate(({ stopSelector }) => {
+      const nodes = document.querySelectorAll('[data-message-author-role="assistant"]');
+      const last = nodes[nodes.length - 1];
+      const md = last?.querySelector(".markdown") || last;
+      const visible = (node) => Boolean(node && node.getClientRects().length);
+      const composer = document.querySelector('#prompt-textarea[contenteditable="true"]');
+      return {
+        count: nodes.length,
+        id: last?.getAttribute("data-message-id") || "",
+        text: (md?.innerText || "").trim(),
+        generating: [...document.querySelectorAll(stopSelector)].some(visible)
+          || Boolean(last?.matches?.('[aria-busy="true"], [data-is-streaming="true"]')),
+        readyForNextPrompt: visible(composer) && composer?.getAttribute("aria-disabled") !== "true",
+        error: "",
+      };
+    }, { stopSelector: CHATGPT_GENERATION_STOP_SELECTOR }).catch(() => null);
+    if (!current) return fallbackAssistantObservation;
+    fallbackAssistantObservation = advanceChatGPTFallbackObservation(
+      fallbackAssistantObservation,
+      current,
+    );
+    return fallbackAssistantObservation;
+  }
+
+  async function waitForGenerationToFinish(beforeAssistant, onText = null) {
     let lastText = "";
-    let sawGeneration = false;
-    let sawStopButton = false;
-    let stablePolls = 0;
+    let sawResponse = false;
+    let sawGenerating = false;
+    let version = Number(beforeAssistant.version || 0);
+    let lastActivityAt = Date.now();
     const startedAt = Date.now();
     const deadline = startedAt + GENERATION_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
-      const stopCount = await countVisibleChatGPTControls(
-        page.locator('[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Останов"]'),
-      );
-      const assistantCount = await page
-        .locator('[data-message-author-role="assistant"]')
-        .count()
-        .catch(() => 0);
-      const pageError = await page.evaluate(() => {
-        const selectors = [
-          '[data-testid="conversation-turn-error"]',
-          '[data-testid="response-error"]',
-          '[role="alert"]',
-        ];
-        for (const selector of selectors) {
-          for (const node of document.querySelectorAll(selector)) {
-            const text = (node.innerText || node.textContent || "").trim();
-            if (text && node.getClientRects().length) return text;
-          }
-        }
-        return "";
-      }).catch(() => "");
+      let assistant = await waitForAssistantObservation(version);
+      if (!assistant) {
+        // A full document navigation destroys the in-page observer. Restore it
+        // and continue without losing the task-level deadline.
+        await installChatGPTDomObserver(page).catch(() => {});
+        assistant = await readAssistantSnapshot();
+      }
+      if (assistant) fallbackAssistantObservation = assistant;
+      const nextVersion = Number(assistant?.version || 0);
+      if (nextVersion !== version) lastActivityAt = Date.now();
+      version = nextVersion;
 
-      if (stopCount > 0 || assistantCount > beforeAssistantCount) {
-        sawGeneration = true;
-        if (stopCount > 0) sawStopButton = true;
-        const text = await readStreamingAssistantText();
-        if (text && text !== lastText) {
-          onText?.(text);
-          lastText = text;
-          stablePolls = 0;
-        } else if (text && stopCount === 0) {
-          stablePolls += 1;
-        }
+      const responseChanged = hasChatGPTResponseChanged(beforeAssistant, assistant);
+      if (responseChanged) sawResponse = true;
+      if (assistant?.generating) sawGenerating = true;
+
+      const text = responseChanged ? normalizeChatGPTAssistantText(assistant?.text) : "";
+      if (text && text !== lastText) {
+        onText?.(text);
+        lastText = text;
+        lastActivityAt = Date.now();
       }
 
       const failure = getChatGPTGenerationWaitFailure({
         elapsedMs: Date.now() - startedAt,
-        sawGeneration,
-        pageError,
+        sawGeneration: sawResponse || sawGenerating,
+        pageError: assistant?.error,
       });
       if (failure) throw new Error(failure);
 
-      // Новый DOM сначала создаёт пустой assistant-контейнер, а кнопку Stop иногда
-      // вообще не показывает. Завершаем только после стабильного непустого текста.
-      const stableEnough = sawStopButton ? stablePolls >= 2 : stablePolls >= 6;
-      if (sawGeneration && lastText && stopCount === 0 && stableEnough) {
-        await page.waitForTimeout(400);
-        return;
-      }
+      const quietForMs = Date.now() - Number(assistant?.changedAt || lastActivityAt);
+      const quietThresholdMs = sawGenerating && !assistant?.generating
+        ? GENERATION_STOP_QUIET_MS
+        : GENERATION_STABLE_QUIET_MS;
+      const decision = getChatGPTObservationDecision({
+        responseChanged,
+        text: lastText,
+        generating: Boolean(assistant?.generating),
+        sawGenerating,
+        readyForNextPrompt: Boolean(assistant?.readyForNextPrompt),
+        quietForMs,
+        quietThresholdMs,
+      });
+      if (decision.done) return;
 
-      await page.waitForTimeout(300);
+      if ((sawResponse || sawGenerating) && !assistant?.generating && Date.now() - lastActivityAt >= GENERATION_INACTIVITY_TIMEOUT_MS) {
+        throw new Error(`ChatGPT не обновлял ответ ${Math.round(GENERATION_INACTIVITY_TIMEOUT_MS / 1000)} секунд.`);
+      }
     }
-    throw new Error(`ChatGPT не завершил ответ за ${Math.round(GENERATION_TIMEOUT_MS / 1000)} секунд.`);
+    throw new Error(`ChatGPT не завершил ответ за ${Math.round(GENERATION_TIMEOUT_MS / 60_000)} минут.`);
   }
 
   async function extractAssistantAnswer(conversationId) {
@@ -1037,10 +1211,8 @@ async function createProxy({ debug, adoptedSession = null }) {
 
     await getComposer();
     await selectChatGPTModel(model);
-    const beforeAssistantCount = await page
-      .locator('[data-message-author-role="assistant"]')
-      .count()
-      .catch(() => 0);
+    await installChatGPTDomObserver(page);
+    const beforeAssistant = await readAssistantSnapshot();
 
     const tempImagePaths = images?.length ? writeTempImages(images) : [];
     try {
@@ -1067,15 +1239,13 @@ async function createProxy({ debug, adoptedSession = null }) {
     }
 
     if (attemptState) attemptState.promptSubmitted = true;
-    await waitForGenerationToFinish(beforeAssistantCount, onText);
+    await waitForGenerationToFinish(beforeAssistant, onText);
 
     const resolvedConversationId =
       /\/c\/([0-9a-fA-F-]+)/.exec(page.url())?.[1] || conversationId || null;
     const answer = await extractAssistantAnswer(resolvedConversationId);
-    const domText = await readStreamingAssistantText();
-    if (domText.length > (answer.text || "").length) {
-      answer.text = domText;
-    }
+    const domSnapshot = await readAssistantSnapshot();
+    answer.text = selectPreferredChatGPTAssistantText(answer.text, domSnapshot?.text);
     // ChatGPT мог сгенерировать картинку (DALL·E) — переносим её к нам.
     const generatedImages = await extractAssistantImages();
 

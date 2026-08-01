@@ -64,14 +64,15 @@ export function startTask(conversationId, kind, taskFn, label = "", traceContext
     ...traceContext,
   });
   trace.record("task_created", { kind, label });
-  runningTasks.set(conversationId, {
+  const task = {
     startedAt,
     kind,
     label,
     staleAfterMs: resolveStaleTaskMs(),
     controller,
     trace,
-  });
+  };
+  runningTasks.set(conversationId, task);
   taskLogger.info("background_task.start", { conversationId, kind, label });
   trace.record("task_started", { kind, label });
 
@@ -100,7 +101,9 @@ export function startTask(conversationId, kind, taskFn, label = "", traceContext
       console.error(`[task-runner] task ${kind} for ${conversationId} crashed:`, err);
     })
     .finally(() => {
-      runningTasks.delete(conversationId);
+      if (runningTasks.get(conversationId) === task) {
+        runningTasks.delete(conversationId);
+      }
     });
 }
 

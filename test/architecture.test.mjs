@@ -110,6 +110,6 @@ describe("architecture invariants", () => {
     assert.equal(ROOT_VERSION, rootPackage.version);
     assert.equal(PLUGIN_VERSION, pluginPackage.version);
     assert.equal(ROOT_VERSION, PLUGIN_VERSION);
-    assert.equal(ROOT_VERSION, "0.4.13");
+    assert.equal(ROOT_VERSION, "0.4.14");
   });
 });

@@ -51,10 +51,33 @@ function unique(values) {
 export function windowsNodeInstallRoots({ env = process.env, execPath = process.execPath } = {}) {
   return unique([
     execPath && path.dirname(execPath),
+    env.npm_node_execpath && path.dirname(env.npm_node_execpath),
+    env.NVM_SYMLINK,
     env.ProgramW6432 && path.join(env.ProgramW6432, "nodejs"),
     env.ProgramFiles && path.join(env.ProgramFiles, "nodejs"),
     env["ProgramFiles(x86)"] && path.join(env["ProgramFiles(x86)"], "nodejs"),
     env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs", "nodejs"),
+  ]);
+}
+
+export function windowsNpmCommandCandidates({ env = process.env, execPath = process.execPath } = {}) {
+  const roots = windowsNodeInstallRoots({ env, execPath });
+  return unique([
+    env.npm_node_execpath && env.npm_execpath
+      ? { command: env.npm_node_execpath, prefixArgs: [env.npm_execpath], shell: false }
+      : null,
+    "npm",
+    "npm.cmd",
+    env.APPDATA && path.join(env.APPDATA, "npm", "npm.cmd"),
+    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Volta", "bin", "npm.cmd"),
+    env.USERPROFILE && path.join(env.USERPROFILE, ".volta", "bin", "npm.cmd"),
+    env.USERPROFILE && path.join(env.USERPROFILE, "scoop", "apps", "nodejs", "current", "npm.cmd"),
+    ...roots.map((root) => path.join(root, "npm.cmd")),
+    ...roots.map((root) => ({
+      command: path.join(root, "node.exe"),
+      prefixArgs: [path.join(root, "node_modules", "npm", "bin", "npm-cli.js")],
+      shell: false,
+    })),
   ]);
 }
 
@@ -75,20 +98,7 @@ function commandCandidatePaths(command) {
     ]);
   }
   if (command === "npm") {
-    const roots = windowsNodeInstallRoots();
-    return unique([
-      "npm",
-      "npm.cmd",
-      env.APPDATA && path.join(env.APPDATA, "npm", "npm.cmd"),
-      ...roots.map((root) => path.join(root, "npm.cmd")),
-      ...roots.map((root) => {
-        const node = path.join(root, "node.exe");
-        const cli = path.join(root, "node_modules", "npm", "bin", "npm-cli.js");
-        return fs.existsSync(node) && fs.existsSync(cli)
-          ? { command: node, prefixArgs: [cli], shell: false }
-          : null;
-      }),
-    ]);
+    return windowsNpmCommandCandidates({ env, execPath: process.execPath });
   }
   if (command === "node") {
     return unique([
@@ -137,12 +147,6 @@ export async function resolveCommand(command) {
 }
 
 export async function resolveNpmCommand() {
-  const npmExecPath = process.env.npm_execpath;
-  const npmNodePath = process.env.npm_node_execpath;
-  if (npmExecPath && fs.existsSync(npmExecPath) && npmNodePath && fs.existsSync(npmNodePath)) {
-    const executable = { command: npmNodePath, prefixArgs: [npmExecPath], shell: false };
-    if (await executableWorks(executable)) return executable;
-  }
   return resolveCommand("npm");
 }
 
