@@ -98,6 +98,12 @@ const ECONOMYOS_CATALOG_TTL_MS = 10 * 60 * 1_000;
 const ECONOMYOS_CATALOG_RETRY_MS = 2 * 60 * 1_000;
 const appLogger = createFileLogger({ component: "window-server" });
 
+export function isChatGPTLoginRecoveryRequired(error) {
+  const message = String(error?.message || error || "");
+  return Boolean(error?.needsChatGPTLogin)
+    || /сессия истекла|session expired|not logged in|HTTP 401|unauthorized|вход не завершён|поле ввода|composer|cloudflare|проверку/i.test(message);
+}
+
 export async function runWindowApp({
   client,
   workspaceRoot,
@@ -2049,15 +2055,18 @@ export async function runWindowApp({
 
               return sendJson(res, { conversation, running: true });
             } catch (error) {
+              const needsChatGPTLogin = isChatGPTLoginRecoveryRequired(error);
               conversation.messages.push({
                 role: "assistant",
-                content: `⚠️ ChatGPT /code error: ${error.message}`,
+                content: needsChatGPTLogin
+                  ? "⚠️ Нужен вход в ChatGPT: 🧠 → Браузер → вкладка ChatGPT. Завершите вход и нажмите «Синхронизировать»."
+                  : `⚠️ ChatGPT /code error: ${error.message}`,
                 createdAt: new Date().toISOString(),
               });
               conversation.updatedAt = new Date().toISOString();
               saveWindowState(workspaceRoot, state);
               logConsole(`[code] chatgpt failed to start: ${error.message}`);
-              return sendJson(res, { conversation });
+              return sendJson(res, { conversation, needsChatGPTLogin });
             }
           }
 
@@ -2134,8 +2143,7 @@ export async function runWindowApp({
               logConsole(`[chat] chatgpt assistant response: ${finalText.length} char(s)`);
               writeNdjsonLine(res, { type: "done", conversation });
             } catch (error) {
-              const needsChatGPTLogin = Boolean(error?.needsChatGPTLogin)
-                || /сессия истекла|session expired|not logged in|HTTP 401|unauthorized/i.test(String(error?.message || error));
+              const needsChatGPTLogin = isChatGPTLoginRecoveryRequired(error);
               const browserNotReady = /cloudflare|поле ввода|интерфейс|composer|проверку/i.test(
                 String(error?.message || error),
               );

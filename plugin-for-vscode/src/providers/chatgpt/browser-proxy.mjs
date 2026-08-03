@@ -268,6 +268,14 @@ const CHATGPT_COMPOSER_SELECTORS = [
   "textarea",
 ];
 
+export function createChatGPTComposerUnavailableError() {
+  const error = new Error(
+    "ChatGPT: вход сохранён, но поле ввода не отрисовалось. Откройте 🧠 → Браузер → ChatGPT и завершите вход.",
+  );
+  error.needsChatGPTLogin = true;
+  return error;
+}
+
 function isStaleComposerError(error) {
   return /detached|not attached|not enabled|not visible|Timeout.*exceeded|Element is not/i.test(
     String(error?.message || error || ""),
@@ -769,7 +777,7 @@ async function createProxy({ debug, adoptedSession = null }) {
     // Финальное решение по статусу входа.
     const loggedIn = await checkLoggedIn();
     if (loggedIn) {
-      throw new Error("ChatGPT: вход есть, но поле ввода не отрисовалось. Повтори запрос.");
+      throw createChatGPTComposerUnavailableError();
     }
     throw new Error(
       "ChatGPT: не вижу поле ввода — похоже, не выполнен вход. Войди через кнопку авторизации. not logged in",
@@ -1309,17 +1317,11 @@ async function createProxy({ debug, adoptedSession = null }) {
     if (!/chatgpt\.com/.test(page.url())) {
       await gotoHome();
     }
-    try {
-      await getComposer();
-      await syncAuthFromBrowser();
-      return true;
-    } catch (firstError) {
-      if (debug) console.log(`[chatgpt-proxy] ensureReady: composer missing (${firstError.message}); reloading once`);
-      try { await gotoHome(); } catch {}
-      await getComposer();
-      await syncAuthFromBrowser();
-      return true;
-    }
+    // getComposer already performs one timed home navigation when the SPA is
+    // partially hydrated. Repeating it here doubled every failure to ~50 s.
+    await getComposer();
+    await syncAuthFromBrowser();
+    return true;
   }
 
   function startAuthAutoSave() {

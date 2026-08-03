@@ -83,7 +83,7 @@ export async function runCodeTask(
   let prompt = resumeState?.prompt ?? (nativeTools
     ? task
     : options.compactInitialPrompt === true
-      ? createCompactTaskPrompt(task)
+      ? createCompactTaskPrompt(task, { memoryContext, projectInstructionsContext })
       : browserOnly
       ? createBrowserSystemPrompt(task, { browserContext })
       : createCodeSystemPrompt(workspaceRoot, task, options.systemPrompt, {
@@ -190,7 +190,10 @@ export async function runCodeTask(
           }
           noToolRetries += 1;
           repairingMissingTool = true;
-          prompt = buildNoToolCorrectionPrompt(workspaceRoot, task, result.text, { browserOnly });
+          prompt = buildNoToolCorrectionPrompt(workspaceRoot, task, result.text, {
+            browserOnly,
+            hasToolHistory: toolLogs.length > 0,
+          });
           continue;
         }
 
@@ -200,6 +203,7 @@ export async function runCodeTask(
 
       parent = nextParent;
       repairingMissingTool = false;
+      noToolRetries = 0;
 
       if (!isToolAllowed(call.tool, allowedTools)) {
         const blocked = {

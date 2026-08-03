@@ -670,6 +670,53 @@ describe("runCodeTask transient text retries", () => {
 });
 
 describe("runCodeTask text-only code responses", () => {
+  it("does not accept a generated course structure until a workspace tool runs", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    let calls = 0;
+    try {
+      const courseStructure = [
+        "# Структура курса",
+        "1. Подготовка и выбор продукта",
+        "2. Создание продукта с обратной связью",
+        "3. Публикация и разбор результата",
+      ].join("\n");
+      const fakeClient = {
+        async complete() {
+          calls += 1;
+          if (calls === 1) {
+            return { text: courseStructure, lastAssistantMessageId: "course-plan" };
+          }
+          if (calls === 2) {
+            return {
+              text: '{"tool":"write_file","path":"COURSE.md","content":"# Структура курса\\n"}',
+              lastAssistantMessageId: "course-write",
+            };
+          }
+          return {
+            text: '{"tool":"finish","message":"Создал COURSE.md"}',
+            lastAssistantMessageId: "course-finish",
+          };
+        },
+      };
+
+      const result = await runCodeTask(
+        fakeClient,
+        { sessionId: "s1" },
+        dir,
+        "создай структуру курса с уроками, созданием продукта и обратной связью",
+        null,
+        { noToolTextRetries: 2 },
+      );
+
+      assert.equal(calls, 3);
+      assert.equal(result.message, "Создал COURSE.md");
+      assert.equal(fs.readFileSync(path.join(dir, "COURSE.md"), "utf8"), "# Структура курса\n");
+      assert.equal(result.toolLogs.length, 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps visual-reference code tasks on the workspace tool protocol", () => {
     const task = "посмотри как выглядит GTA 2 и сделай так же";
     const prompt = buildNoToolCorrectionPrompt("/tmp/game", task, "Сейчас всё улучшу.");
@@ -821,6 +868,98 @@ describe("runCodeTask text-only code responses", () => {
       ),
       true,
     );
+  });
+
+  it("rejects ChatGPT claims that no workspace write tool is connected", () => {
+    assert.equal(
+      shouldRejectTextOnlyCodeResult(
+        "создай структуру курса с уроками",
+        "Сейчас в этой сессии у меня нет подключённого инструмента записи в рабочую папку, поэтому физически создать файлы я не могу.",
+        [],
+      ),
+      true,
+    );
+  });
+
+  it("recovers when ChatGPT denies write access after listing the workspace", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    const prompts = [];
+    let calls = 0;
+    try {
+      const fakeClient = {
+        async complete(options) {
+          calls += 1;
+          prompts.push(options.prompt);
+          if (calls === 1) {
+            return {
+              text: '{"tool":"list_files","path":".","maxDepth":4,"maxEntries":500}',
+              lastAssistantMessageId: "listed",
+            };
+          }
+          if (calls === 2) {
+            return {
+              text: "Но доступный сейчас инструмент даёт только чтение (`list_files`). Инструмента записи в workspace в этой сессии нет, поэтому я не могу выполнить физическое изменение файлов.",
+              lastAssistantMessageId: "false-denial",
+            };
+          }
+          if (calls === 3) {
+            return {
+              text: '{"tool":"write_file","path":"COURSE.md","content":"# Курс\\n"}',
+              lastAssistantMessageId: "written",
+            };
+          }
+          return {
+            text: '{"tool":"finish","message":"Создал COURSE.md"}',
+            lastAssistantMessageId: "finished",
+          };
+        },
+      };
+
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "создай структуру курса", null, {
+        noToolTextRetries: 1,
+      });
+
+      assert.equal(calls, 4);
+      assert.equal(result.message, "Создал COURSE.md");
+      assert.equal(fs.readFileSync(path.join(dir, "COURSE.md"), "utf8"), "# Курс\n");
+      assert.match(prompts[2], /write_file/);
+      assert.match(prompts[2], /workspace tools are connected/i);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resets the no-tool retry budget after every successful workspace tool call", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    let calls = 0;
+    try {
+      const denial = "Инструмента записи в workspace нет, поэтому я не могу создавать файлы.";
+      const responses = [
+        '{"tool":"list_files","path":".","maxDepth":4,"maxEntries":500}',
+        denial,
+        '{"tool":"mkdir","path":"course"}',
+        denial,
+        '{"tool":"write_file","path":"course/README.md","content":"# Курс\\n"}',
+        '{"tool":"finish","message":"Создал структуру курса"}',
+      ];
+      const fakeClient = {
+        async complete() {
+          const text = responses[calls];
+          calls += 1;
+          return { text, lastAssistantMessageId: `step-${calls}` };
+        },
+      };
+
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "создай структуру курса", null, {
+        noToolTextRetries: 1,
+      });
+
+      assert.equal(calls, 6);
+      assert.equal(result.message, "Создал структуру курса");
+      assert.equal(fs.readFileSync(path.join(dir, "course/README.md"), "utf8"), "# Курс\n");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { describe, it } from "node:test";
-import { fillChatGPTComposer } from "../src/providers/chatgpt/browser-proxy.mjs";
+import {
+  createChatGPTComposerUnavailableError,
+  fillChatGPTComposer,
+} from "../src/providers/chatgpt/browser-proxy.mjs";
 
 describe("fillChatGPTComposer", () => {
+  it("marks a missing composer as requiring user-visible login recovery", () => {
+    const error = createChatGPTComposerUnavailableError();
+    assert.equal(error.needsChatGPTLogin, true);
+    assert.match(error.message, /поле ввода|composer/i);
+  });
+
+  it("does not repeat the full composer timeout inside ensureReady", () => {
+    const source = fs.readFileSync(new URL("../src/providers/chatgpt/browser-proxy.mjs", import.meta.url), "utf8");
+    const block = source.match(/async function ensureReady\(\) \{([\s\S]*?)\n  function startAuthAutoSave/);
+    assert.ok(block, "ensureReady implementation must exist");
+    assert.equal(block[1].match(/await getComposer\(\)/g)?.length, 1);
+  });
+
   it("reacquires the composer when ChatGPT replaces or disables the fallback textarea", async () => {
     const calls = [];
     let lookup = 0;

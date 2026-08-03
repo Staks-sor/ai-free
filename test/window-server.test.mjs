@@ -7,6 +7,7 @@ import {
   buildLegacyEconomyResume,
   captureRunningClarification,
   takeRunningClarifications,
+  isChatGPTLoginRecoveryRequired,
   isEconomyResumePrompt,
   shouldAutoRunCodeTask,
 } from "../src/window-app/server.mjs";
@@ -61,6 +62,20 @@ describe("ChatGPT agent modes", () => {
     assert.equal(input.run, true);
     assert.equal(input.browserOnly, false);
     assert.equal(input.task, "прошивка для ESP32");
+  });
+});
+
+describe("ChatGPT login recovery", () => {
+  it("opens the embedded browser when the saved session has no usable composer", () => {
+    const marked = new Error("ChatGPT composer is unavailable");
+    marked.needsChatGPTLogin = true;
+
+    assert.equal(isChatGPTLoginRecoveryRequired(marked), true);
+    assert.equal(
+      isChatGPTLoginRecoveryRequired(new Error("ChatGPT: вход есть, но поле ввода не отрисовалось")),
+      true,
+    );
+    assert.equal(isChatGPTLoginRecoveryRequired(new Error("provider returned HTTP 500")), false);
   });
 });
 

@@ -5,7 +5,7 @@ import { loadSettings } from "../state/settings.mjs";
 import { getSkillPrompt } from "../skills/registry.mjs";
 import { formatAllowedToolsHint } from "../skills/permissions.mjs";
 
-export const CODE_AGENT_PROMPT_VERSION = 19;
+export const CODE_AGENT_PROMPT_VERSION = 20;
 
 export function createCodeSystemPrompt(
   workspaceRoot,

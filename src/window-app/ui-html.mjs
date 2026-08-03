@@ -9,10 +9,14 @@ import { STYLES } from "./ui-styles.mjs";
 import { AI_FREE_VERSION } from "../config.mjs";
 import { createTranslator, resolveUserLanguage } from "../i18n/index.mjs";
 import { COMMAND_DESCRIPTIONS } from "../i18n/command-descriptions.mjs";
+import { ECONOMYOS_GIVEAWAY_LINKS } from "./giveaway-links.mjs";
 
 export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } = {}) {
   const { language, messages, t } = createTranslator(resolveUserLanguage(requestedLanguage));
   const i18nPayload = JSON.stringify({ language, messages, ui, commandDescriptions: COMMAND_DESCRIPTIONS });
+  const giveawayPurchaseAction = ECONOMYOS_GIVEAWAY_LINKS.purchase
+    ? `<a class="iconBtn primaryBtn" href="${ECONOMYOS_GIVEAWAY_LINKS.purchase}" target="_blank" rel="noreferrer">Участвовать</a>`
+    : `<span class="giveawayPending" aria-disabled="true">Ссылка для участия появится здесь</span>`;
   return `<!doctype html>
 <html lang="${language.code}" dir="${language.dir}">
 <head>
@@ -48,12 +52,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <small>Написать @Staks_sor в Telegram</small>
           </span>
         </a>
-        <button id="vibePromoOpen" class="sidebarPromo sidebarPromoVibe" type="button" aria-label="Поддержать развитие AI Free через VIBE">
-          <span class="sidebarPromoMark">♥</span>
-          <span class="sidebarPromoText">
-            <strong>Поддержи AI Free</strong>
-            <small>VIBE на месяц — 200 ₽</small>
-          </span>
+        <button id="vibePromoOpen" class="sidebarPromo sidebarPromoVibe sidebarGiveaway" type="button" aria-label="Открыть условия розыгрыша API-ключа EconomyOS">
+          <span class="sidebarGiveawayBadge">ДО 22:00 МСК</span>
+          <strong>РОЗЫГРЫШ · API EconomyOS</strong>
+          <span class="sidebarGiveawayPrize">$200 на 7 дней</span>
+          <small>1 победитель · VIBE от 200 ₽/месяц · итоги в 23:00 МСК</small>
         </button>
       </div>
 
@@ -163,16 +166,28 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       <div id="vibePromoOverlay" class="settingsOverlay confirmOverlay hidden" aria-hidden="true">
         <div class="settingsPanel confirmPanel vibePromoPanel" role="dialog" aria-modal="true" aria-labelledby="vibePromoTitle">
           <div class="settingsHead">
-            <h2 id="vibePromoTitle">Поддержать развитие AI Free</h2>
+            <h2 id="vibePromoTitle">Розыгрыш API-ключа EconomyOS</h2>
             <button id="vibePromoClose" class="iconBtn" type="button" aria-label="Закрыть">✕</button>
           </div>
           <div class="confirmBody vibePromoBody">
-            <div class="vibePromoOffer"><strong>VIBE на месяц — 200 ₽</strong><span>вместо 400 ₽ по промокоду AIFREE50</span></div>
-            <p>Поддерживая AI Free, вы помогаете оплачивать разработку, серверы и новые функции проекта. В благодарность вы получаете месяц VIBE — сервиса для приватного и стабильного доступа к интернету.</p>
-            <div class="vibePromoCode"><span>ПРОМОКОД</span><code>AIFREE50</code></div>
-            <div class="confirmActions vibePromoActions">
-              <a class="iconBtn" href="https://vibe.stas-sor.ru/" target="_blank" rel="noreferrer">Подробнее</a>
-              <a class="iconBtn primaryBtn" href="https://t.me/payments_meBot" target="_blank" rel="noreferrer">Поддержать за 200 ₽</a>
+            <div class="giveawayPrizeCard">
+              <span class="giveawayEyebrow">ГЛАВНЫЙ ПРИЗ</span>
+              <strong>$200 на 7 дней</strong>
+              <span>Один победитель</span>
+            </div>
+            <div class="giveawayDeadline">
+              <strong>Внимание: розыгрыш идёт до 22:00 по МСК. Успей!</strong>
+              <span>Итоги на YouTube в 23:00 МСК</span>
+            </div>
+            <p class="giveawayModels">Claude Opus, Codex и другие модели EconomyOS</p>
+            <ol class="giveawaySteps">
+              <li><span>1</span><p>Приобретите VIBE на месяц или дольше по специальной ссылке. Стоимость — <strong>от 200 ₽/месяц</strong>.</p></li>
+              <li><span>2</span><p>После оплаты получите номер участника — он будет сохранён для розыгрыша.</p></li>
+              <li><span>3</span><p>Результат розыгрыша будет опубликован на YouTube. Победитель только один.</p></li>
+            </ol>
+            <div class="confirmActions vibePromoActions giveawayActions">
+              <a class="iconBtn" href="${ECONOMYOS_GIVEAWAY_LINKS.youtube}" target="_blank" rel="noreferrer">YouTube-канал</a>
+              ${giveawayPurchaseAction}
             </div>
           </div>
         </div>
@@ -450,6 +465,60 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     vibePromoOverlay.addEventListener("click", (event) => {
       if (event.target === vibePromoOverlay) closeVibePromo();
     });
+
+    let giveawaySoundPlayed = false;
+    async function playGiveawayAlertSound() {
+      if (giveawaySoundPlayed) return true;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return false;
+      let audioContext = null;
+      try {
+        audioContext = new AudioContextClass();
+        if (audioContext.state === "suspended") {
+          await Promise.race([
+            audioContext.resume(),
+            new Promise((resolve) => setTimeout(resolve, 120)),
+          ]);
+        }
+        if (audioContext.state !== "running") {
+          audioContext.close().catch(() => {});
+          return false;
+        }
+        const startAt = audioContext.currentTime;
+        [659.25, 880].forEach((frequency, index) => {
+          const oscillator = audioContext.createOscillator();
+          const gain = audioContext.createGain();
+          const toneStart = startAt + index * 0.09;
+          oscillator.type = "sine";
+          oscillator.frequency.setValueAtTime(frequency, toneStart);
+          gain.gain.setValueAtTime(0.0001, toneStart);
+          gain.gain.exponentialRampToValueAtTime(0.12, toneStart + 0.018);
+          gain.gain.exponentialRampToValueAtTime(0.0001, toneStart + 0.18);
+          oscillator.connect(gain);
+          gain.connect(audioContext.destination);
+          oscillator.start(toneStart);
+          oscillator.stop(toneStart + 0.19);
+        });
+        giveawaySoundPlayed = true;
+        setTimeout(() => audioContext.close().catch(() => {}), 450);
+        return true;
+      } catch (_) {
+        audioContext?.close().catch(() => {});
+        return false;
+      }
+    }
+
+    function announceGiveawayOnStartup() {
+      openVibePromo();
+      playGiveawayAlertSound().then((played) => {
+        if (played) return;
+        const retrySound = () => { playGiveawayAlertSound(); };
+        document.addEventListener("pointerdown", retrySound, { once: true });
+        document.addEventListener("keydown", retrySound, { once: true });
+      });
+    }
+
+    setTimeout(announceGiveawayOnStartup, 250);
 
     function closeDeleteChatModal(confirmed = false) {
       deleteChatOverlay.classList.add("hidden");
@@ -1399,38 +1468,40 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
       const displayForChat = displayParts.join("\\n\\n");
       const sendProvider = activeConversation.provider || "deepseek";
-
-      await refreshAvailableProviders();
-      if (!availableProviders.includes(sendProvider)) {
-        setStatus(t("provider.authorizeTitle"));
-        await connectProvider(sendProvider, { confirmFirst: false });
-        await refreshAvailableProviders();
-        if (!availableProviders.includes(sendProvider)) {
-          setStatus(t("provider.tokenMissing", { id: sendProvider }), true);
-          return;
-        }
-        setStatus("");
-      }
+      const sentDraftText = messageInput.value;
+      const sentAttachments = attachments;
 
       sending = true;
       setComposerEnabled(false);
-      const sentDraftText = messageInput.value;
-      messageInput.value = "";
-      // Сбросить авто-рост на исходную высоту (но если юзер тянул руками — оставить).
-      if (!userResizedInput) messageInput.style.height = "";
-      const sentAttachments = attachments;
-      attachments = [];
-      renderAttachments();
-      activeConversation.messages.push({
-        role: "user",
-        content: displayForChat,
-        ...(imageFiles.length ? {
-          images: imageFiles.map((image) => "data:" + image.mimeType + ";base64," + image.dataBase64),
-        } : {}),
-      });
-      renderConversation(activeConversation);
+      setStatus(t("composer.writingStatus"));
 
       try {
+        await refreshAvailableProviders();
+        if (!availableProviders.includes(sendProvider)) {
+          setStatus(t("provider.authorizeTitle"));
+          await connectProvider(sendProvider, { confirmFirst: false });
+          await refreshAvailableProviders();
+          if (!availableProviders.includes(sendProvider)) {
+            setStatus(t("provider.tokenMissing", { id: sendProvider }), true);
+            return;
+          }
+          setStatus("");
+        }
+
+        messageInput.value = "";
+        // Сбросить авто-рост на исходную высоту (но если юзер тянул руками — оставить).
+        if (!userResizedInput) messageInput.style.height = "";
+        attachments = [];
+        renderAttachments();
+        activeConversation.messages.push({
+          role: "user",
+          content: displayForChat,
+          ...(imageFiles.length ? {
+            images: imageFiles.map((image) => "data:" + image.mimeType + ";base64," + image.dataBase64),
+          } : {}),
+        });
+        renderConversation(activeConversation);
+
         // Картинки. ChatGPT обрабатывает их сам через веб-сессию — передаём inline,
         // НЕ гоняя через DeepSeek. Для DeepSeek/Qwen — старый путь через /api/upload
         // (получаем file_id для vision-completion).

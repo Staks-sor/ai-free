@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { renderWindowHtml } from "../src/window-app/ui-html.mjs";
+import { renderWindowHtml as renderPluginWindowHtml } from "../plugin-for-vscode/src/window-app/ui-html.mjs";
 
 describe("ui-html inline script", () => {
   it("generates syntactically valid browser script", () => {
@@ -71,32 +72,44 @@ describe("ui-html inline script", () => {
     assert.match(html, /body: \{ restart: options\.restart === true \}/);
   });
 
-  it("renders compact promo links in the desktop sidebar", () => {
-    const html = renderWindowHtml({ language: "ru" });
-    assert.match(html, /class="sidebarPromos"/);
-    assert.match(html, /https:\/\/github\.com\/Staks-sor\/ai-free/);
-    assert.match(html, /https:\/\/vibe\.stas-sor\.ru\//);
-    assert.match(html, /AI Free на GitHub/);
-    assert.match(html, /Разместить рекламу/);
-    assert.match(html, /Написать @Staks_sor в Telegram/);
-    assert.match(html, /https:\/\/t\.me\/Staks_sor/);
-    assert.doesNotMatch(html, /mailto:hello@stas-sor\.ru/);
-    assert.match(html, /Поддержи AI Free/);
-    assert.match(html, /VIBE на месяц — 200 ₽/);
-    assert.match(html, /Поддержать развитие AI Free/);
-    assert.match(html, /сервиса для приватного и стабильного доступа к интернету/);
-    assert.match(html, /помогаете оплачивать разработку, серверы и новые функции проекта/);
-    assert.match(html, /id="vibePromoOverlay"/);
-    assert.match(html, />ПРОМОКОД<\/span><code>AIFREE50<\/code>/);
-    assert.match(html, />Подробнее<\/a>/);
-    assert.match(html, />Поддержать за 200 ₽<\/a>/);
-    assert.match(html, /https:\/\/t\.me\/payments_meBot/);
-    assert.doesNotMatch(html, /vibePromoToast/);
-    assert.doesNotMatch(html, /Приватный и стабильный доступ к интернету/);
-    assert.match(html, /sidebarPromoShift/);
-    assert.match(html, /sidebarPromoGlint/);
-    assert.match(html, /sidebarPromoMarkPulse/);
-    assert.match(html, /\.sidebarPromo\s*\{/);
+  it("renders the EconomyOS giveaway banner without an invented purchase link", () => {
+    for (const html of [renderWindowHtml({ language: "ru" }), renderPluginWindowHtml({ language: "ru" })]) {
+      assert.match(html, /class="sidebarPromos"/);
+      assert.match(html, /https:\/\/github\.com\/Staks-sor\/ai-free/);
+      assert.match(html, /AI Free на GitHub/);
+      assert.match(html, /Разместить рекламу/);
+      assert.match(html, /Написать @Staks_sor в Telegram/);
+      assert.match(html, /https:\/\/t\.me\/Staks_sor/);
+      assert.doesNotMatch(html, /mailto:hello@stas-sor\.ru/);
+      assert.match(html, /Розыгрыш API-ключа EconomyOS/);
+      assert.match(html, /\$200 на 7 дней/);
+      assert.match(html, /ДО 22:00 МСК/);
+      assert.match(html, /Внимание: розыгрыш идёт до 22:00 по МСК\. Успей!/);
+      assert.match(html, /Итоги на YouTube в 23:00 МСК/);
+      assert.match(html, /Один победитель/);
+      assert.match(html, /VIBE от 200 ₽\/месяц/);
+      assert.match(html, /получите номер участника/i);
+      assert.match(html, /Claude Opus, Codex и другие модели EconomyOS/);
+      assert.match(html, /id="vibePromoOverlay"/);
+      assert.match(html, /function announceGiveawayOnStartup\(\)/);
+      assert.match(html, /setTimeout\(announceGiveawayOnStartup, 250\)/);
+      assert.match(html, /window\.AudioContext \|\| window\.webkitAudioContext/);
+      assert.match(html, /document\.addEventListener\("pointerdown", retrySound, \{ once: true \}\)/);
+      assert.match(html, /https:\/\/vibe\.stas-sor\.ru\/raffle\/aifree/);
+      assert.match(html, />Участвовать<\/a>/);
+      assert.doesNotMatch(html, /Ссылка для участия появится здесь/);
+      assert.match(html, /https:\/\/www\.youtube\.com\/@%D0%91%D1%83%D0%B4%D0%BD%D0%B8%D0%BF%D1%80%D0%BE%D0%B3/);
+      assert.match(html, />YouTube-канал<\/a>/);
+      assert.doesNotMatch(html, /https:\/\/t\.me\/payments_meBot/);
+      assert.doesNotMatch(html, /vibePromoToast/);
+      assert.match(html, /sidebarPromoShift/);
+      assert.match(html, /sidebarPromoGlint/);
+      assert.match(html, /sidebarPromoMarkPulse/);
+      assert.match(html, /\.sidebarPromo\s*\{/);
+      assert.match(html, /\.vibePromoPanel \{ width: min\(680px, 94vw\); max-width: 680px; \}/);
+      assert.match(html, /\.vibePromoBody \{ display: grid; gap: 20px; padding: 24px 26px 26px; \}/);
+      assert.match(html, /\.giveawayPrizeCard strong \{ color: var\(--giveaway-accent\); font-size: 30px;/);
+    }
   });
 
   it("renders the EconomyOS BYOK integration without embedding a shared key", () => {
@@ -185,5 +198,18 @@ describe("ui-html inline script", () => {
       html,
       /api\("\/api\/conversations\/" \+ activeConversation\.id \+ "\/permission-request\/"/,
     );
+  });
+
+  it("claims the composer before the first asynchronous provider check", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    const submitStart = html.indexOf('document.getElementById("composer").addEventListener("submit"');
+    const submitEnd = html.indexOf('messageInput.addEventListener("keydown"', submitStart);
+    const submitHandler = html.slice(submitStart, submitEnd);
+    const claimIndex = submitHandler.indexOf("sending = true");
+    const providerCheckIndex = submitHandler.indexOf("await refreshAvailableProviders()");
+
+    assert.ok(claimIndex >= 0, "submit handler must claim the composer");
+    assert.ok(providerCheckIndex >= 0, "submit handler must check provider availability");
+    assert.ok(claimIndex < providerCheckIndex, "composer must be claimed before the first await");
   });
 });

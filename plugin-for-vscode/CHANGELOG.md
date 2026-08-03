@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.18
+
+- Adds the EconomyOS API-credit giveaway banner and participation flow.
+- Opens the giveaway on startup with an attention sound and keeps it available in the sidebar.
+- Links the participation action to the dedicated AI Free raffle page.
+- Shows the 22:00 MSK participation deadline and 23:00 MSK YouTube result time.
+- Restores workspace write-tool recovery when a model incorrectly claims that tools are unavailable.
+- Preserves memory and project instructions in compact agent follow-up prompts.
+- Improves ChatGPT composer and login recovery without repeating the full startup timeout.
+- Keeps the giveaway UI and release version synchronized across desktop and VS Code.
+
 ## 0.4.14
 
 - Replaces fragile ChatGPT timing loops with generation-aware DOM observation for long tasks.

@@ -38,7 +38,22 @@ export function buildContinuationPrompt({
   return parts.join("\n\n");
 }
 
-export function buildNoToolCorrectionPrompt(workspaceRoot, task, previousText, { browserOnly = false } = {}) {
+export function buildNoToolCorrectionPrompt(workspaceRoot, task, previousText, {
+  browserOnly = false,
+  hasToolHistory = false,
+} = {}) {
+  if (hasToolHistory && !browserOnly) {
+    const previous = String(previousText || "").trim().slice(0, 1200);
+    return `WORKSPACE TOOLS ARE CONNECTED. Your previous response incorrectly denied access.
+Task: ${task}
+Workspace: ${workspaceRoot}
+Previous invalid response:
+${previous}
+
+Continue the task now. Reply with exactly one one-line JSON tool call and no prose or markdown.
+Available write tools include mkdir, write_file, append_file, delete_file, and delete_dir.
+Example: {"tool":"write_file","path":"relative/file.md","content":"full content"}`;
+  }
   const requiredCall = browserOnly
     ? '{"tool":"browser_snapshot","maxTextChars":8000,"includeScreenshot":true}'
     : '{"tool":"list_files","path":".","maxDepth":4,"maxEntries":500}';
@@ -54,8 +69,6 @@ ${requiredCall}`;
 }
 
 export function shouldRejectTextOnlyCodeResult(task, text, toolLogs = []) {
-  if (toolLogs.length > 0) return false;
-
   const answer = String(text || "").trim();
   if (!answer) return false;
 
@@ -72,9 +85,17 @@ export function shouldRejectTextOnlyCodeResult(task, text, toolLogs = []) {
     return true;
   }
   if (/инструмент[^\n.]{0,80}(?:недоступ|не найден|не существует)/iu.test(answerLower)) return true;
+  if (/(?:нет|отсутствует)[^\n.]{0,80}инструмент[^\n.]{0,80}(?:запис|файл|рабоч|workspace)/iu.test(answerLower)) return true;
+  if (/инструмент[^\n.]{0,80}не подключ[её]н/iu.test(answerLower)) return true;
+  if (/инструмент[а-яё]*\s+(?:для\s+)?запис[^\n.]{0,100}(?:\bнет\b|отсутств|недоступ)/iu.test(answerLower)) return true;
+  if (/(?:инструмент|workspace|рабоч)[^\n.]{0,100}(?:только\s+чтени|read[- ]?only)/iu.test(answerLower)) return true;
+  if (/(?:не могу|cannot|can't)[^\n.]{0,100}(?:созда|измен|запис|write|create|modify)[^\n.]{0,100}(?:файл|workspace|рабоч)/iu.test(answerLower)) return true;
+  if (/(?:no|without)[^\n.]{0,80}(?:workspace|file|write)[^\n.]{0,40}tool/i.test(answerLower)) return true;
   if (/могу сделать.*скажи|tell me if you want|ready to proceed|i can do it|готов приступ/i.test(answerLower)) {
     return true;
   }
+
+  if (toolLogs.length > 0) return false;
 
   const browserTask = /(найди|найти|поиск|поищи|посмотри|взгляни|сравни|как\s+выглядит|search|look\s+up|browse|compare|open\s+(?:the\s+)?(?:site|page)|открой|нажми|кликн|browser|google|гугл|сайт|страниц|узнай|собери|загугли|cookie|consent|accept|принять)/iu.test(taskText);
   if (browserTask && toolLogs.length === 0) {
