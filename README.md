@@ -60,10 +60,10 @@ People usually look for this project as a **free AI coding assistant**, **local 
   <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20EconomyOS-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, EconomyOS">
 </p>
 
-<p align="center"><strong>AI Free 0.4.18</strong></p>
+<p align="center"><strong>AI Free 0.4.19</strong></p>
 
 <p align="center">
-  <img src="docs/assets/ai-free-agent-0.4.13.png" width="100%" alt="AI Free 0.4.18: desktop code agent with compact tool timeline">
+  <img src="docs/assets/ai-free-agent-0.4.13.png" width="100%" alt="AI Free 0.4.19: desktop code agent with compact tool timeline">
 </p>
 
 > Локальный AI-клиент, который превращает веб-чаты DeepSeek, Qwen и ChatGPT в инструмент для разработчика: окно чатов, CLI, совместимые API, `/code`-агент, память, skills и IDE-интеграции.
@@ -112,9 +112,9 @@ People usually look for this project as a **free AI coding assistant**, **local 
 
 ### Версия продукта
 
-Текущий релиз — **AI Free 0.4.18**. Desktop/CLI/API и расширение VS Code выпускаются под единым номером версии. Он синхронно хранится в корневом `package.json` и `plugin-for-vscode/package.json`; общий релизный тег имеет формат `vX.Y.Z`.
+Текущий релиз — **AI Free 0.4.19**. Desktop/CLI/API и расширение VS Code выпускаются под единым номером версии. Он синхронно хранится в корневом `package.json` и `plugin-for-vscode/package.json`; общий релизный тег имеет формат `vX.Y.Z`.
 
-Что вошло в `0.4.18`: [release notes](docs/RELEASE_NOTES_0.4.18.md).
+Что вошло в `0.4.19`: [release notes](docs/RELEASE_NOTES_0.4.19.md).
 
 ---
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.19
+
+- Removes the completed EconomyOS giveaway from desktop and VS Code.
+- Removes the startup giveaway dialog, notification sound, sidebar campaign banner and raffle links.
+- Keeps the stable agent, ChatGPT recovery and workspace-tool fixes from 0.4.18.
+
 ## 0.4.18
 
 - Adds the EconomyOS API-credit giveaway banner and participation flow.

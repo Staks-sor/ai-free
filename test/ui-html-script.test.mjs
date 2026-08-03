@@ -72,7 +72,7 @@ describe("ui-html inline script", () => {
     assert.match(html, /body: \{ restart: options\.restart === true \}/);
   });
 
-  it("renders the EconomyOS giveaway banner without an invented purchase link", () => {
+  it("does not render the expired EconomyOS giveaway", () => {
     for (const html of [renderWindowHtml({ language: "ru" }), renderPluginWindowHtml({ language: "ru" })]) {
       assert.match(html, /class="sidebarPromos"/);
       assert.match(html, /https:\/\/github\.com\/Staks-sor\/ai-free/);
@@ -81,34 +81,15 @@ describe("ui-html inline script", () => {
       assert.match(html, /Написать @Staks_sor в Telegram/);
       assert.match(html, /https:\/\/t\.me\/Staks_sor/);
       assert.doesNotMatch(html, /mailto:hello@stas-sor\.ru/);
-      assert.match(html, /Розыгрыш API-ключа EconomyOS/);
-      assert.match(html, /\$200 на 7 дней/);
-      assert.match(html, /ДО 22:00 МСК/);
-      assert.match(html, /Внимание: розыгрыш идёт до 22:00 по МСК\. Успей!/);
-      assert.match(html, /Итоги на YouTube в 23:00 МСК/);
-      assert.match(html, /Один победитель/);
-      assert.match(html, /VIBE от 200 ₽\/месяц/);
-      assert.match(html, /получите номер участника/i);
-      assert.match(html, /Claude Opus, Codex и другие модели EconomyOS/);
-      assert.match(html, /id="vibePromoOverlay"/);
-      assert.match(html, /function announceGiveawayOnStartup\(\)/);
-      assert.match(html, /setTimeout\(announceGiveawayOnStartup, 250\)/);
-      assert.match(html, /window\.AudioContext \|\| window\.webkitAudioContext/);
-      assert.match(html, /document\.addEventListener\("pointerdown", retrySound, \{ once: true \}\)/);
-      assert.match(html, /https:\/\/vibe\.stas-sor\.ru\/raffle\/aifree/);
-      assert.match(html, />Участвовать<\/a>/);
-      assert.doesNotMatch(html, /Ссылка для участия появится здесь/);
-      assert.match(html, /https:\/\/www\.youtube\.com\/@%D0%91%D1%83%D0%B4%D0%BD%D0%B8%D0%BF%D1%80%D0%BE%D0%B3/);
-      assert.match(html, />YouTube-канал<\/a>/);
-      assert.doesNotMatch(html, /https:\/\/t\.me\/payments_meBot/);
-      assert.doesNotMatch(html, /vibePromoToast/);
+      assert.doesNotMatch(html, /Розыгрыш API-ключа EconomyOS/);
+      assert.doesNotMatch(html, /\$200 на 7 дней/);
+      assert.doesNotMatch(html, /vibePromoOverlay|vibePromoOpen|announceGiveawayOnStartup/);
+      assert.doesNotMatch(html, /playGiveawayAlertSound|giveawaySoundPlayed/);
+      assert.doesNotMatch(html, /https:\/\/vibe\.stas-sor\.ru\/raffle\/aifree/);
       assert.match(html, /sidebarPromoShift/);
       assert.match(html, /sidebarPromoGlint/);
       assert.match(html, /sidebarPromoMarkPulse/);
       assert.match(html, /\.sidebarPromo\s*\{/);
-      assert.match(html, /\.vibePromoPanel \{ width: min\(680px, 94vw\); max-width: 680px; \}/);
-      assert.match(html, /\.vibePromoBody \{ display: grid; gap: 20px; padding: 24px 26px 26px; \}/);
-      assert.match(html, /\.giveawayPrizeCard strong \{ color: var\(--giveaway-accent\); font-size: 30px;/);
     }
   });
 
