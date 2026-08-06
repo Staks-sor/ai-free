@@ -1,0 +1,22 @@
+<idea-plugin>
+    <id>ru.stas-sor.ai-free</id>
+    <name>AI Free Chat &amp; Agent</name>
+    <vendor url="https://github.com/Staks-sor/ai-free">Staks-sor</vendor>
+
+    <description><![CDATA[
+      <p>AI Free inside PyCharm with DeepSeek, Qwen, ChatGPT and EconomyOS.</p>
+      <p>Chat with models, run coding agents against the active project, use memory,
+      voice input and local OpenAI- and Anthropic-compatible APIs.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <projectService serviceImplementation="ru.stassor.aifree.runtime.AiFreeBackendService"/>
+        <toolWindow
+            id="AI Free"
+            anchor="right"
+            icon="/icons/aiFree.svg"
+            factoryClass="ru.stassor.aifree.ui.AiFreeToolWindowFactory"/>
+    </extensions>
+</idea-plugin>

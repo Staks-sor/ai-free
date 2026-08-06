@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.20
+
+- Retries a Qwen OpenAI-compatible stream in a fresh server-issued chat when the first upstream attempt contains no response delta.
+- Prevents empty or invalid tool-call blocks from closing the SSE turn with a false `finish_reason: tool_calls`.
+- Adds the AI Free plugin for PyCharm 2025.2+ and removes its rejected IntelliJ internal API usage.
+- Keeps desktop and VS Code OpenAI-compatible API bridges synchronized.
+
 ## 0.4.19
 
 - Removes the completed EconomyOS giveaway from desktop and VS Code.

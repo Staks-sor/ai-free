@@ -3,6 +3,7 @@ export async function runWithEmptyStreamRetry({
   onDelta,
   beforeRetry = null,
   maxAttempts = 2,
+  requireDelta = false,
 }) {
   let emitted = false;
   const emit = (delta) => {
@@ -13,7 +14,7 @@ export async function runWithEmptyStreamRetry({
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const result = await operation({ attempt, onDelta: emit });
-      if (!emitted && !String(result?.text || "")) {
+      if (!emitted && (requireDelta || !String(result?.text || ""))) {
         throw createEmptyStreamError();
       }
       return result;

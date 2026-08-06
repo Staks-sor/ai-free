@@ -819,7 +819,7 @@ function toOpenAIStreamChunk(model, textDelta, isFirst = false) {
 }
 
 // Обработка streaming-запроса к Qwen.
-async function handleQwenStream(client, chatId, prompt, modelName, model, res, {
+export async function handleQwenStream(client, chatId, prompt, modelName, model, res, {
   thinking = false,
   search = false,
   createChat = null,
@@ -862,13 +862,17 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res, {
 
         const completionStartedAt = Date.now();
         logQwenTiming(requestId, "completion_start", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
-        await activeClient.complete({
-          chatId: activeChatId,
-          prompt,
-          thinking,
-          search,
-          model,
-          onText: (textDelta) => {
+        await runWithEmptyStreamRetry({
+          requireDelta: true,
+          operation: ({ onDelta }) => activeClient.complete({
+            chatId: activeChatId,
+            prompt,
+            thinking,
+            search,
+            model,
+            onText: onDelta,
+          }),
+          onDelta: (textDelta) => {
             if (!sawDelta) {
               sawDelta = true;
               firstDeltaAt = Date.now();
@@ -879,6 +883,14 @@ async function handleQwenStream(client, chatId, prompt, modelName, model, res, {
               });
             }
             parser.onText(textDelta);
+          },
+          beforeRetry: async ({ attempt: emptyAttempt, error }) => {
+            if (typeof createChat !== "function") throw error;
+            logQwenTiming(requestId, "empty_stream_retry", {
+              attempt: emptyAttempt,
+              total_ms: elapsedMs(startedAt),
+            });
+            activeChatId = await createChat(activeClient);
           },
         });
         logQwenTiming(requestId, "completion_done", {
@@ -1363,8 +1375,9 @@ export class StreamParser {
       const parsed = parseModelToolCalls(this.toolsBuffer);
       if (parsed.calls.length) {
         console.log(`[API] Parsed streaming XML tool calls: ${parsed.calls.length}`);
-        this.sendToolCalls(parsed.calls);
-        finishReason = "tool_calls";
+        const sent = this.sendToolCalls(parsed.calls);
+        if (sent > 0) finishReason = "tool_calls";
+        else this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
       } else {
         console.error("[API] Error parsing XML tool calls from streaming response");
         this.sendChunk({ content: "\n[Error parsing XML tool call from model]\n" + this.toolsBuffer });
@@ -1420,8 +1433,9 @@ export class StreamParser {
         
         console.log(`[API] Parsed streaming tool calls: ${calls.length}`);
         
-        this.sendToolCalls(calls);
-        finishReason = "tool_calls";
+        const sent = this.sendToolCalls(calls);
+        if (sent > 0) finishReason = "tool_calls";
+        else this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
       } catch (e) {
         try {
           let fixedJson = jsonStr.trim();
@@ -1482,8 +1496,9 @@ export class StreamParser {
           
           console.log(`[API] Parsed streaming tool calls (after brace fix): ${calls.length}`);
           
-          this.sendToolCalls(calls);
-          finishReason = "tool_calls";
+          const sent = this.sendToolCalls(calls);
+          if (sent > 0) finishReason = "tool_calls";
+          else this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
         } catch (e2) {
           console.error("[API] Error parsing tool calls from streaming response:", e2.message);
           fs.writeFileSync("/tmp/failed_json.txt", jsonStr); console.error("[API] Problematic JSON string was:\n", JSON.stringify(jsonStr));
@@ -1513,6 +1528,7 @@ export class StreamParser {
     if (normalized.errors.length) {
       compatLogger.warn("api.tool_call.validation", { errors: normalized.errors });
     }
+    let sent = 0;
     normalized.calls.forEach((call, index) => {
       const name = call.name || call.tool;
       if (!name) return;
@@ -1527,7 +1543,9 @@ export class StreamParser {
           }
         }]
       });
+      sent += 1;
     });
+    return sent;
   }
 
   sendTerminalChunk(finishReason) {

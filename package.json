@@ -1,6 +1,6 @@
 {
   "name": "ai-free",
-  "version": "0.4.19",
+  "version": "0.4.20",
   "description": "Free local AI client for DeepSeek, Qwen, ChatGPT and EconomyOS with OpenAI-compatible API, CLI, code agent, memory and skills.",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
@@ -63,7 +63,7 @@
     "save-creds": "node ./bin/deepseek.mjs --save-creds",
     "check": "node ./bin/deepseek.mjs --check",
     "check:ci": "node ./scripts/check-ci-invariants.mjs",
-    "test": "node --test"
+    "test": "node --test test/*.test.mjs"
   },
   "engines": {
     "node": ">=18"

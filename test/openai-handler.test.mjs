@@ -4,6 +4,7 @@ import { strict as assert } from "node:assert";
 
 import {
   buildPromptFromChatBody,
+  handleQwenStream,
   handleRequest,
   requestSearchEnabled,
   StreamParser,
@@ -151,6 +152,20 @@ describe("OpenAI-compatible handler", () => {
     assert.equal(events.at(-1).choices[0].finish_reason, "stop");
   });
 
+  it("does not terminate an empty tool_calls block as a successful tool turn", () => {
+    const res = makeWritableResponse();
+    const parser = new StreamParser("qwen3.7-max", res);
+
+    parser.onText("```tool_calls\n[]\n```");
+    parser.onEnd();
+
+    const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
+    const content = events.map((event) => event.choices[0].delta.content || "").join("");
+    assert.match(content, /tool call|инструмент/i);
+    assert.equal(events.some((event) => event.choices[0].delta.tool_calls?.length), false);
+    assert.equal(events.at(-1).choices[0].finish_reason, "stop");
+  });
+
   it("never terminates an empty stream without an explanatory content delta", () => {
     const res = makeWritableResponse();
     const parser = new StreamParser("deepseek-v4-pro", res);
@@ -163,6 +178,35 @@ describe("OpenAI-compatible handler", () => {
       events.map((event) => event.choices[0].delta.content || "").join(""),
       /empty|without response|пуст/i,
     );
+    assert.equal(events.at(-1).choices[0].finish_reason, "stop");
+  });
+
+  it("retries an empty Qwen stream in a fresh chat before closing OpenAI SSE", async () => {
+    const res = makeWritableResponse();
+    const chatIds = [];
+    let attempts = 0;
+    const client = {
+      async complete({ chatId, onText }) {
+        attempts += 1;
+        chatIds.push(chatId);
+        if (attempts === 1) {
+          return { text: "Qwen returned service events only", lastMessageId: null };
+        }
+        onText("working response");
+        return { text: "working response", lastMessageId: "response-2" };
+      },
+    };
+    let chatNumber = 0;
+
+    await handleQwenStream(client, null, "hello", "qwen3.7-max", "qwen3.7-max", res, {
+      createChat: async () => `chat-${++chatNumber}`,
+    });
+
+    const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
+    const content = events.map((event) => event.choices[0].delta.content || "").join("");
+    assert.equal(attempts, 2);
+    assert.deepEqual(chatIds, ["chat-1", "chat-2"]);
+    assert.equal(content, "working response");
     assert.equal(events.at(-1).choices[0].finish_reason, "stop");
   });
 
