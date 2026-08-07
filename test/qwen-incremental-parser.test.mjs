@@ -26,6 +26,19 @@ describe("qwen incremental parser", () => {
     assert.equal(result.text, "Hello");
   });
 
+  it("reports whether a raw chunk produced useful assistant text", () => {
+    const parser = createQwenIncrementalParser();
+
+    assert.equal(
+      parser.push('data: {"response.created":{"response_id":"primary","response_index":0}}\n\n'),
+      false,
+    );
+    assert.equal(
+      parser.push('data: {"choices":[{"delta":{"content":"Hello"}}],"response_id":"primary"}\n\n'),
+      true,
+    );
+  });
+
   it("separates thinking from answer", () => {
     const thinking = [];
     const answer = [];

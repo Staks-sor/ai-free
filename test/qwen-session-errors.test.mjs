@@ -9,7 +9,11 @@ import {
   isQwenSessionExpiredText,
 } from "../src/providers/qwen/session-errors.mjs";
 import { isQwenAuthError } from "../src/providers/qwen/auth-manager.mjs";
-import { formatQwenUserFacingError, isQwenTransientBrowserTransportError } from "../src/providers/qwen/client.mjs";
+import {
+  formatQwenUserFacingError,
+  isQwenTransientBrowserTransportError,
+  throwIfQwenFirstContentTimeout,
+} from "../src/providers/qwen/client.mjs";
 
 describe("qwen session errors", () => {
   it("treats Bad_Request internal error as anti-bot, not expired session", () => {
@@ -49,5 +53,15 @@ describe("qwen session errors", () => {
   it("detects browser navigation loss as a transient transport error", () => {
     const error = new Error("page.evaluate: Execution context was destroyed, most likely because of a navigation.");
     assert.equal(isQwenTransientBrowserTransportError(error), true);
+  });
+
+  it("classifies a stream with no response content as retryable empty output", () => {
+    assert.throws(
+      () => throwIfQwenFirstContentTimeout({
+        status: 0,
+        text: "__fetch_error__: Error: qwen_stream_first_content_timeout",
+      }),
+      (error) => error?.code === "EMPTY_UPSTREAM_STREAM",
+    );
   });
 });

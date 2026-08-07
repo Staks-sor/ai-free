@@ -903,6 +903,7 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
         break;
       } catch (error) {
         lastError = error;
+        if (error?.code === "EMPTY_UPSTREAM_STREAM") throw error;
         if (sawDelta || attempt >= 1 || typeof refreshClient !== "function") throw error;
         logQwenTiming(requestId, "retry_before_first_delta", {
           attempt: attempt + 1,

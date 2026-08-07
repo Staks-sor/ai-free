@@ -210,6 +210,43 @@ describe("OpenAI-compatible handler", () => {
     assert.equal(events.at(-1).choices[0].finish_reason, "stop");
   });
 
+  it("retries a Qwen first-content timeout in a fresh chat without refreshing auth", async () => {
+    const res = makeWritableResponse();
+    const chatIds = [];
+    let attempts = 0;
+    let refreshes = 0;
+    const client = {
+      async complete({ chatId, onText }) {
+        attempts += 1;
+        chatIds.push(chatId);
+        if (attempts === 1) {
+          const error = new Error("Qwen stream produced no response content before timeout.");
+          error.code = "EMPTY_UPSTREAM_STREAM";
+          throw error;
+        }
+        onText("recovered response");
+        return { text: "recovered response", lastMessageId: "response-2" };
+      },
+    };
+    let chatNumber = 0;
+
+    await handleQwenStream(client, null, "hello", "qwen3.7-plus", "qwen3.7-plus", res, {
+      createChat: async () => `chat-${++chatNumber}`,
+      refreshClient: async () => {
+        refreshes += 1;
+        return client;
+      },
+    });
+
+    const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
+    const content = events.map((event) => event.choices[0].delta.content || "").join("");
+    assert.equal(attempts, 2);
+    assert.equal(refreshes, 0);
+    assert.deepEqual(chatIds, ["chat-1", "chat-2"]);
+    assert.equal(content, "recovered response");
+    assert.equal(events.at(-1).choices[0].finish_reason, "stop");
+  });
+
   it("maps tool result ids back to tool names and explains validation recovery", () => {
     const prompt = buildPromptFromChatBody({
       tools: [{

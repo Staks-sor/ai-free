@@ -25,6 +25,7 @@ const QWEN_NAV_TIMEOUT_MS = Number(process.env.QWEN_NAV_TIMEOUT_MS || 90_000);
 const QWEN_READY_DELAY_MS = Number(process.env.QWEN_READY_DELAY_MS || 3000);
 const QWEN_READY_POLL_MS = Number(process.env.QWEN_READY_POLL_MS || 100);
 const QWEN_FETCH_TIMEOUT_MS = Number(process.env.QWEN_FETCH_TIMEOUT_MS || 120_000);
+const QWEN_STREAM_FIRST_CONTENT_TIMEOUT_MS = Number(process.env.QWEN_STREAM_FIRST_CONTENT_TIMEOUT_MS || 20_000);
 const QWEN_STREAM_IDLE_TIMEOUT_MS = Number(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS || 45_000);
 const QWEN_PROXY_MAX_ATTEMPTS = Math.max(1, Math.min(5, Number(process.env.QWEN_PROXY_MAX_ATTEMPTS || 3)));
 const QWEN_BROWSER_CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.QWEN_BROWSER_CONCURRENCY || 1)));
@@ -131,7 +132,7 @@ async function createProxy({ debug }) {
 
   let rawStreamHandler = null;
   await context.exposeFunction("__qwenRawStreamChunk", async (chunk) => {
-    if (typeof rawStreamHandler === "function") rawStreamHandler(chunk);
+    return typeof rawStreamHandler === "function" && rawStreamHandler(chunk) === true;
   });
 
   // auth.json может быть свежее профиля (import-qwen, silent refresh). Подмешиваем куки до goto.
@@ -434,10 +435,11 @@ async function createProxy({ debug }) {
     return result;
   }
 
-  async function runProxyFetchStream(worker, { url, body, chatId, onRawChunk, timeoutMs, streamIdleTimeoutMs, maxAttempts }) {
+  async function runProxyFetchStream(worker, { url, body, chatId, onRawChunk, timeoutMs, streamFirstContentTimeoutMs, streamIdleTimeoutMs, maxAttempts }) {
     let result = null;
     let lastError = null;
     const fetchTimeoutMs = Number(timeoutMs || QWEN_FETCH_TIMEOUT_MS);
+    const firstContentTimeoutMs = Number(streamFirstContentTimeoutMs || QWEN_STREAM_FIRST_CONTENT_TIMEOUT_MS);
     const idleTimeoutMs = Number(streamIdleTimeoutMs || QWEN_STREAM_IDLE_TIMEOUT_MS);
     const attempts = Math.max(1, Math.min(5, Number(maxAttempts || QWEN_PROXY_MAX_ATTEMPTS)));
     rawStreamHandler = typeof onRawChunk === "function" ? onRawChunk : null;
@@ -453,7 +455,7 @@ async function createProxy({ debug }) {
             : "application/json, text/plain, */*";
           result = await Promise.race([
             worker.page.evaluate(
-              async ({ url, body, fetchTimeoutMs, streamIdleTimeoutMs, requestId, accept, isCompletionRequest, authToken }) => {
+              async ({ url, body, fetchTimeoutMs, streamFirstContentTimeoutMs, streamIdleTimeoutMs, requestId, accept, isCompletionRequest, authToken }) => {
                 const requestUrl = new URL(url);
                 const sameOrigin = requestUrl.origin === window.location.origin;
                 const fetchUrl = sameOrigin ? `${requestUrl.pathname}${requestUrl.search}` : url;
@@ -476,20 +478,32 @@ async function createProxy({ debug }) {
                   const reader = res.body.getReader();
                   const decoder = new TextDecoder();
                   let text = "";
+                  let hasMeaningfulContent = false;
+                  const firstContentDeadline = Date.now() + streamFirstContentTimeoutMs;
                   try {
                     while (true) {
                       let chunk;
                       try {
-                        chunk = await readWithTimeout(reader, streamIdleTimeoutMs);
+                        chunk = await readWithTimeout(
+                          reader,
+                          hasMeaningfulContent
+                            ? streamIdleTimeoutMs
+                            : Math.max(1, firstContentDeadline - Date.now()),
+                        );
                       } catch (error) {
-                        if (String(error?.message || error) === "qwen_stream_idle_timeout" && text) break;
+                        if (!hasMeaningfulContent && String(error?.message || error) === "qwen_stream_idle_timeout") {
+                          error = new Error("qwen_stream_first_content_timeout");
+                        }
+                        try { await reader.cancel(error?.message || "qwen_stream_timeout"); } catch {}
+                        try { controller.abort(error?.message || "qwen_stream_timeout"); } catch {}
+                        if (String(error?.message || error) === "qwen_stream_idle_timeout" && hasMeaningfulContent) break;
                         throw error;
                       }
                       const { done, value } = chunk;
                       if (done) break;
                       const piece = decoder.decode(value, { stream: true });
                       text += piece;
-                      if (piece) await window.__qwenRawStreamChunk(piece);
+                      if (piece && await window.__qwenRawStreamChunk(piece)) hasMeaningfulContent = true;
                       if (isHtmlResponse && text) {
                         try { await reader.cancel(); } catch {}
                         break;
@@ -502,7 +516,7 @@ async function createProxy({ debug }) {
                     const tail = decoder.decode();
                     if (tail) {
                       text += tail;
-                      await window.__qwenRawStreamChunk(tail);
+                      if (await window.__qwenRawStreamChunk(tail)) hasMeaningfulContent = true;
                     }
                   } finally {
                     try { reader.releaseLock(); } catch {}
@@ -563,7 +577,7 @@ async function createProxy({ debug }) {
                   clearTimeout(timeoutId);
                 }
               },
-              { url, body, fetchTimeoutMs, streamIdleTimeoutMs: idleTimeoutMs, requestId, accept, isCompletionRequest, authToken },
+              { url, body, fetchTimeoutMs, streamFirstContentTimeoutMs: firstContentTimeoutMs, streamIdleTimeoutMs: idleTimeoutMs, requestId, accept, isCompletionRequest, authToken },
             ),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error("qwen_page_evaluate_timeout")), fetchTimeoutMs + 5000),
@@ -613,7 +627,7 @@ async function createProxy({ debug }) {
         maxAttempts,
       }));
     },
-    async proxyFetchStream({ url, body, chatId, onRawChunk, timeoutMs, streamIdleTimeoutMs, maxAttempts }) {
+    async proxyFetchStream({ url, body, chatId, onRawChunk, timeoutMs, streamFirstContentTimeoutMs, streamIdleTimeoutMs, maxAttempts }) {
       const worker = pickWorker(chatId);
       return enqueue(worker, () => runProxyFetchStream(worker, {
         url,
@@ -621,6 +635,7 @@ async function createProxy({ debug }) {
         chatId,
         onRawChunk,
         timeoutMs,
+        streamFirstContentTimeoutMs,
         streamIdleTimeoutMs,
         maxAttempts,
       }));

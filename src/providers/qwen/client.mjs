@@ -38,6 +38,14 @@ export function isQwenTransientBrowserTransportError(error) {
   return /Execution context was destroyed|most likely because of a navigation|Target closed|Page closed|Context closed|Timeout .* exceeded|qwen_page_evaluate_timeout|net::ERR_ABORTED|Failed to fetch|request is finished/i.test(message);
 }
 
+export function throwIfQwenFirstContentTimeout(result) {
+  if (Number(result?.status) !== 0) return;
+  if (!/qwen_stream_first_content_timeout/i.test(String(result?.text || ""))) return;
+  const error = new Error("Qwen stream produced no response content before timeout.");
+  error.code = "EMPTY_UPSTREAM_STREAM";
+  throw error;
+}
+
 function throwIfQwenAuthFailure(status, text, context) {
   try {
     throwIfQwenSessionExpiredFromHttp(status, text, context);
@@ -458,9 +466,11 @@ export class QwenChatClient {
               body: bodyStr,
               chatId,
               onRawChunk: (chunk) => streamParser.push(chunk),
+              maxAttempts: 1,
             })
             : await proxy.proxyFetch({ url, body: bodyStr, chatId });
 
+          throwIfQwenFirstContentTimeout(result);
           providerLogger.info("provider.qwen.response", {
             operation: "completion",
             transport: "browser",
@@ -732,6 +742,7 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
 
   return {
     push(chunk) {
+      const textLengthBefore = fullText.length;
       buffer += String(chunk || "");
       let boundary;
       while ((boundary = buffer.indexOf("\n\n")) >= 0) {
@@ -739,6 +750,7 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
         buffer = buffer.slice(boundary + 2);
         if (error) break;
       }
+      return fullText.length > textLengthBefore;
     },
     finish(rawFallback = "") {
       if (buffer.trim()) consumeEvent(buffer);

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.21
+
+- Added a dedicated Qwen stream first-content timeout and one fresh-chat retry for stalled OpenAI-compatible requests.
+- Prevented redundant browser retries and authentication refreshes after a Qwen stream produces no data.
+
 ## 0.4.20
 
 - Retries a Qwen OpenAI-compatible stream in a fresh server-issued chat when the first upstream attempt contains no response delta.
