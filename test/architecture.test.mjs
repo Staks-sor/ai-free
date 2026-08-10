@@ -4,11 +4,7 @@ import { strict as assert } from "node:assert";
 
 import { AI_FREE_VERSION as ROOT_VERSION } from "../src/config.mjs";
 import { AI_FREE_VERSION as PLUGIN_VERSION } from "../plugin-for-vscode/src/config.mjs";
-import {
-  ECONOMYOS_FALLBACK_MODELS,
-  OPENAI_COMPAT_MODELS,
-  uiModelCatalog,
-} from "../src/providers/model-catalog.mjs";
+import { OPENAI_COMPAT_MODELS, uiModelCatalog } from "../src/providers/model-catalog.mjs";
 import {
   MODELS as API_MODELS,
   modelsList,
@@ -73,6 +69,26 @@ describe("architecture invariants", () => {
     );
   });
 
+  it("does not expose the removed EconomyOS provider", () => {
+    assert.equal(Object.hasOwn(uiModelCatalog().providers, "economyos"), false);
+    assert.equal(modelsList().data.some((model) => model.owned_by === "economyos"), false);
+    assert.equal(OPENAI_COMPAT_MODELS.some((model) => model.provider === "economyos"), false);
+  });
+
+  it("keeps the current Qwen flagship in the offline fallback catalog", () => {
+    assert.ok(uiModelCatalog().providers.qwen.models.some((model) => model.id === "qwen3.8-max"));
+    assert.equal(uiModelCatalog().providers.qwen.models.some((model) => model.id === "qwen3.8-max-preview"), false);
+  });
+
+  it("replaces stale Qwen fallback models with the live API catalog", () => {
+    const liveQwen = [{ id: "qwen4-preview", label: "Qwen4 Preview" }];
+    const ids = modelsList({ qwen: { models: liveQwen } }).data
+      .filter((model) => model.owned_by === "qwen")
+      .map((model) => model.id);
+
+    assert.deepEqual(ids, ["qwen4-preview"]);
+  });
+
   it("exposes non-legacy catalog models in the UI catalog", () => {
     const uiIds = Object.values(uiModelCatalog().providers)
       .flatMap((provider) => provider.models.map((model) => model.id))
@@ -82,15 +98,6 @@ describe("architecture invariants", () => {
       .map((model) => model.name)
       .sort();
     assert.deepEqual(uiIds, expected);
-  });
-
-  it("keeps EconomyOS model selection available when its live catalog is offline", () => {
-    assert.ok(ECONOMYOS_FALLBACK_MODELS.length > 1);
-    assert.ok(ECONOMYOS_FALLBACK_MODELS.some((model) => model.id === "openai-gpt-56-sol-pro"));
-    assert.equal(
-      uiModelCatalog().providers.economyos.models.length,
-      ECONOMYOS_FALLBACK_MODELS.length,
-    );
   });
 
   it("exposes current ChatGPT modes and hides retired ChatGPT models", () => {
@@ -110,6 +117,6 @@ describe("architecture invariants", () => {
     assert.equal(ROOT_VERSION, rootPackage.version);
     assert.equal(PLUGIN_VERSION, pluginPackage.version);
     assert.equal(ROOT_VERSION, PLUGIN_VERSION);
-    assert.equal(ROOT_VERSION, "0.4.21");
+    assert.equal(ROOT_VERSION, "0.4.22");
   });
 });

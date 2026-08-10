@@ -87,7 +87,7 @@ describe("structured file logging", () => {
     const logger = createFileLogger({ component: "span", logDir });
 
     const successful = withLogSpan(logger, "provider.complete", async (value) => value * 2, {
-      details: (value) => ({ provider: "economyos", inputSize: String(value).length }),
+      details: (value) => ({ provider: "qwen", inputSize: String(value).length }),
     });
     assert.equal(await successful(21), 42);
 

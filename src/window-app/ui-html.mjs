@@ -1146,12 +1146,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const info = PROVIDER_INFO[id];
       if (!info) return;
       const label = info.label;
-      if (id === "economyos") {
-        closeNewChatModal();
-        await openSettings("api");
-        setStatus(t("settings.economyConnectHint"), false);
-        return;
-      }
       const providerButton = newChatProviderPicker.querySelector('[data-provider="' + id + '"] .reconnectLink');
       if (providerButton?.disabled) return;
       const confirmKey = id === "chatgpt" ? "provider.chatgptConnectConfirm" : "provider.connectConfirm";
@@ -1373,6 +1367,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           setStatus("");
         }
 
+        if (sendProvider === "qwen" && imageFiles.length) {
+          throw new Error(t("file.qwenImageUnsupported"));
+        }
+
         messageInput.value = "";
         // Сбросить авто-рост на исходную высоту (но если юзер тянул руками — оставить).
         if (!userResizedInput) messageInput.style.height = "";
@@ -1387,13 +1385,12 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         });
         renderConversation(activeConversation);
 
-        // Картинки. ChatGPT обрабатывает их сам через веб-сессию — передаём inline,
-        // НЕ гоняя через DeepSeek. Для DeepSeek/Qwen — старый путь через /api/upload
-        // (получаем file_id для vision-completion).
+        // ChatGPT получает картинки inline. DeepSeek загружает их и передаёт
+        // полученные file_id в vision-completion.
         const refFileIds = [];
         let inlineImages = [];
         if (imageFiles.length) {
-          if (sendProvider === "chatgpt" || sendProvider === "economyos") {
+          if (sendProvider === "chatgpt") {
             inlineImages = imageFiles.map((img) => ({
               name: img.name,
               mimeType: img.mimeType,
@@ -1434,7 +1431,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           })),
         };
 
-        if (["qwen", "chatgpt", "deepseek", "economyos"].includes(sendProvider)) {
+        if (["qwen", "chatgpt", "deepseek"].includes(sendProvider)) {
           await postStreamingMessage(sentConvId, messageBody, sendProvider);
           return;
         }
@@ -2997,7 +2994,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, economyOS, ui, telegram }, initialTab) {
+    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui, telegram }, initialTab) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
@@ -3049,7 +3046,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderTelegramSettings(panels.telegram, telegram || {});
       renderUpdateSettings(panels.update);
       renderOpenAISettings(panels.api, openAICompat);
-      renderEconomyOSSettings(panels.api, economyOS || {});
       renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
       for (const key of order) {
         const items = groups[key];
@@ -3942,7 +3938,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const keys = info.apiKeys || {};
       keyList.appendChild(makeApiKeyRow("deepseek", "DeepSeek", keys.deepseek || ""));
       keyList.appendChild(makeApiKeyRow("qwen", "Qwen", keys.qwen || ""));
-      keyList.appendChild(makeApiKeyRow("economyos", "EconomyOS proxy", keys.economyos || ""));
       groupEl.appendChild(keyList);
 
       const note = document.createElement("div");
@@ -3974,88 +3969,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       note.textContent = t("settings.anthropicNote", { models: (info.models || []).join(", ") });
       groupEl.appendChild(note);
 
-      target.appendChild(groupEl);
-    }
-
-    function renderEconomyOSSettings(target, info) {
-      const groupEl = document.createElement("div");
-      groupEl.className = "settingsGroup apiSettings";
-
-      const heading = document.createElement("h3");
-      heading.textContent = t("settings.economyTitle");
-      groupEl.appendChild(heading);
-
-      const hint = document.createElement("div");
-      hint.className = "apiModels";
-      hint.textContent = t("settings.economyHint");
-      groupEl.appendChild(hint);
-
-      const grid = document.createElement("div");
-      grid.className = "apiSettingsGrid";
-      grid.appendChild(makeApiField(t("settings.baseUrl"), info.baseUrl || "https://compute.virtuals.io/v1"));
-      groupEl.appendChild(grid);
-
-      const field = document.createElement("label");
-      field.className = "formField";
-      const fieldLabel = document.createElement("span");
-      fieldLabel.textContent = t("settings.economyApiKey");
-      const input = document.createElement("input");
-      input.type = "password";
-      input.autocomplete = "off";
-      input.placeholder = info.configured ? t("settings.economyConfigured") : "VIRTUALS_API_KEY";
-      input.disabled = info.source === "environment";
-      field.append(fieldLabel, input);
-      groupEl.appendChild(field);
-
-      const actions = document.createElement("div");
-      actions.className = "settingsActions economyActions";
-      const portal = document.createElement("a");
-      portal.className = "iconBtn";
-      portal.href = "https://app.virtuals.io/acp/agents";
-      portal.target = "_blank";
-      portal.rel = "noreferrer";
-      portal.textContent = t("settings.economyGetKey");
-      actions.appendChild(portal);
-
-      if (info.configured) {
-        const disconnect = document.createElement("button");
-        disconnect.type = "button";
-        disconnect.className = "iconBtn dangerBtn";
-        disconnect.textContent = t("settings.economyDisconnect");
-        disconnect.disabled = info.source === "environment";
-        disconnect.addEventListener("click", async () => {
-          await api("/api/settings/economyos", { method: "DELETE" });
-          const next = await api("/api/settings");
-          renderSettings(next, "api");
-          setStatus(t("settings.economyDisconnected"), false);
-        });
-        actions.appendChild(disconnect);
-      } else {
-        const connect = document.createElement("button");
-        connect.type = "button";
-        connect.className = "iconBtn primaryBtn";
-        connect.textContent = t("settings.economyConnect");
-        connect.addEventListener("click", async () => {
-          const apiKey = input.value.trim();
-          if (!apiKey) return setStatus(t("settings.economyKeyRequired"), true);
-          connect.disabled = true;
-          try {
-            await api("/api/settings/economyos", { method: "PUT", body: { apiKey } });
-            input.value = "";
-            const next = await api("/api/settings");
-            renderSettings(next, "api");
-            await refreshAvailableProviders();
-            setStatus(t("settings.economyConnected"), false);
-          } catch (error) {
-            setStatus(t("settings.economyConnectFailed", { message: error.message }), true);
-          } finally {
-            connect.disabled = false;
-          }
-        });
-        actions.appendChild(connect);
-      }
-
-      groupEl.appendChild(actions);
       target.appendChild(groupEl);
     }
 

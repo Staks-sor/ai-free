@@ -46,10 +46,10 @@ intellijPlatform {
             url = "https://github.com/Staks-sor/ai-free"
         }
         description = """
-            AI Free inside PyCharm: DeepSeek, Qwen, ChatGPT and EconomyOS chats,
+            AI Free inside PyCharm: DeepSeek, Qwen and ChatGPT chats,
             coding agents, project tools, memory, voice input and local APIs.
         """.trimIndent()
-        changeNotes = "Replaced internal IntelliJ Platform API usage with standard Java runtime discovery."
+        changeNotes = "Removed EconomyOS, added live Qwen model discovery and Qwen3.8 Max, improved slow-stream handling, and fixed cross-platform runtime/JCEF startup."
     }
     pluginVerification {
         ides {

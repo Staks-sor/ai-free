@@ -22,10 +22,10 @@
   <img src="https://img.shields.io/github/package-json/v/Staks-sor/ai-free?style=flat-square&amp;label=संस्करण" alt="संस्करण">
   <img src="https://img.shields.io/badge/प्लेटफ़ॉर्म-macOS%20%7C%20Linux%20%7C%20Windows-8250df?style=flat-square" alt="macOS, Linux, Windows">
   <img src="https://img.shields.io/badge/Node.js-18%2B-1f883d?style=flat-square" alt="Node.js 18+">
-  <img src="https://img.shields.io/badge/प्रदाता-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20EconomyOS-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, EconomyOS">
+  <img src="https://img.shields.io/badge/प्रदाता-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
 </p>
 
-<p align="center"><strong>AI Free 0.4.21</strong></p>
+<p align="center"><strong>AI Free 0.4.22</strong></p>
 
 > मुफ्त AI वेब चैट को एक इंटरफ़ेस में लाने वाला CLI और डेस्कटॉप ऐप। फिलहाल **DeepSeek, Qwen और ChatGPT** समर्थित हैं। macOS, Linux और Windows पर चलता है।
 

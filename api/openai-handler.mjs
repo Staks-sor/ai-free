@@ -23,6 +23,7 @@ import { findModel, modelsList } from "./models.mjs";
 import { readQwenAuth } from "../src/providers/qwen/auth-files.mjs";
 import { QWEN_AUTH_FILE } from "../src/providers/qwen/config.mjs";
 import { QwenChatClient } from "../src/providers/qwen/client.mjs";
+import { getQwenLiveCatalogOverride } from "../src/providers/qwen/model-sync.mjs";
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
@@ -30,8 +31,6 @@ import { normalizeToolCallsForSchemas, parseModelToolCalls } from "./tool-calls.
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
-import { EconomyOSClient } from "../src/providers/economyos/client.mjs";
-import { getEconomyOSSettings } from "../src/state/settings.mjs";
 import { createFileLogger } from "../src/logging/logger.mjs";
 import { runWithEmptyStreamRetry } from "./stream-retry.mjs";
 
@@ -93,25 +92,13 @@ async function getChatGPTClient() {
   return chatgptClient;
 }
 
-let economyOSClient = null;
-async function getEconomyOSClient() {
-  const config = getEconomyOSSettings();
-  if (!config.apiKey) {
-    throw new Error("EconomyOS не подключён. Добавьте свой ключ в Настройки → API.");
-  }
-  if (economyOSClient?.apiKey === config.apiKey && economyOSClient?.baseUrl === config.baseUrl) {
-    return economyOSClient;
-  }
-  economyOSClient = new EconomyOSClient(config);
-  return economyOSClient;
-}
-
 export async function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === "GET" && url.pathname === "/v1/models") {
     const provider = req.openAICompatProvider || null;
-    const list = modelsList();
+    const qwen = provider === "qwen" ? await getQwenLiveCatalogOverride() : null;
+    const list = modelsList(qwen ? { qwen } : {});
     if (!provider) return sendJson(res, list);
     return sendJson(res, {
       ...list,
@@ -158,7 +145,24 @@ async function handleChatCompletions(req, res) {
 
   console.log(`[API] POST /v1/chat/completions (model: ${modelName}, stream: ${Boolean(body.stream)}, tools: ${body.tools ? body.tools.length : 0})`);
 
-  const mapping = findModel(modelName);
+  let mapping = findModel(modelName);
+  if (req.openAICompatProvider === "qwen") {
+    const liveQwen = await getQwenLiveCatalogOverride();
+    if (liveQwen) {
+      const liveModel = liveQwen.models.find((model) => model.id === modelName);
+      if (!liveModel) {
+        return sendError(res, 404, `Qwen model '${modelName}' is not available for the current account. Refresh /v1/models and select an active model.`);
+      }
+      mapping = {
+        name: liveModel.id,
+        provider: "qwen",
+        model: liveModel.id,
+        label: liveModel.label,
+        reasoning: liveModel.reasoning === true,
+        vision: liveModel.vision === true,
+      };
+    }
+  }
   if (!mapping) return sendError(res, 404, `Unknown model: ${modelName}`);
   if (req.openAICompatProvider && mapping.provider !== req.openAICompatProvider) {
     return sendError(
@@ -187,6 +191,15 @@ async function handleChatCompletions(req, res) {
   const search = requestSearchEnabled(body);
   const prompt = search ? withWebSearchInstruction(basePrompt) : basePrompt;
   const thinking = requestThinkingEnabled(body, mapping);
+  const images = extractOpenAIChatImages(messages);
+
+  if (images.length && mapping.provider === "qwen") {
+    return sendError(
+      res,
+      400,
+      "Qwen image upload is not supported by the current web transport. Select DeepSeek V4 Vision or ChatGPT so the image is actually processed.",
+    );
+  }
 
   try {
     if (mapping.provider === "qwen") {
@@ -243,17 +256,33 @@ async function handleChatCompletions(req, res) {
       const client = await getDeepSeekClient();
       // DeepSeek: создаём сессию и отправляем completion.
       const sessionId = await client.createSession();
+      const refFileIds = [];
+      for (const image of images) {
+        refFileIds.push(await client.uploadFile(
+          Buffer.from(image.dataBase64, "base64"),
+          image.mimeType,
+          image.name,
+          { chatSessionId: sessionId },
+        ));
+      }
+      const deepSeekModel = refFileIds.length ? "vision" : mapping.model;
 
       if (body.stream === true) {
-        return handleDeepSeekStream(client, sessionId, prompt, modelName, mapping.model, res, { thinking, search, tools: body.tools });
+        return handleDeepSeekStream(client, sessionId, prompt, modelName, deepSeekModel, res, {
+          thinking: refFileIds.length ? false : thinking,
+          search: refFileIds.length ? false : search,
+          tools: body.tools,
+          refFileIds,
+        });
       }
 
       const result = await client.complete({
         sessionId,
         prompt,
-        modelType: mapping.model,
-        thinkingEnabled: thinking,
-        searchEnabled: search,
+        modelType: deepSeekModel,
+        thinkingEnabled: refFileIds.length ? false : thinking,
+        searchEnabled: refFileIds.length ? false : search,
+        refFileIds,
       });
       return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
     }
@@ -265,15 +294,8 @@ async function handleChatCompletions(req, res) {
       const result = await client.complete({
         prompt,
         model: mapping.model,
+        images,
       });
-      return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
-    }
-    if (mapping.provider === "economyos") {
-      const client = await getEconomyOSClient();
-      if (body.stream === true) {
-        return handleEconomyOSStream(client, prompt, modelName, mapping.model, res, { tools: body.tools });
-      }
-      const result = await client.complete({ prompt, model: mapping.model });
       return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
     }
     return sendError(res, 500, `Unknown provider: ${mapping.provider}`);
@@ -383,6 +405,7 @@ ${JSON.stringify(body.tools, null, 2)}
     }
   }
 
+  let imageNumber = 0;
   prompt += messages
     .map((m) => {
       if (m.role === "tool") {
@@ -392,7 +415,7 @@ ${JSON.stringify(body.tools, null, 2)}
       if (m.role === "system") {
         return `[SYSTEM]:\n${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`;
       }
-      let content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      let content = formatOpenAIMessageContent(m.content, () => `openai-image-${++imageNumber}`);
       if (m.role === "assistant" && m.tool_calls) {
         try {
           const tcs = m.tool_calls.map(tc => ({
@@ -417,6 +440,59 @@ Do not copy model identity from earlier assistant messages in the conversation h
   }
 
   return prompt;
+}
+
+const OPENAI_IMAGE_EXTENSIONS = new Map([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/jpg", "jpg"],
+  ["image/gif", "gif"],
+  ["image/webp", "webp"],
+  ["image/bmp", "bmp"],
+]);
+
+function parseInlineImageUrl(url) {
+  const match = String(url || "").match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\r\n]+)$/i);
+  if (!match) return null;
+  const mimeType = match[1].toLowerCase() === "image/jpg" ? "image/jpeg" : match[1].toLowerCase();
+  const extension = OPENAI_IMAGE_EXTENSIONS.get(mimeType);
+  if (!extension) return null;
+  const dataBase64 = match[2].replace(/\s+/g, "");
+  const size = Buffer.byteLength(dataBase64, "base64");
+  if (!size || size > 10 * 1024 * 1024) return null;
+  return { mimeType, extension, dataBase64 };
+}
+
+export function extractOpenAIChatImages(messages) {
+  const images = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (!Array.isArray(message?.content)) continue;
+    for (const part of message.content) {
+      if (part?.type !== "image_url") continue;
+      const parsed = parseInlineImageUrl(part.image_url?.url);
+      if (!parsed) continue;
+      images.push({
+        name: `openai-image-${images.length + 1}.${parsed.extension}`,
+        mimeType: parsed.mimeType,
+        dataBase64: parsed.dataBase64,
+      });
+    }
+  }
+  return images;
+}
+
+function formatOpenAIMessageContent(content, nextImageName) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return JSON.stringify(content);
+  return content.map((part) => {
+    if (typeof part?.text === "string") return part.text;
+    if (part?.type === "image_url") {
+      const parsed = parseInlineImageUrl(part.image_url?.url);
+      if (!parsed) return "[UNSUPPORTED IMAGE]";
+      return `[IMAGE: ${nextImageName()}.${parsed.extension}]`;
+    }
+    return JSON.stringify(part);
+  }).filter(Boolean).join("\n");
 }
 
 async function handleResponses(req, res) {
@@ -563,11 +639,6 @@ async function completeText(mapping, prompt, { thinking = false, search = false 
       prompt,
       model: mapping.model,
     });
-    return result.text || "";
-  }
-  if (mapping.provider === "economyos") {
-    const client = await getEconomyOSClient();
-    const result = await client.complete({ prompt, model: mapping.model });
     return result.text || "";
   }
 
@@ -969,30 +1040,13 @@ async function handleChatGPTStream(client, prompt, modelName, model, res, { tool
   }
 }
 
-async function handleEconomyOSStream(client, prompt, modelName, model, res, { tools = [] } = {}) {
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
-  const parser = new StreamParser(modelName, res, { tools });
-  try {
-    await client.complete({
-      prompt,
-      model,
-      onText: (textDelta) => parser.onText(textDelta),
-    });
-    parser.onEnd();
-    res.write("data: [DONE]\n\n");
-    res.end();
-  } catch (error) {
-    console.error("[API] EconomyOS stream error:", error.message);
-    sendStreamError(res, modelName, error.message);
-  }
-}
-
 // Обработка streaming-запроса к DeepSeek.
-async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res, { thinking = false, search = false, tools = [] } = {}) {
+async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res, {
+  thinking = false,
+  search = false,
+  tools = [],
+  refFileIds = [],
+} = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -1008,6 +1062,7 @@ async function handleDeepSeekStream(client, sessionId, prompt, modelName, model,
         modelType: model,
         thinkingEnabled: thinking,
         searchEnabled: search,
+        refFileIds,
         onText: onDelta,
       }),
       onDelta: (textDelta) => parser.onText(textDelta),

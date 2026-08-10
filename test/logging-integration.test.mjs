@@ -31,7 +31,7 @@ describe("persistent logging integration", () => {
   });
 
   it("records provider requests, retries, statuses and failures", () => {
-    for (const provider of ["deepseek", "qwen", "chatgpt", "economyos"]) {
+    for (const provider of ["deepseek", "qwen", "chatgpt"]) {
       const source = read(`src/providers/${provider}/client.mjs`);
       assert.match(source, new RegExp(`provider\\.${provider}\\.request`), provider);
       assert.match(source, new RegExp(`provider\\.${provider}\\.error`), provider);
@@ -47,7 +47,6 @@ describe("persistent logging integration", () => {
       "providers/deepseek/client.mjs",
       "providers/qwen/client.mjs",
       "providers/chatgpt/client.mjs",
-      "providers/economyos/client.mjs",
     ];
     for (const file of files) {
       assert.equal(read(`plugin-for-vscode/src/${file}`), read(`src/${file}`), file);

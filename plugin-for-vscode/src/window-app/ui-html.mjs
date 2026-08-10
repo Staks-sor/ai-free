@@ -26,6 +26,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     <aside class="sidebar">
       <nav class="sidebarMenu" aria-label="${t("sidebar.menu")}">
         <button type="button" id="sidebarMenuPlugins" class="sidebarMenuBtn">${t("sidebar.plugins")}</button>
+        <button type="button" id="sidebarMenuTelegram" class="sidebarMenuBtn">${t("sidebar.telegram")}</button>
       </nav>
       <div class="sideHead">
         <div class="brand">${t("app.workspace")}</div>
@@ -152,6 +153,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           </div>
         </div>
       </div>
+      <div id="updateToast" class="updateToast hidden" aria-hidden="true">
+        <button id="updateToastDismiss" class="updateToastClose" type="button" aria-label="${t("app.close")}">✕</button>
+        <div class="updateToastTitle">Появилось новое обновление</div>
+        <div id="updateToastMeta" class="updateToastMeta">${t("update.available")}</div>
+        <div id="updateToastStatus" class="updateToastStatus"></div>
+        <button id="updateToastDownload" class="updateToastDownload" type="button">Скачать</button>
+      </div>
       <div id="chatList" class="chatList"></div>
     </aside>
       <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
@@ -198,6 +206,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             <div class="pipelineSub">${t("pipeline.sub")}</div>
           </div>
           <button id="pipelineClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
+        </div>
+        <div class="pipelineTeamActions">
+          <button id="pipelineMakeLeader" class="iconBtn" type="button">${t("pipeline.makeLeader")}</button>
+          <button id="pipelineAddAgent" class="iconBtn primaryBtn" type="button">${t("pipeline.addAgent")}</button>
         </div>
         <div id="pipelineBody" class="pipelineBody"></div>
       </div>
@@ -326,6 +338,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const activeTitle = document.getElementById("activeTitle");
     const workspace = document.getElementById("workspace");
     const statusEl = document.getElementById("status");
+    const updateToast = document.getElementById("updateToast");
+    const updateToastDismiss = document.getElementById("updateToastDismiss");
+    const updateToastDownload = document.getElementById("updateToastDownload");
+    const updateToastMeta = document.getElementById("updateToastMeta");
+    const updateToastStatus = document.getElementById("updateToastStatus");
     const messageInput = document.getElementById("messageInput");
     const sendBtn = document.getElementById("sendBtn");
     const stopBtn = document.getElementById("stopBtn");
@@ -334,14 +351,18 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const pipelineBody = document.getElementById("pipelineBody");
     const pipelinePanelBtn = document.getElementById("pipelinePanelBtn");
     const pipelineClose = document.getElementById("pipelineClose");
+    const pipelineMakeLeader = document.getElementById("pipelineMakeLeader");
+    const pipelineAddAgent = document.getElementById("pipelineAddAgent");
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
     const THEME_KEY = "deepseek.theme";
+    const EXTERNAL_STATE_POLL_MS = 2500;
     const THEMES = [
       { id: "dark", label: t("theme.dark"), icon: "◐" },
       { id: "light", label: t("theme.light"), icon: "☼" },
       { id: "contrast", label: t("theme.contrast"), icon: "◑" },
     ];
+    let availableUpdateCheck = null;
 
     function isMessagesNearBottom() {
       return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 80;
@@ -361,12 +382,30 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     setupSidebarResize();
     applySavedComposerHeight();
     setupComposerResize();
+    setupExternalStatePolling();
 
     // The update modal is declared near the refresh button, but it must render as a
     // window-level overlay instead of being clipped by the sidebar.
     document.body.appendChild(updateConfirmOverlay);
 
     document.getElementById("refreshBtn").addEventListener("click", loadState);
+    updateToastDismiss.addEventListener("click", () => {
+      updateToast.classList.add("hidden");
+      updateToast.setAttribute("aria-hidden", "true");
+    });
+    updateToastDownload.addEventListener("click", async () => {
+      updateToastDownload.disabled = true;
+      updateToastStatus.textContent = t("update.installing");
+      try {
+        const result = await installAvailableUpdate(availableUpdateCheck, { restart: true });
+        if (result?.after) renderUpdateToast(result.after);
+      } catch (err) {
+        updateToastStatus.textContent = t("update.installFailed", { message: err.message });
+        setStatus(err.message, true);
+      } finally {
+        updateToastDownload.disabled = false;
+      }
+    });
 
 
     function closeDeleteChatModal(confirmed = false) {
@@ -1107,12 +1146,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const info = PROVIDER_INFO[id];
       if (!info) return;
       const label = info.label;
-      if (id === "economyos") {
-        closeNewChatModal();
-        await openSettings("api");
-        setStatus(t("settings.economyConnectHint"), false);
-        return;
-      }
       const providerButton = newChatProviderPicker.querySelector('[data-provider="' + id + '"] .reconnectLink');
       if (providerButton?.disabled) return;
       const confirmKey = id === "chatgpt" ? "provider.chatgptConnectConfirm" : "provider.connectConfirm";
@@ -1334,6 +1367,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           setStatus("");
         }
 
+        if (sendProvider === "qwen" && imageFiles.length) {
+          throw new Error(t("file.qwenImageUnsupported"));
+        }
+
         messageInput.value = "";
         // Сбросить авто-рост на исходную высоту (но если юзер тянул руками — оставить).
         if (!userResizedInput) messageInput.style.height = "";
@@ -1348,13 +1385,12 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         });
         renderConversation(activeConversation);
 
-        // Картинки. ChatGPT обрабатывает их сам через веб-сессию — передаём inline,
-        // НЕ гоняя через DeepSeek. Для DeepSeek/Qwen — старый путь через /api/upload
-        // (получаем file_id для vision-completion).
+        // ChatGPT получает картинки inline. DeepSeek загружает их и передаёт
+        // полученные file_id в vision-completion.
         const refFileIds = [];
         let inlineImages = [];
         if (imageFiles.length) {
-          if (sendProvider === "chatgpt" || sendProvider === "economyos") {
+          if (sendProvider === "chatgpt") {
             inlineImages = imageFiles.map((img) => ({
               name: img.name,
               mimeType: img.mimeType,
@@ -1395,7 +1431,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           })),
         };
 
-        if (["qwen", "chatgpt", "deepseek", "economyos"].includes(sendProvider)) {
+        if (["qwen", "chatgpt", "deepseek"].includes(sendProvider)) {
           await postStreamingMessage(sentConvId, messageBody, sendProvider);
           return;
         }
@@ -1507,6 +1543,49 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       if (pollTimer) {
         clearInterval(pollTimer);
         pollTimer = null;
+      }
+    }
+    let externalStateRefreshing = false;
+    function setupExternalStatePolling() {
+      setInterval(refreshExternalState, EXTERNAL_STATE_POLL_MS);
+    }
+    function conversationSummaryChanged(prev, next) {
+      if (!prev || !next) return prev !== next;
+      return prev.updatedAt !== next.updatedAt || prev.messageCount !== next.messageCount;
+    }
+    function runningIdsChanged(prev = [], next = []) {
+      return prev.length !== next.length || prev.some((id, index) => id !== next[index]);
+    }
+    async function refreshExternalState() {
+      if (externalStateRefreshing || sending || shutdownStarted) return;
+      externalStateRefreshing = true;
+      try {
+        const nextState = await api("/api/state");
+        const previousActiveId = appState.activeConversationId;
+        const activeId = activeConversation?.id || previousActiveId;
+        const previousActiveSummary = (appState.conversations || []).find((item) => item.id === activeId);
+        const nextActiveSummary = (nextState.conversations || []).find((item) => item.id === activeId);
+        const listChanged = runningIdsChanged(appState.runningTaskIds || [], nextState.runningTaskIds || [])
+          || (appState.conversations || []).length !== (nextState.conversations || []).length
+          || conversationSummaryChanged(previousActiveSummary, nextActiveSummary);
+        appState = {
+          ...nextState,
+          activeConversationId: previousActiveId,
+        };
+        if (listChanged) {
+          renderList();
+          updateStopButton();
+        }
+        if (activeConversation && conversationSummaryChanged(previousActiveSummary, nextActiveSummary)) {
+          const data = await api("/api/conversations/" + activeConversation.id);
+          activeConversation = data.conversation;
+          renderConversation(activeConversation);
+        }
+        if ((appState.runningTaskIds || []).length > 0) ensurePolling();
+      } catch {
+        // Silent: this is only a background sync for external changes.
+      } finally {
+        externalStateRefreshing = false;
       }
     }
     let installPollTimer = null;
@@ -1995,7 +2074,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     for (const tab of agentDrawerTabs) {
       tab.addEventListener("click", () => setAgentDrawerTab(tab.dataset.tab));
     }
-    if (localStorage.getItem(AGENT_DRAWER_KEY) === "1") openAgentDrawer();
 
     function renderConversation(conversation, options = {}) {
       stopTypewriters();
@@ -2148,7 +2226,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const assistantLabel = message.roleId
           ? roleLabel(message.roleId)
           : (({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || t("chat.assistant"));
-        role.textContent = message.role === "user" ? t("chat.you") : assistantLabel;
+        role.textContent = message.role === "user"
+          ? (message.source === "telegram" ? t("chat.you") + " · Telegram" : t("chat.you"))
+          : assistantLabel;
         const bubble = document.createElement("div");
         bubble.className = "bubble";
         if (Array.isArray(message.toolLogs) && message.toolLogs.length) {
@@ -2294,16 +2374,44 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       tick();
     }
 
-    async function updatePipelineEdges(edges) {
-      const data = await api("/api/pipeline", { method: "PATCH", body: { edges } });
+    async function updatePipeline(edges, mainAgentId = appState?.pipeline?.mainAgentId || null) {
+      const data = await api("/api/pipeline", { method: "PATCH", body: { edges, mainAgentId } });
       appState.pipeline = data.pipeline;
       renderPipelinePanel();
     }
+
+    async function updatePipelineEdges(edges) {
+      return updatePipeline(edges);
+    }
+
+    pipelineMakeLeader.addEventListener("click", async () => {
+      if (!activeConversation) return;
+      await api("/api/conversations/" + activeConversation.id, { method: "PATCH", body: { pipelineMode: true } });
+      activeConversation.pipelineMode = true;
+      await updatePipeline(appState?.pipeline?.edges || [], activeConversation.id);
+      setStatus(t("pipeline.leaderSet", { title: activeConversation.title }));
+    });
+
+    pipelineAddAgent.addEventListener("click", async () => {
+      if (!activeConversation) return;
+      const leaderId = appState?.pipeline?.mainAgentId || activeConversation.id;
+      await api("/api/conversations/" + leaderId, { method: "PATCH", body: { pipelineMode: true } });
+      const role = AGENT_ROLES.find((item) => item.id === "developer") || AGENT_ROLES[0];
+      const data = await api("/api/conversations", { method: "POST", body: {
+        title: role.label, workspace: activeConversation.workspace, provider: activeConversation.provider,
+        mode: activeConversation.mode, model: activeConversation.model, roleId: role.id, pipelineMode: true,
+      } });
+      const edges = (appState?.pipeline?.edges || []).concat({ from: leaderId, to: data.conversation.id });
+      await updatePipeline(edges, leaderId);
+      await loadState(leaderId);
+      setStatus(t("pipeline.agentAdded", { title: role.label }));
+    });
 
     function renderPipelinePanel() {
       const conversations = appState?.conversations || [];
       const edges = appState?.pipeline?.edges || [];
       const nextByFrom = new Map(edges.map((edge) => [edge.from, edge.to]));
+      const mainAgentId = appState?.pipeline?.mainAgentId || null;
       pipelineBody.innerHTML = "";
       if (!conversations.length) {
         pipelineBody.innerHTML = '<div class="empty smallEmpty">' + t("pipeline.empty") + '</div>';
@@ -2316,7 +2424,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         meta.className = "pipelineNodeMeta";
         const title = document.createElement("div");
         title.className = "pipelineNodeTitle";
-        title.textContent = conversation.title;
+        title.textContent = (conversation.id === mainAgentId ? "★ " : "") + conversation.title;
         const sub = document.createElement("div");
         sub.className = "pipelineNodeSub";
         sub.textContent = (conversation.provider || "deepseek") + " · " + (conversation.model || conversation.mode || t("pipeline.model"));
@@ -2637,6 +2745,58 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return data;
     }
 
+    function renderUpdateToast(data) {
+      availableUpdateCheck = data || null;
+      const shouldShow = Boolean(data?.updateAvailable);
+      updateToast.classList.toggle("hidden", !shouldShow);
+      updateToast.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+      if (!shouldShow) return;
+      const version = data.latestVersion ? "v" + data.latestVersion : "";
+      updateToastMeta.textContent = version
+        ? t("update.available") + " " + version
+        : t("update.available");
+      updateToastStatus.textContent = data.canUpdate ? (data.updateWarning || "") : t("update.gitRequired");
+      updateToastDownload.disabled = !data.canUpdate;
+      updateToastDownload.textContent = data.canUpdate ? "Скачать" : "Недоступно";
+    }
+
+    async function checkUpdateToast() {
+      try {
+        renderUpdateToast(await api("/api/update/check"));
+      } catch {
+        renderUpdateToast(null);
+      }
+    }
+
+    async function installAvailableUpdate(checkData = availableUpdateCheck, options = {}) {
+      let currentCheck = checkData;
+      if (!currentCheck?.updateAvailable) {
+        currentCheck = await api("/api/update/check");
+        renderUpdateToast(currentCheck);
+      }
+      if (!currentCheck?.updateAvailable) {
+        setStatus(t("update.upToDate"), false);
+        return null;
+      }
+      if (!currentCheck.canUpdate) {
+        throw new Error(t("update.gitRequired"));
+      }
+      if (options.restart !== true && !await confirmAppUpdate()) return null;
+      setStatus(t("update.installing"), false);
+      const result = await api("/api/update/run", {
+        method: "POST",
+        body: { restart: options.restart === true },
+      });
+      renderUpdateToast(result.after || null);
+      setStatus(
+        result.restarting
+          ? "Обновление установлено. Перезапускаю AI Free..."
+          : (result.message || t("update.installed")),
+        false,
+      );
+      return result;
+    }
+
     function updateStreamingAssistantBubble(content) {
       const items = messages.querySelectorAll(".msg.assistant.streaming");
       const last = items[items.length - 1];
@@ -2834,7 +2994,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsOverlay.setAttribute("aria-hidden", "true");
     }
 
-    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, economyOS, ui }, initialTab) {
+    function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui, telegram }, initialTab) {
       const allowed = new Set(allowedCommands || []);
       const groups = { low: [], medium: [], high: [] };
       for (const item of catalog) {
@@ -2851,8 +3011,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const content = document.createElement("div");
       content.className = "settingsTabContent";
       const tabs = [
+        { id: "status", label: t("settings.tabStatus") || "Статус" },
         { id: "language", label: t("settings.tabLanguage") },
         { id: "agent", label: t("settings.tabAgent") },
+        { id: "telegram", label: t("settings.tabTelegram") },
+        { id: "update", label: t("settings.tabUpdate") },
         { id: "api", label: t("settings.tabApi") },
         { id: "permissions", label: t("settings.tabPermissions") },
       ];
@@ -2877,10 +3040,12 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       shell.append(nav, content);
       settingsBody.appendChild(shell);
 
+      renderStatusSettings(panels.status);
       renderUiSettings(panels.language, ui, allowedCommands || []);
       renderAgentSettings(panels.agent, ui);
+      renderTelegramSettings(panels.telegram, telegram || {});
+      renderUpdateSettings(panels.update);
       renderOpenAISettings(panels.api, openAICompat);
-      renderEconomyOSSettings(panels.api, economyOS || {});
       renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
       for (const key of order) {
         const items = groups[key];
@@ -2920,11 +3085,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
         panels.permissions.appendChild(groupEl);
       }
-      selectSettingsTab(initialTab || "language");
+      selectSettingsTab(initialTab || "status");
     }
 
     document.getElementById("sidebarMenuPlugins").addEventListener("click", () => {
       openSettings("agent");
+    });
+    document.getElementById("sidebarMenuTelegram").addEventListener("click", () => {
+      openSettings("telegram");
     });
 
     function selectSettingsTab(tabId) {
@@ -3002,6 +3170,132 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       target.appendChild(groupEl);
       renderVoiceSettings(target);
+    }
+
+    function renderStatusSettings(target) {
+      const groupEl = document.createElement("div");
+      groupEl.className = "settingsGroup healthSettings";
+
+      const header = document.createElement("div");
+      header.className = "healthHeader";
+      const heading = document.createElement("h3");
+      heading.textContent = t("health.title") || "Статус системы";
+      const actions = document.createElement("div");
+      actions.className = "healthActions";
+      const refreshBtn = document.createElement("button");
+      refreshBtn.type = "button";
+      refreshBtn.className = "apiKeyBtn";
+      refreshBtn.textContent = t("health.refresh") || "Обновить";
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "apiKeyBtn";
+      copyBtn.textContent = t("health.copyReport") || "Скопировать отчёт";
+      actions.append(refreshBtn, copyBtn);
+      header.append(heading, actions);
+      groupEl.appendChild(header);
+
+      const summary = document.createElement("div");
+      summary.className = "healthSummary";
+      summary.textContent = t("app.loading");
+      groupEl.appendChild(summary);
+
+      const providersGrid = document.createElement("div");
+      providersGrid.className = "healthGrid";
+      groupEl.appendChild(providersGrid);
+
+      const systemGrid = document.createElement("div");
+      systemGrid.className = "healthGrid";
+      groupEl.appendChild(systemGrid);
+
+      const reportBox = document.createElement("textarea");
+      reportBox.className = "healthReport";
+      reportBox.readOnly = true;
+      reportBox.rows = 12;
+      groupEl.appendChild(reportBox);
+
+      let lastReport = "";
+
+      function statusClass(ok) {
+        return ok ? "ok" : "warn";
+      }
+
+      function makeCard(title, value, desc, ok) {
+        const card = document.createElement("div");
+        card.className = "healthCard " + statusClass(ok);
+        const top = document.createElement("div");
+        top.className = "healthCardTop";
+        const name = document.createElement("div");
+        name.className = "healthCardTitle";
+        name.textContent = title;
+        const badge = document.createElement("span");
+        badge.className = "healthBadge " + statusClass(ok);
+        badge.textContent = value;
+        top.append(name, badge);
+        const detail = document.createElement("div");
+        detail.className = "healthCardDesc";
+        detail.textContent = desc || "";
+        card.append(top, detail);
+        return card;
+      }
+
+      function renderDiagnostics(data) {
+        lastReport = data.report || "";
+        const readyProviders = (data.providers || []).filter((provider) => provider.hasAuth).length;
+        const missingCommands = (data.commands || []).filter((command) => !command.ok).map((command) => command.command);
+        summary.textContent = [
+          "AI Free v" + (data.app?.version || "-"),
+          "providers " + readyProviders + "/" + ((data.providers || []).length || 0),
+          missingCommands.length ? ("missing: " + missingCommands.join(", ")) : "commands ok",
+        ].join(" · ");
+
+        providersGrid.innerHTML = "";
+        for (const provider of data.providers || []) {
+          providersGrid.appendChild(makeCard(
+            provider.name,
+            provider.hasAuth ? (t("health.ready") || "Готов") : (t("health.needsLogin") || "Нужен вход"),
+            provider.authFileLabel || provider.description || provider.id,
+            provider.hasAuth,
+          ));
+        }
+
+        systemGrid.innerHTML = "";
+        systemGrid.appendChild(makeCard("Workspace", data.workspace?.exists ? "ok" : "missing", data.workspace?.root || "-", data.workspace?.exists));
+        systemGrid.appendChild(makeCard("Git", data.git?.available ? (data.git.branch || "ok") : "missing", data.git?.dirty ? "dirty worktree" : (data.git?.commit || ""), data.git?.available));
+        systemGrid.appendChild(makeCard("Telegram", data.telegram?.enabled ? "enabled" : "off", data.telegram?.hasBotToken ? "token configured" : "no token", !data.telegram?.enabled || data.telegram?.hasBotToken));
+        for (const command of data.commands || []) {
+          systemGrid.appendChild(makeCard(command.command, command.ok ? "ok" : "missing", command.version || command.error || "", command.ok));
+        }
+
+        reportBox.value = lastReport;
+      }
+
+      async function refreshDiagnostics() {
+        refreshBtn.disabled = true;
+        summary.textContent = t("app.loading");
+        try {
+          renderDiagnostics(await api("/api/diagnostics"));
+        } catch (err) {
+          summary.textContent = t("settings.loadFailed", { message: err.message });
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      }
+
+      refreshBtn.addEventListener("click", refreshDiagnostics);
+      copyBtn.addEventListener("click", async () => {
+        if (!lastReport) await refreshDiagnostics();
+        try {
+          await navigator.clipboard.writeText(lastReport || reportBox.value || "");
+          setStatus(t("health.copied") || "Диагностический отчёт скопирован");
+        } catch {
+          reportBox.focus();
+          reportBox.select();
+          setStatus(t("health.copyManual") || "Выделил отчёт, скопируй вручную");
+        }
+      });
+
+      target.appendChild(groupEl);
+      refreshDiagnostics().catch(() => {});
     }
 
     async function renderAgentSettings(target, ui) {
@@ -3311,7 +3605,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const chatInput = document.createElement("input");
       chatInput.type = "text";
       chatInput.autocomplete = "off";
-      chatInput.placeholder = "123456789";
+      chatInput.placeholder = "auto after /start";
       chatInput.value = telegram.chatId || "";
       chatField.appendChild(chatInput);
       groupEl.appendChild(chatField);
@@ -3522,6 +3816,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       function renderCheck(data) {
         lastCheck = data;
+        renderUpdateToast(data);
         meta.innerHTML = "";
         const rows = [
           [t("update.currentVersion"), data.currentVersion || "-"],
@@ -3576,17 +3871,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       checkBtn.addEventListener("click", check);
       installBtn.addEventListener("click", async () => {
         if (!lastCheck?.updateAvailable) return;
-        if (!await confirmAppUpdate()) return;
         checkBtn.disabled = true;
         installBtn.disabled = true;
         status.textContent = t("update.installing");
         status.className = "updateStatus";
         try {
-          const result = await api("/api/update/run", { method: "POST" });
+          const result = await installAvailableUpdate(lastCheck, { restart: true });
+          if (!result) {
+            renderCheck(lastCheck);
+            return;
+          }
           renderCheck(result.after || lastCheck);
           status.textContent = result.message || t("update.installed");
           status.className = "updateStatus ready";
-          setStatus(status.textContent, false);
         } catch (err) {
           status.textContent = t("update.installFailed", { message: err.message });
           status.className = "updateStatus error";
@@ -3641,7 +3938,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const keys = info.apiKeys || {};
       keyList.appendChild(makeApiKeyRow("deepseek", "DeepSeek", keys.deepseek || ""));
       keyList.appendChild(makeApiKeyRow("qwen", "Qwen", keys.qwen || ""));
-      keyList.appendChild(makeApiKeyRow("economyos", "EconomyOS proxy", keys.economyos || ""));
       groupEl.appendChild(keyList);
 
       const note = document.createElement("div");
@@ -3673,88 +3969,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       note.textContent = t("settings.anthropicNote", { models: (info.models || []).join(", ") });
       groupEl.appendChild(note);
 
-      target.appendChild(groupEl);
-    }
-
-    function renderEconomyOSSettings(target, info) {
-      const groupEl = document.createElement("div");
-      groupEl.className = "settingsGroup apiSettings";
-
-      const heading = document.createElement("h3");
-      heading.textContent = t("settings.economyTitle");
-      groupEl.appendChild(heading);
-
-      const hint = document.createElement("div");
-      hint.className = "apiModels";
-      hint.textContent = t("settings.economyHint");
-      groupEl.appendChild(hint);
-
-      const grid = document.createElement("div");
-      grid.className = "apiSettingsGrid";
-      grid.appendChild(makeApiField(t("settings.baseUrl"), info.baseUrl || "https://compute.virtuals.io/v1"));
-      groupEl.appendChild(grid);
-
-      const field = document.createElement("label");
-      field.className = "formField";
-      const fieldLabel = document.createElement("span");
-      fieldLabel.textContent = t("settings.economyApiKey");
-      const input = document.createElement("input");
-      input.type = "password";
-      input.autocomplete = "off";
-      input.placeholder = info.configured ? t("settings.economyConfigured") : "VIRTUALS_API_KEY";
-      input.disabled = info.source === "environment";
-      field.append(fieldLabel, input);
-      groupEl.appendChild(field);
-
-      const actions = document.createElement("div");
-      actions.className = "settingsActions economyActions";
-      const portal = document.createElement("a");
-      portal.className = "iconBtn";
-      portal.href = "https://app.virtuals.io/acp/agents";
-      portal.target = "_blank";
-      portal.rel = "noreferrer";
-      portal.textContent = t("settings.economyGetKey");
-      actions.appendChild(portal);
-
-      if (info.configured) {
-        const disconnect = document.createElement("button");
-        disconnect.type = "button";
-        disconnect.className = "iconBtn dangerBtn";
-        disconnect.textContent = t("settings.economyDisconnect");
-        disconnect.disabled = info.source === "environment";
-        disconnect.addEventListener("click", async () => {
-          await api("/api/settings/economyos", { method: "DELETE" });
-          const next = await api("/api/settings");
-          renderSettings(next, "api");
-          setStatus(t("settings.economyDisconnected"), false);
-        });
-        actions.appendChild(disconnect);
-      } else {
-        const connect = document.createElement("button");
-        connect.type = "button";
-        connect.className = "iconBtn primaryBtn";
-        connect.textContent = t("settings.economyConnect");
-        connect.addEventListener("click", async () => {
-          const apiKey = input.value.trim();
-          if (!apiKey) return setStatus(t("settings.economyKeyRequired"), true);
-          connect.disabled = true;
-          try {
-            await api("/api/settings/economyos", { method: "PUT", body: { apiKey } });
-            input.value = "";
-            const next = await api("/api/settings");
-            renderSettings(next, "api");
-            await refreshAvailableProviders();
-            setStatus(t("settings.economyConnected"), false);
-          } catch (error) {
-            setStatus(t("settings.economyConnectFailed", { message: error.message }), true);
-          } finally {
-            connect.disabled = false;
-          }
-        });
-        actions.appendChild(connect);
-      }
-
-      groupEl.appendChild(actions);
       target.appendChild(groupEl);
     }
 
@@ -3936,6 +4150,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     startupReady
       .then(() => loadState())
       .catch((error) => setStatus(error.message, true));
+    checkUpdateToast().catch(() => {});
   </script>
 </body>
 </html>`;

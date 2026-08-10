@@ -4,23 +4,6 @@ import { readQwenAuth } from "./auth-files.mjs";
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
 let cache = null;
 
-export const QWEN_SUPPORTED_WEB_MODEL_IDS = new Set([
-  "qwen3.7-plus",
-  "qwen3.8-max-preview",
-  "qwen3.7-max",
-  "qwen-latest-series-invite-beta-v24",
-  "qwen-latest-series-invite-beta-v16",
-  "qwen3.6-plus",
-  "qwen3.6-max-preview",
-  "qwen3.6-27b",
-  "qwen3.6-35b-a3b",
-  "qwen3.5-plus",
-  "qwen3.5-27b",
-  "qwen3.5-35b-a3b",
-  "qwen3-max-2026-01-23",
-  "qwen3-coder-plus",
-]);
-
 function normalizeLabel(name, id) {
   return String(name || id || "").replace(/-/g, " ").replace(/\bqwen/i, "Qwen").trim();
 }
@@ -35,7 +18,7 @@ export function normalizeQwenWebModels(rawModels) {
       const modality = Array.isArray(meta.modality) ? meta.modality : [];
       return (
         model?.id
-        && QWEN_SUPPORTED_WEB_MODEL_IDS.has(String(model.id))
+        && /^qwen[a-z0-9._-]+$/i.test(String(model.id))
         && info.is_active === true
         && info.is_visitor_active === true
         && chatTypes.includes("t2t")

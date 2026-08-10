@@ -4,6 +4,7 @@ import { strict as assert } from "node:assert";
 
 import {
   buildPromptFromChatBody,
+  extractOpenAIChatImages,
   handleQwenStream,
   handleRequest,
   requestSearchEnabled,
@@ -17,6 +18,12 @@ describe("OpenAI-compatible handler", () => {
     const res = await callHandler({ method: "GET", url: "/" });
     assert.equal(res.statusCode, 200);
     assert.ok(res.json.endpoints.includes("POST /v1/responses"));
+  });
+
+  it("does not advertise EconomyOS models", async () => {
+    const res = await callHandler({ method: "GET", url: "/v1/models" });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json.data.some((model) => model.owned_by === "economyos"), false);
   });
 
   it("validates /v1/responses before calling upstream providers", async () => {
@@ -76,6 +83,31 @@ describe("OpenAI-compatible handler", () => {
       ]),
       [{ type: "function", function: { name: "create_reminder" } }],
     );
+  });
+
+  it("extracts supported inline OpenAI image parts without embedding base64 in the prompt", () => {
+    const body = {
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Что на картинке?" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
+        ],
+      }],
+    };
+
+    assert.deepEqual(extractOpenAIChatImages(body.messages), [{
+      name: "openai-image-1.png",
+      mimeType: "image/png",
+      dataBase64: "aW1hZ2U=",
+    }]);
+    const prompt = buildPromptFromChatBody(body, "deepseek-v4-vision", {
+      provider: "deepseek",
+      model: "vision",
+    });
+    assert.match(prompt, /Что на картинке/);
+    assert.match(prompt, /\[IMAGE: openai-image-1\.png\]/);
+    assert.doesNotMatch(prompt, /aW1hZ2U=/);
   });
 
   it("terminates streaming tool calls with finish_reason=tool_calls", () => {

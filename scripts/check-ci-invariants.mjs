@@ -91,18 +91,18 @@ check("desktop and VS Code ChatGPT transports are synchronized", () => {
   }
 });
 
-check("desktop and VS Code EconomyOS clients are synchronized", () => {
-  assert.equal(
-    read("plugin-for-vscode/src/providers/economyos/client.mjs"),
-    read("src/providers/economyos/client.mjs"),
-  );
-});
-
-check("desktop and VS Code Qwen clients are synchronized", () => {
-  assert.equal(
-    read("plugin-for-vscode/src/providers/qwen/client.mjs"),
-    read("src/providers/qwen/client.mjs"),
-  );
+check("desktop and VS Code Qwen transports are synchronized", () => {
+  for (const relativePath of [
+    "providers/qwen/client.mjs",
+    "providers/qwen/browser-proxy.mjs",
+    "providers/qwen/stream-timeouts.mjs",
+  ]) {
+    assert.equal(
+      read(`plugin-for-vscode/src/${relativePath}`),
+      read(`src/${relativePath}`),
+      `${relativePath} differs`,
+    );
+  }
 });
 
 check("desktop and VS Code Qwen model sync is synchronized", () => {
@@ -131,19 +131,6 @@ check("desktop and VS Code code-agent loops are synchronized", () => {
     read("plugin-for-vscode/src/code-agent/run.mjs"),
     read("src/code-agent/run.mjs"),
   );
-});
-
-check("EconomyOS integration has implementation, tests, and documentation", () => {
-  const required = [
-    "src/providers/economyos/client.mjs",
-    "plugin-for-vscode/src/providers/economyos/client.mjs",
-    "test/economyos-client.test.mjs",
-    "docs/ECONOMYOS_INTEGRATION.md",
-  ];
-  for (const relativePath of required) {
-    assert.ok(fs.existsSync(path.join(root, relativePath)), `missing ${relativePath}`);
-  }
-  assert.match(read("src/providers/model-catalog.mjs"), /economyos\s*:/i, "EconomyOS is absent from model catalog");
 });
 
 check("Git does not track generated VSIX or operating-system metadata", () => {

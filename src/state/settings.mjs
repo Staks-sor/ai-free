@@ -10,15 +10,6 @@ import { AUTH_DIR, SETTINGS_FILE } from "../config.mjs";
 import { DEFAULT_LANGUAGE, normalizeLanguage } from "../i18n/index.mjs";
 import { getProviderIds } from "../providers/model-catalog.mjs";
 
-export const ECONOMYOS_DEFAULT_BASE_URL = "https://compute.virtuals.io/v1";
-
-function normalizeEconomyOSSettings(raw = {}) {
-  return {
-    apiKey: typeof raw?.apiKey === "string" ? raw.apiKey.trim() : "",
-    baseUrl: ECONOMYOS_DEFAULT_BASE_URL,
-  };
-}
-
 export const COMMAND_CATALOG = {
   node:    { description: "Запуск JS-файлов через Node",                       risk: "low",    enabledByDefault: true },
   npm:     { description: "npm install/ci/run/test и скрипты (publish/login заблокированы)", risk: "low",    enabledByDefault: true },
@@ -318,7 +309,6 @@ export function loadSettings() {
       (cmd) => COMMAND_CATALOG[cmd].enabledByDefault,
     ),
     openAICompat: { apiKeys: emptyProviderApiKeys() },
-    economyOS: normalizeEconomyOSSettings(),
     commandPermissions: normalizeCommandPermissions(),
     ui: {
       language: normalizeLanguage(process.env.AI_FREE_LANG || DEFAULT_LANGUAGE),
@@ -345,7 +335,6 @@ export function loadSettings() {
       openAICompat: {
         apiKeys: normalizeProviderApiKeys(apiKeys, legacyKey),
       },
-      economyOS: normalizeEconomyOSSettings(raw?.economyOS),
       commandPermissions: normalizeCommandPermissions(raw?.commandPermissions),
       ui: {
         language: normalizeLanguage(raw?.ui?.language || fallback.ui.language),
@@ -392,9 +381,6 @@ export function saveSettings(settings) {
     openAICompat: {
       apiKeys: nextKeys,
     },
-    economyOS: settings?.economyOS
-      ? normalizeEconomyOSSettings(settings.economyOS)
-      : normalizeEconomyOSSettings(current.economyOS),
     commandPermissions,
     ui: {
       language: normalizeLanguage(settings?.ui?.language || current.ui?.language || DEFAULT_LANGUAGE),
@@ -416,32 +402,6 @@ export function saveSettings(settings) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(payload, null, 2));
   try { fs.chmodSync(SETTINGS_FILE, 0o600); } catch {}
   return payload;
-}
-
-export function getEconomyOSSettings() {
-  const settings = loadSettings();
-  const stored = normalizeEconomyOSSettings(settings.economyOS);
-  const envKey = String(process.env.VIRTUALS_API_KEY || "").trim();
-  return {
-    apiKey: envKey || stored.apiKey,
-    baseUrl: stored.baseUrl,
-    source: envKey ? "environment" : stored.apiKey ? "settings" : "none",
-  };
-}
-
-export function saveEconomyOSSettings({ apiKey } = {}) {
-  const current = loadSettings();
-  return saveSettings({
-    allowedCommands: current.allowedCommands,
-    commandPermissions: current.commandPermissions,
-    ui: current.ui,
-    telegram: current.telegram,
-    openAICompat: current.openAICompat,
-    economyOS: {
-      apiKey: typeof apiKey === "string" ? apiKey : current.economyOS?.apiKey || "",
-      baseUrl: ECONOMYOS_DEFAULT_BASE_URL,
-    },
-  }).economyOS;
 }
 
 export function ensureOpenAICompatApiKey(provider) {

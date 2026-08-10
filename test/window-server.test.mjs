@@ -3,12 +3,9 @@ import { strict as assert } from "node:assert";
 
 import { shouldAutoRunBrowserTask } from "../src/window-app/browser-snapshot.mjs";
 import {
-  appendEconomyOSVisionContext,
-  buildLegacyEconomyResume,
   captureRunningClarification,
   takeRunningClarifications,
   isChatGPTLoginRecoveryRequired,
-  isEconomyResumePrompt,
   shouldAutoRunCodeTask,
 } from "../src/window-app/server.mjs";
 import { resolveConversationAgentTask } from "../src/window-app/agent-task.mjs";
@@ -78,62 +75,6 @@ describe("ChatGPT login recovery", () => {
     assert.equal(isChatGPTLoginRecoveryRequired(new Error("provider returned HTTP 500")), false);
   });
 });
-
-describe("EconomyOS vision bridge", () => {
-  it("uses GLM 5V to describe images for the selected coding model", async () => {
-    let request;
-    let savedDescription = "";
-    const client = {
-      async complete(options) {
-        request = options;
-        return { text: "A settings screen with an API validation error." };
-      },
-    };
-
-    const prompt = await appendEconomyOSVisionContext(
-      client,
-      "Fix the problem shown",
-      [{ mimeType: "image/png", dataBase64: "aW1hZ2U=" }],
-      null,
-      (description) => { savedDescription = description; },
-    );
-
-    assert.equal(request.model, "z-ai-glm-5v-turbo");
-    assert.equal(request.images.length, 1);
-    assert.match(prompt, /Fix the problem shown/);
-    assert.match(prompt, /settings screen with an API validation error/);
-    assert.equal(savedDescription, "A settings screen with an API validation error.");
-  });
-});
-
-describe("EconomyOS checkpoint resume", () => {
-  it("recognizes explicit continuation without routing unrelated chat", () => {
-    assert.equal(isEconomyResumePrompt("продолжай"), true);
-    assert.equal(isEconomyResumePrompt("продолжай и учти новый файл"), true);
-    assert.equal(isEconomyResumePrompt("resume"), true);
-    assert.equal(isEconomyResumePrompt("объясни ошибку"), false);
-  });
-
-  it("recovers an old failed task from its persisted tool logs", () => {
-    const resume = buildLegacyEconomyResume({
-      messages: [
-        { role: "user", content: "Fix the provider" },
-        {
-          role: "assistant",
-          content: "⚠️ EconomyOS /code error: Rate limit exceeded",
-          toolLogs: ["[tool] read_file src/provider.mjs", "[tool] run_shell npm test"],
-        },
-        { role: "user", content: "продолжай" },
-      ],
-    });
-
-    assert.equal(resume.legacy, true);
-    assert.match(resume.task, /Fix the provider/);
-    assert.match(resume.task, /read_file src\/provider\.mjs/);
-    assert.equal(resume.toolLogs.length, 2);
-  });
-});
-
 
 describe("running clarification capture", () => {
   it("queues the clarification without adding a duplicate user message", () => {

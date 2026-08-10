@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.22
+
+- Removes the EconomyOS provider, credentials, settings and API routes from AI Free.
+- Refreshes Qwen models from the signed-in account and stops advertising unavailable preview models.
+- Returns a clear error before creating an empty Qwen request when a selected model is no longer available.
+- Extends Qwen first-content and stream-idle observation so slow healthy generations are not retried as empty responses.
+- Sends OpenAI-compatible image inputs to DeepSeek Vision and ChatGPT, and explicitly rejects unsupported Qwen image requests.
+
 ## 0.4.21
 
 - Added a dedicated Qwen stream first-content timeout and one fresh-chat retry for stalled OpenAI-compatible requests.

@@ -22,10 +22,10 @@
   <img src="https://img.shields.io/github/package-json/v/Staks-sor/ai-free?style=flat-square&amp;label=Version" alt="Version">
   <img src="https://img.shields.io/badge/Plattform-macOS%20%7C%20Linux%20%7C%20Windows-8250df?style=flat-square" alt="macOS, Linux, Windows">
   <img src="https://img.shields.io/badge/Node.js-18%2B-1f883d?style=flat-square" alt="Node.js 18+">
-  <img src="https://img.shields.io/badge/Anbieter-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20EconomyOS-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, EconomyOS">
+  <img src="https://img.shields.io/badge/Anbieter-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
 </p>
 
-<p align="center"><strong>AI Free 0.4.21</strong></p>
+<p align="center"><strong>AI Free 0.4.22</strong></p>
 
 > CLI und Desktop-App für kostenlose KI-Webchats in einer gemeinsamen Oberfläche. Unterstützt derzeit **DeepSeek, Qwen und ChatGPT** unter macOS, Linux und Windows.
 

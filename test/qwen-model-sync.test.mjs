@@ -23,14 +23,22 @@ function liveModel(id, { search = false, modality = ["text"] } = {}) {
 }
 
 describe("Qwen live model catalog", () => {
-  it("includes the new Qwen3.8 Max preview", () => {
+  it("accepts newly published active Qwen models without a code release", () => {
     const models = normalizeQwenWebModels([
-      liveModel("qwen3.8-max-preview", { search: true, modality: ["text", "image"] }),
+      liveModel("qwen4-preview", { search: true, modality: ["text", "image"] }),
     ]);
 
     assert.equal(models.length, 1);
-    assert.equal(models[0].id, "qwen3.8-max-preview");
+    assert.equal(models[0].id, "qwen4-preview");
     assert.equal(models[0].search, true);
+  });
+
+  it("does not keep removed preview models when they are absent from the live response", () => {
+    const models = normalizeQwenWebModels([
+      liveModel("qwen3.7-plus", { search: true }),
+    ]);
+
+    assert.deepEqual(models.map((model) => model.id), ["qwen3.7-plus"]);
   });
 
   it("disables smart search when the selected live model does not support it", () => {

@@ -19,14 +19,16 @@
 import { QWEN_AUTH_FILE, QWEN_BASE_URL, QWEN_BROWSER_PROFILE } from "./config.mjs";
 import { applyQwenCookiesToContext, readQwenAuth } from "./auth-files.mjs";
 import { randomUUID } from "node:crypto";
+import { resolveQwenStreamTimeouts } from "./stream-timeouts.mjs";
 
 let proxyPromise = null;
 const QWEN_NAV_TIMEOUT_MS = Number(process.env.QWEN_NAV_TIMEOUT_MS || 90_000);
 const QWEN_READY_DELAY_MS = Number(process.env.QWEN_READY_DELAY_MS || 3000);
 const QWEN_READY_POLL_MS = Number(process.env.QWEN_READY_POLL_MS || 100);
 const QWEN_FETCH_TIMEOUT_MS = Number(process.env.QWEN_FETCH_TIMEOUT_MS || 120_000);
-const QWEN_STREAM_FIRST_CONTENT_TIMEOUT_MS = Number(process.env.QWEN_STREAM_FIRST_CONTENT_TIMEOUT_MS || 20_000);
-const QWEN_STREAM_IDLE_TIMEOUT_MS = Number(process.env.QWEN_STREAM_IDLE_TIMEOUT_MS || 45_000);
+const QWEN_STREAM_TIMEOUTS = resolveQwenStreamTimeouts();
+const QWEN_STREAM_FIRST_CONTENT_TIMEOUT_MS = QWEN_STREAM_TIMEOUTS.firstContentMs;
+const QWEN_STREAM_IDLE_TIMEOUT_MS = QWEN_STREAM_TIMEOUTS.idleMs;
 const QWEN_PROXY_MAX_ATTEMPTS = Math.max(1, Math.min(5, Number(process.env.QWEN_PROXY_MAX_ATTEMPTS || 3)));
 const QWEN_BROWSER_CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.QWEN_BROWSER_CONCURRENCY || 1)));
 

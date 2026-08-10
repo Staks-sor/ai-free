@@ -93,32 +93,9 @@ describe("ui-html inline script", () => {
     }
   });
 
-  it("renders the EconomyOS BYOK integration without embedding a shared key", () => {
+  it("does not render the removed EconomyOS integration", () => {
     const html = renderWindowHtml({ language: "ru" });
-    assert.match(html, /EconomyOS by Virtuals/);
-    assert.match(html, /https:\/\/compute\.virtuals\.io\/v1/);
-    assert.match(html, /https:\/\/app\.virtuals\.io\/acp\/agents/);
-    assert.match(html, /\/api\/settings\/economyos/);
-    assert.match(html, /input\.type = "password"/);
-    assert.doesNotMatch(html, /VIRTUALS_API_KEY\s*=/);
-  });
-
-  it("opens EconomyOS API settings from the new-chat authorization button", () => {
-    const html = renderWindowHtml({ language: "ru" });
-    assert.match(html, /if \(id === "economyos"\) \{\s*closeNewChatModal\(\);\s*await openSettings\("api"\);/);
-    assert.doesNotMatch(html, /\bcloseNewChat\(\)/);
-  });
-
-  it("reads EconomyOS replies through the NDJSON streaming path", () => {
-    const html = renderWindowHtml({ language: "ru" });
-    assert.match(html, /\["qwen", "chatgpt", "deepseek", "economyos"\]\.includes\(sendProvider\)/);
-  });
-
-  it("sends EconomyOS images inline instead of uploading them through DeepSeek", () => {
-    const html = renderWindowHtml({ language: "ru" });
-    assert.match(html, /sendProvider === "chatgpt" \|\| sendProvider === "economyos"/);
-    assert.match(html, /displayImages: inlineImages\.length \? \[\] : imageFiles\.map/);
-    assert.match(html, /images: imageFiles\.map\(\(image\) => "data:" \+ image\.mimeType/);
+    assert.doesNotMatch(html, /EconomyOS|Virtuals|economyos|VIRTUALS_API_KEY/i);
   });
 
   it("shows Coder and ESP controls for ChatGPT conversations", () => {
@@ -152,6 +129,12 @@ describe("ui-html inline script", () => {
     assert.match(html, /item\.kind === "file" && item\.type\.startsWith\("image\/"\)/);
     assert.match(html, /await addAttachmentFiles\(imageFiles, \{ fromClipboard: true \}\)/);
     assert.match(html, /event\.preventDefault\(\)/);
+  });
+
+  it("does not silently send Qwen images through the DeepSeek uploader", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /sendProvider === "qwen" && imageFiles\.length/);
+    assert.match(html, /file\.qwenImageUnsupported/);
   });
 
   it("polls external state changes and labels Telegram messages", () => {

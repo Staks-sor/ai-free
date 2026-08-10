@@ -27,7 +27,7 @@ describe("code prompt lifecycle", () => {
 
   it("does not compact a provider without an explicitly supported persistent context", () => {
     const options = buildAgentTaskOptions(
-      { provider: "economyos", codeParentMessageId: "step-1" },
+      { provider: "unknown-provider", codeParentMessageId: "step-1" },
       {},
       { hardwareMode: false, systemPrompt: "", agentInput: {} },
     );

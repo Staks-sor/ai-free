@@ -1,7 +1,7 @@
 {
   "name": "ai-free",
-  "version": "0.4.21",
-  "description": "Free local AI client for DeepSeek, Qwen, ChatGPT and EconomyOS with OpenAI-compatible API, CLI, code agent, memory and skills.",
+  "version": "0.4.22",
+  "description": "Free local AI client for DeepSeek, Qwen and ChatGPT with OpenAI-compatible API, CLI, code agent, memory and skills.",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
@@ -19,8 +19,6 @@
     "deepseek",
     "qwen",
     "chatgpt",
-    "economyos",
-    "virtuals",
     "openai-api",
     "anthropic-api",
     "openai-compatible-api",
