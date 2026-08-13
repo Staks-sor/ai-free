@@ -17,7 +17,7 @@ describe("browse-fs", () => {
       assert.equal(result.totalDirectories, 2);
       assert.equal(result.truncated, false);
     } finally {
-      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
@@ -35,7 +35,7 @@ describe("browse-fs", () => {
       const result = listBrowseDirectories(root);
       assert.ok(result.entries.some((e) => e.name === "linkdir"));
     } finally {
-      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
@@ -49,7 +49,7 @@ describe("browse-fs", () => {
       const shown = listBrowseDirectories(root, { showHidden: true });
       assert.equal(shown.entries.length, 2);
     } finally {
-      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 });

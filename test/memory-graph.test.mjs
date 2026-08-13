@@ -18,14 +18,12 @@ describe("memory graph", () => {
     await warmGraphBackend();
   });
 
-  after(async () => {
-    delete process.env.AI_FREE_MEMORY_DIR;
-    const { resetMemoryBackendForTests } = await import("../src/memory/db.mjs");
-    const { resetGraphBackendForTests } = await import("../src/memory/graph/store.mjs");
-    resetMemoryBackendForTests();
-    resetGraphBackendForTests();
-    try { fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
-  });
+  after(async () => {  const m = await import('../src/memory/store.mjs');
+    if (m.closeMemoryBackend) m.closeMemoryBackend();
+    const g = await import('../src/memory/graph/store.mjs');
+    if (g.closeGraphBackend) g.closeGraphBackend();
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+});
 
   it("links experience items and expands context via graph", async () => {
     const { saveExperience } = await import("../src/memory/save-experience.mjs");

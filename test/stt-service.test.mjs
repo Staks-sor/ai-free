@@ -47,7 +47,7 @@ describe("stt service", () => {
     } finally {
       if (previous === undefined) delete process.env.AI_FREE_STT_BIN;
       else process.env.AI_FREE_STT_BIN = previous;
-      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
@@ -94,7 +94,36 @@ chmod +x ${shellQuote(parakeet)}
       else process.env.AI_FREE_STT_DIR = previousSttDir;
       if (previousStrictPath === undefined) delete process.env.AI_FREE_STT_STRICT_PATH;
       else process.env.AI_FREE_STT_STRICT_PATH = previousStrictPath;
-      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it("prevents command injection on Windows via language parameter", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-stt-sec-"));
+    const previous = process.env.AI_FREE_STT_BIN;
+    
+    // We mock the batch file to echo the language parameter.
+    // If command injection works, it would execute the injected command (e.g. echo INJECTED).
+    fs.mkdirSync(path.join(dir, "runtime"), { recursive: true });
+    const mockBin = path.join(dir, "runtime", "ai-free-stt.cmd");
+    fs.writeFileSync(mockBin, "@echo off\necho {\"text\": \"mocked\", \"language\": \"%~7\"}\n");
+    process.env.AI_FREE_STT_BIN = mockBin;
+
+    try {
+      const result = await transcribeAudio({
+        dataBase64: Buffer.from("dummy").toString("base64"),
+        mimeType: "audio/webm",
+        // The malicious payload:
+        language: "en\" & echo INJECTED",
+      });
+      assert.ok(result.text.includes("mocked"));
+      // If the parameter was passed safely, the script echoes the exact payload.
+      // If injection succeeded, the batch script wouldn't output the valid JSON.
+      assert.ok(result.text.includes("INJECTED"));
+    } finally {
+      if (previous === undefined) delete process.env.AI_FREE_STT_BIN;
+      else process.env.AI_FREE_STT_BIN = previous;
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 });

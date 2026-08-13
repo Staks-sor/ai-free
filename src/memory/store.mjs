@@ -60,4 +60,4 @@ export function extractFromToolLogs(task, toolLogs = [], workspace = "") {
   return saved;
 }
 
-export { getMemoryBackend, warmMemoryBackend } from "./db.mjs";
+export { getMemoryBackend, warmMemoryBackend, closeMemoryBackend } from "./db.mjs";

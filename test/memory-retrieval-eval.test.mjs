@@ -16,12 +16,12 @@ describe("memory retrieval quality evaluation", () => {
     await warmMemoryBackend();
   });
 
-  after(async () => {
-    delete process.env.AI_FREE_MEMORY_DIR;
-    const { resetMemoryBackendForTests } = await import("../src/memory/db.mjs");
-    resetMemoryBackendForTests();
-    try { fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
-  });
+  after(async () => {  const m = await import('../src/memory/store.mjs');
+    if (m.closeMemoryBackend) m.closeMemoryBackend();
+    const g = await import('../src/memory/graph/store.mjs');
+    if (g.closeGraphBackend) g.closeGraphBackend();
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+});
 
   it("does not save empty or duplicate experiences", async () => {
     const { saveExperience } = await import("../src/memory/save-experience.mjs");

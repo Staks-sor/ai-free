@@ -15,10 +15,12 @@ describe("memory vault + search", () => {
     await memory.warmMemoryBackend();
   });
 
-  after(() => {
-    delete process.env.AI_FREE_MEMORY_DIR;
-    try { fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
-  });
+  after(async () => {  const m = await import('../src/memory/store.mjs');
+    if (m.closeMemoryBackend) m.closeMemoryBackend();
+    const g = await import('../src/memory/graph/store.mjs');
+    if (g.closeGraphBackend) g.closeGraphBackend();
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+});
 
   it("writes markdown vault files on addMemory", async () => {
     const { MEMORY_VAULT } = await import("../src/memory/paths.mjs");

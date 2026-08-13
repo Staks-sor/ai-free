@@ -54,7 +54,7 @@ describe("background task runner tracing", () => {
     } finally {
       if (previousLogDir === undefined) delete process.env.AI_FREE_LOG_DIR;
       else process.env.AI_FREE_LOG_DIR = previousLogDir;
-      try { fs.rmSync(logDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
+      fs.rmSync(logDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 

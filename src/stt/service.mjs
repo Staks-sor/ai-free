@@ -4,6 +4,21 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+function safeSpawn(command, args, options) {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+    const escapedArgs = args.map((arg) => {
+      const s = String(arg);
+      if (/[ &|<>^%"]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    });
+    const cmdLine = `"${command}" ${escapedArgs.join(" ")}`;
+    return spawn("cmd.exe", ["/d", "/s", "/c", `"${cmdLine}"`], {
+      ...options,
+      windowsVerbatimArguments: true,
+    });
+  }
+  return spawn(command, args, options);
+}
 import {
   STT_DIR,
 } from "../config.mjs";
@@ -147,7 +162,7 @@ export async function transcribeAudio({ dataBase64, mimeType = "audio/webm", lan
 function runHelper(helper, input, { model, language }) {
   const paths = getSttPaths();
   return new Promise((resolve, reject) => {
-    const child = spawn(helper, [
+    const child = safeSpawn(helper, [
       "transcribe",
       "--input", input,
       "--model", model,
@@ -156,7 +171,6 @@ function runHelper(helper, input, { model, language }) {
     ], {
       env: { ...process.env, AI_FREE_STT_DIR: paths.sttDir },
       stdio: ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
     let stdout = "";
     let stderr = "";
@@ -264,10 +278,9 @@ exit /b %ERRORLEVEL%
 
 function runCommand(command, args, { timeoutMs, env = {} }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = safeSpawn(command, args, {
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
     let stdout = "";
     let stderr = "";

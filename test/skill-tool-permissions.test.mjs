@@ -22,7 +22,7 @@ describe("builtin skill tool permissions", () => {
         assert.ok(context.allowedTools.includes(tool), `${tool} must be allowed by bug-fix`);
       }
     } finally {
-      try { fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
+      fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 });

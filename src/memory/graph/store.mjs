@@ -13,10 +13,17 @@ let sqliteDb = null;
 let jsonGraph = null;
 let backend = null;
 
-export function resetGraphBackendForTests() {
-  sqliteDb = null;
-  jsonGraph = null;
+export function closeGraphBackend() {
+  if (sqliteDb) {
+    try { sqliteDb.close(); } catch {}
+    sqliteDb = null;
+  }
   backend = null;
+}
+
+export function resetGraphBackendForTests() {
+  closeGraphBackend();
+  jsonGraph = null;
 }
 
 function openGraphDb(DatabaseSync) {
