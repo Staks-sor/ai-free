@@ -17,7 +17,7 @@ describe("memory vault + search", () => {
 
   after(() => {
     delete process.env.AI_FREE_MEMORY_DIR;
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    try { fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
   });
 
   it("writes markdown vault files on addMemory", async () => {

@@ -38,9 +38,9 @@ describe("diagnostics report", () => {
 
     assert.match(report, /AI Free diagnostic report/);
     assert.match(report, /Workspace/);
-    assert.match(report, /Root: ~\/project/);
+    assert.match(report, /Root: ~[/\\]project/);
     assert.doesNotMatch(report, new RegExp(os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(report, /Qwen: ready/);
-    assert.match(report, /Log file: ~\/\.ai-free\/logs\/ai-free\.log \(exists\)/);
+    assert.match(report, /Log file: ~[/\\]\.ai-free[/\\]logs[/\\]ai-free\.log \(exists\)/);
   });
 });

@@ -156,6 +156,7 @@ function runHelper(helper, input, { model, language }) {
     ], {
       env: { ...process.env, AI_FREE_STT_DIR: paths.sttDir },
       stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
     });
     let stdout = "";
     let stderr = "";
@@ -266,6 +267,7 @@ function runCommand(command, args, { timeoutMs, env = {} }) {
     const child = spawn(command, args, {
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
     });
     let stdout = "";
     let stderr = "";

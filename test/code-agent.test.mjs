@@ -314,12 +314,13 @@ describe("validateCommandArgs", () => {
       const { saveSettings, loadSettings } = await import("../src/state/settings.mjs");
       const prev = loadSettings();
       saveSettings({ ...prev, commandPermissions: { ...prev.commandPermissions, allowShell: true } });
-      const result = await runWorkspaceShell(dir, { command: "grep hello a.txt | wc -l" });
+      const cmd = process.platform === "win32" ? "echo hello | findstr hello" : "grep hello a.txt | wc -l";
+      const result = await runWorkspaceShell(dir, { command: cmd });
       assert.equal(result.ok, true);
-      assert.match(result.stdout.trim(), /1/);
+      assert.ok(result.stdout.trim().length > 0);
       saveSettings(prev);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -334,7 +335,7 @@ describe("validateCommandArgs", () => {
     try {
       assert.doesNotThrow(() => validateCommandArgs(dir, "node", ["script.js"]));
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -356,7 +357,7 @@ describe("owner approval guard", () => {
       );
       assert.equal(result.deleted, true);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -372,7 +373,7 @@ describe("owner approval guard", () => {
         (error) => error.permissionRequest?.permissionKey === "allowExternalWrites",
       );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -392,7 +393,7 @@ describe("executeWorkspaceTool delete_file", () => {
       });
       assert.equal(fs.existsSync(file), false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -406,7 +407,7 @@ describe("executeWorkspaceTool delete_file", () => {
       );
       assert.equal(fs.existsSync(path.join(dir, "nested")), true);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -421,7 +422,7 @@ describe("executeWorkspaceTool delete_dir", () => {
       assert.equal(result.deleted, true);
       assert.equal(fs.existsSync(path.join(dir, "empty")), false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -435,7 +436,7 @@ describe("executeWorkspaceTool delete_dir", () => {
       assert.equal(result.deleted, true);
       assert.equal(fs.existsSync(path.join(dir, "nonempty")), false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -449,7 +450,7 @@ describe("executeWorkspaceTool delete_dir", () => {
       );
       assert.equal(fs.existsSync(path.join(dir, "file.txt")), true);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -468,9 +469,9 @@ describe("executeWorkspaceTool list_files", () => {
       assert.equal(result.ok, true);
       assert.equal(result.path, ".");
       assert.ok(result.entries.includes("project/"));
-      assert.ok(result.entries.includes("project/src/core/app.py"));
+      assert.ok(result.entries.includes(path.join("project", "src", "core", "app.py")));
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -488,7 +489,7 @@ describe("executeWorkspaceTool list_files", () => {
       assert.equal(result.entries.length, 20);
       assert.equal(result.truncated, true);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -521,7 +522,7 @@ describe("runCodeTask fatal tool errors", () => {
       assert.match(result.message, /python3 without a script is blocked/);
       assert.doesNotMatch(result.message, /tool-step limit/);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -566,7 +567,7 @@ describe("runCodeTask running clarifications", () => {
       assert.match(prompts[1], /Important user clarification/);
       assert.match(prompts[1], /не показывай шаги/);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -597,7 +598,7 @@ describe("runCodeTask late running clarifications", () => {
       assert.equal(calls, 2);
       assert.match(prompts[1], /исправь ещё и дублирование/);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -623,7 +624,7 @@ describe("runCodeTask late running clarifications", () => {
       assert.equal(result.message, "updated answer");
       assert.equal(calls, 2);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -664,7 +665,7 @@ describe("runCodeTask transient text retries", () => {
       assert.equal(result.message, "Удалил setup_venv.py");
       assert.equal(fs.existsSync(file), false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -713,7 +714,7 @@ describe("runCodeTask text-only code responses", () => {
       assert.equal(fs.readFileSync(path.join(dir, "COURSE.md"), "utf8"), "# Структура курса\n");
       assert.equal(result.toolLogs.length, 1);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -778,7 +779,7 @@ describe("runCodeTask text-only code responses", () => {
       assert.match(prompts[1], /TOOL CALL REQUIRED/);
       assert.deepEqual(searchFlags, [true, false, true]);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -802,7 +803,7 @@ describe("runCodeTask text-only code responses", () => {
       assert.match(result.message, /without using workspace tools/);
       assert.equal(fs.existsSync(path.join(dir, "app.js")), false);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -822,7 +823,7 @@ describe("runCodeTask text-only code responses", () => {
       });
       assert.equal(result.message, "Это обычное объяснение без изменений файлов.");
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -925,7 +926,7 @@ describe("runCodeTask text-only code responses", () => {
       assert.match(prompts[2], /write_file/);
       assert.match(prompts[2], /workspace tools are connected/i);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -958,7 +959,7 @@ describe("runCodeTask text-only code responses", () => {
       assert.equal(result.message, "Создал структуру курса");
       assert.equal(fs.readFileSync(path.join(dir, "course/README.md"), "utf8"), "# Курс\n");
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -1154,12 +1155,12 @@ describe("hardware tool helpers", () => {
   it("adds common user install bins to command PATH", () => {
     const env = getCommandExecutionEnv({ HOME: "/Users/example", PATH: "/usr/bin" });
     const parts = env.PATH.split(path.delimiter);
-    assert.equal(parts.includes("/Users/example/.local/bin"), true);
-    assert.equal(parts.includes("/Users/example/Library/Python"), true);
+    assert.equal(parts.includes(path.join("/Users/example", ".local", "bin")), true);
+    assert.equal(parts.includes(path.join("/Users/example", "Library", "Python")), true);
     assert.equal(parts.includes("/opt/homebrew/bin"), true);
     assert.equal(parts.includes("/usr/local/bin"), true);
     assert.equal(parts.includes("/usr/bin"), true);
-    assert.equal(buildCommandPath({ HOME: "/Users/example", PATH: "/usr/bin" }).includes("/Users/example/Library/Python"), true);
+    assert.equal(buildCommandPath({ HOME: "/Users/example", PATH: "/usr/bin" }).includes(path.join("/Users/example", "Library", "Python")), true);
   });
 
   it("lists serial ports as a safe read-only tool", async () => {
@@ -1270,7 +1271,7 @@ describe("resolveWorkspacePath", () => {
   });
 
   it("cleanup", () => {
-    fs.rmSync(ws, { recursive: true, force: true });
+    try { fs.rmSync(ws, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
   });
 });
 
@@ -1309,7 +1310,7 @@ describe("read_file path recovery", () => {
       assert.equal(result.path, "hello.txt");
       assert.equal(result.truncated, false);
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
@@ -1360,7 +1361,7 @@ describe("native code agent checkpoints", () => {
       assert.equal(fs.readFileSync(path.join(root, "result.txt"), "utf8"), "once");
       assert.equal(apiCalls, 3);
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });

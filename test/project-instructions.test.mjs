@@ -13,7 +13,7 @@ const tempDirectories = [];
 
 afterEach(() => {
   for (const directory of tempDirectories.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
+    try { fs.rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
   }
 });
 

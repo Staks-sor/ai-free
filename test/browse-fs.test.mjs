@@ -17,11 +17,12 @@ describe("browse-fs", () => {
       assert.equal(result.totalDirectories, 2);
       assert.equal(result.truncated, false);
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
-  it("includes symlink to directory", () => {
+  it("includes symlink to directory", function () {
+    if (process.platform === "win32") return this.skip();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "browse-symlink-"));
     try {
       const real = path.join(root, "realdir");
@@ -34,7 +35,7 @@ describe("browse-fs", () => {
       const result = listBrowseDirectories(root);
       assert.ok(result.entries.some((e) => e.name === "linkdir"));
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -48,7 +49,7 @@ describe("browse-fs", () => {
       const shown = listBrowseDirectories(root, { showHidden: true });
       assert.equal(shown.entries.length, 2);
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });

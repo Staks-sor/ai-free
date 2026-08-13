@@ -38,7 +38,7 @@ describe("code agent compact prompt", () => {
       });
       assert.doesNotMatch(prompts[0], /coding agent/i);
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      try { fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });

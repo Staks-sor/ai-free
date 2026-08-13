@@ -22,11 +22,14 @@ describe("stt service", () => {
   });
 
   it("passes recorded audio to an external helper and parses JSON output", async () => {
+    const isWin = process.platform === "win32";
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stt-helper-"));
-    const helper = path.join(dir, "ai-free-stt");
+    const helper = path.join(dir, isWin ? "ai-free-stt.cmd" : "ai-free-stt");
     fs.writeFileSync(
       helper,
-      "#!/bin/sh\nprintf '{\"text\":\"hello from voice\",\"language\":\"en\",\"durationMs\":25}'\n",
+      isWin
+        ? "@echo off\r\necho {\"text\":\"hello from voice\",\"language\":\"en\",\"durationMs\":25}\r\n"
+        : "#!/bin/sh\nprintf '{\"text\":\"hello from voice\",\"language\":\"en\",\"durationMs\":25}'\n",
       { mode: 0o755 },
     );
     const previous = process.env.AI_FREE_STT_BIN;
@@ -44,7 +47,7 @@ describe("stt service", () => {
     } finally {
       if (previous === undefined) delete process.env.AI_FREE_STT_BIN;
       else process.env.AI_FREE_STT_BIN = previous;
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 
@@ -91,7 +94,7 @@ chmod +x ${shellQuote(parakeet)}
       else process.env.AI_FREE_STT_DIR = previousSttDir;
       if (previousStrictPath === undefined) delete process.env.AI_FREE_STT_STRICT_PATH;
       else process.env.AI_FREE_STT_STRICT_PATH = previousStrictPath;
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch (err) { if (err.code !== 'EPERM' && err.code !== 'EBUSY') throw err; }
     }
   });
 });
