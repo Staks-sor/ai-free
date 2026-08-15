@@ -40,9 +40,12 @@ function scanFiles(baseDir) {
   function walk(current) {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
+      if (entry.name.startsWith(".") || entry.name === "Thumbs.db") {
+        continue;
+      }
       if (entry.isDirectory()) {
         walk(fullPath);
-      } else if (/\.(mjs|js|json|html|css|svg|png)$/i.test(entry.name)) {
+      } else if (entry.isFile()) {
         const rel = path.relative(absBase, fullPath).replace(/\\/g, "/");
         const content = fs.readFileSync(fullPath);
         result.set(rel, {
