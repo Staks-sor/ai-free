@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { assertInventoryInvariants } from "./inventory-duplicates.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
@@ -151,6 +152,12 @@ check("desktop and VS Code STT and memory runtimes are synchronized", () => {
       `${relativePath} differs between desktop and VS Code`,
     );
   }
+});
+
+check("desktop and VS Code duplicate module inventory is synchronized", () => {
+  const inventory = assertInventoryInvariants();
+  assert.equal(inventory.divergent.length, 0, "Divergent modules detected between desktop and VS Code");
+  assert.ok(inventory.summary.identicalCount >= 150, "Expected at least 150 tracked identical modules");
 });
 
 check("Git does not track generated VSIX or operating-system metadata", () => {
