@@ -114,9 +114,15 @@ describe("architecture invariants", () => {
     const pluginPackage = JSON.parse(
       fs.readFileSync(new URL("../plugin-for-vscode/package.json", import.meta.url), "utf8"),
     );
+    const jetbrainsProperties = fs.readFileSync(
+      new URL("../plugin-for-jetbrains/gradle.properties", import.meta.url),
+      "utf8",
+    );
+    const jetbrainsVersion = jetbrainsProperties.match(/^version=(.+)$/m)?.[1]?.trim();
     assert.equal(ROOT_VERSION, rootPackage.version);
     assert.equal(PLUGIN_VERSION, pluginPackage.version);
     assert.equal(ROOT_VERSION, PLUGIN_VERSION);
-    assert.equal(ROOT_VERSION, "0.4.22");
+    assert.equal(ROOT_VERSION, jetbrainsVersion);
+    assert.equal(ROOT_VERSION, "0.4.23");
   });
 });

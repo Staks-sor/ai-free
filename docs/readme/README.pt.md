@@ -25,7 +25,7 @@
   <img src="https://img.shields.io/badge/provedores-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
 </p>
 
-<p align="center"><strong>AI Free 0.4.22</strong></p>
+<p align="center"><strong>AI Free 0.4.23</strong></p>
 
 > CLI e aplicativo desktop que reúne chats web gratuitos de IA em uma única interface. Atualmente oferece **DeepSeek, Qwen e ChatGPT** para macOS, Linux e Windows.
 

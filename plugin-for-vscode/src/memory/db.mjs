@@ -16,10 +16,17 @@ let sqliteDb = null;
 let jsonItems = null;
 let backend = null;
 
-export function resetMemoryBackendForTests() {
-  sqliteDb = null;
-  jsonItems = null;
+export function closeMemoryBackend() {
+  if (sqliteDb) {
+    try { sqliteDb.close(); } catch {}
+    sqliteDb = null;
+  }
   backend = null;
+}
+
+export function resetMemoryBackendForTests() {
+  closeMemoryBackend();
+  jsonItems = null;
 }
 
 function normalizeItem(raw = {}) {

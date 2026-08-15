@@ -49,7 +49,7 @@ intellijPlatform {
             AI Free inside PyCharm: DeepSeek, Qwen and ChatGPT chats,
             coding agents, project tools, memory, voice input and local APIs.
         """.trimIndent()
-        changeNotes = "Removed EconomyOS, added live Qwen model discovery and Qwen3.8 Max, improved slow-stream handling, and fixed cross-platform runtime/JCEF startup."
+        changeNotes = "Improved Windows test reliability, closed SQLite memory handles cleanly, and hardened STT language handling against command injection."
     }
     pluginVerification {
         ides {

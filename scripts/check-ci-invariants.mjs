@@ -29,7 +29,7 @@ function assertSemver(version, product) {
   assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, `${product} version is not valid semver`);
 }
 
-check("desktop and VS Code package versions are synchronized", () => {
+check("desktop, VS Code and JetBrains package versions are synchronized", () => {
   const products = [
     ["desktop", "package.json", "package-lock.json"],
     ["VS Code", "plugin-for-vscode/package.json", "plugin-for-vscode/package-lock.json"],
@@ -49,6 +49,11 @@ check("desktop and VS Code package versions are synchronized", () => {
     json("plugin-for-vscode/package.json").version,
     "desktop and VS Code versions differ",
   );
+
+  const jetbrainsVersion = read("plugin-for-jetbrains/gradle.properties")
+    .match(/^version=(.+)$/m)?.[1]?.trim();
+  assertSemver(jetbrainsVersion || "", "JetBrains");
+  assert.equal(json("package.json").version, jetbrainsVersion, "desktop and JetBrains versions differ");
 });
 
 check("desktop and VS Code model catalogs are synchronized", () => {
@@ -131,6 +136,21 @@ check("desktop and VS Code code-agent loops are synchronized", () => {
     read("plugin-for-vscode/src/code-agent/run.mjs"),
     read("src/code-agent/run.mjs"),
   );
+});
+
+check("desktop and VS Code STT and memory runtimes are synchronized", () => {
+  for (const relativePath of [
+    "src/stt/service.mjs",
+    "src/memory/db.mjs",
+    "src/memory/graph/store.mjs",
+    "src/memory/store.mjs",
+  ]) {
+    assert.equal(
+      read(`plugin-for-vscode/${relativePath}`),
+      read(relativePath),
+      `${relativePath} differs between desktop and VS Code`,
+    );
+  }
 });
 
 check("Git does not track generated VSIX or operating-system metadata", () => {

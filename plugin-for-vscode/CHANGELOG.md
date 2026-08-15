@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.23
+
+- Makes Windows test cleanup reliable by closing SQLite memory and graph handles before removing temporary data.
+- Runs Windows STT batch helpers without enabling a shell for normal executables.
+- Normalizes STT language tags before process launch and rejects command-injection payloads.
+- Keeps desktop, VS Code and JetBrains/PyCharm release versions synchronized.
+
 ## 0.4.22
 
 - Removes the EconomyOS provider, credentials, settings and API routes from AI Free.

@@ -25,7 +25,7 @@
   <img src="https://img.shields.io/badge/服务商-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
 </p>
 
-<p align="center"><strong>AI Free 0.4.22</strong></p>
+<p align="center"><strong>AI Free 0.4.23</strong></p>
 
 > 将免费 AI 网页聊天集中到一个界面的命令行和桌面应用。目前支持 **DeepSeek、Qwen 和 ChatGPT**，可运行于 macOS、Linux 和 Windows。
 
