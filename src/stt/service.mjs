@@ -8,7 +8,7 @@ function safeSpawn(command, args, options) {
   if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
     const escapedArgs = args.map((arg) => {
       const s = String(arg);
-      if (/[ &|<>^%"]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      if (/[ &|<>^%!\r\n"]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
       return s;
     });
     const cmdLine = `"${command}" ${escapedArgs.join(" ")}`;
@@ -128,6 +128,13 @@ async function installSttRuntimeOnce({ onLog } = {}) {
   return getVoiceStatus();
 }
 
+export function normalizeLanguageTag(lang) {
+  const clean = String(lang || "auto").trim().toLowerCase();
+  if (!clean || clean === "auto") return "auto";
+  if (/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(clean)) return clean;
+  return "auto";
+}
+
 export async function transcribeAudio({ dataBase64, mimeType = "audio/webm", language = "auto" } = {}) {
   const status = getVoiceStatus();
   if (!status.helperAvailable) {
@@ -152,7 +159,7 @@ export async function transcribeAudio({ dataBase64, mimeType = "audio/webm", lan
   try {
     return await runHelper(status.helper, input, {
       model: DEFAULT_STT_MODEL,
-      language: String(language || "auto"),
+      language: normalizeLanguageTag(language),
     });
   } finally {
     try { fs.rmSync(input, { force: true }); } catch {}

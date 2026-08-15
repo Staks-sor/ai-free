@@ -98,7 +98,7 @@ chmod +x ${shellQuote(parakeet)}
     }
   });
 
-  it("prevents command injection via language parameter", async () => {
+  it("prevents command injection via language parameter and normalizes language tag", async () => {
     const isWin = process.platform === "win32";
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-stt-sec-"));
     const previous = process.env.AI_FREE_STT_BIN;
@@ -113,33 +113,36 @@ chmod +x ${shellQuote(parakeet)}
     fs.writeFileSync(helper, helperScript, { mode: 0o755 });
     process.env.AI_FREE_STT_BIN = helper;
 
-    const payload = isWin
-      ? `en & echo INJECTED > ${sentinel}`
-      : `en; echo INJECTED > ${shellQuote(sentinel)}`;
+    const maliciousPayloads = [
+      isWin ? `en" & echo INJECTED > "${sentinel}" & rem "` : `en" ; echo INJECTED > ${shellQuote(sentinel)} ; echo "`,
+      isWin ? `en & echo INJECTED > "${sentinel}"` : `en ; echo INJECTED > ${shellQuote(sentinel)}`,
+    ];
 
     try {
-      const result = await transcribeAudio({
-        dataBase64: Buffer.from("dummy").toString("base64"),
-        mimeType: "audio/webm",
-        language: payload,
-      });
+      for (const payload of maliciousPayloads) {
+        const result = await transcribeAudio({
+          dataBase64: Buffer.from("dummy").toString("base64"),
+          mimeType: "audio/webm",
+          language: payload,
+        });
 
-      assert.equal(result.text, "mocked");
-      assert.equal(fs.existsSync(sentinel), false, "Sentinel file should not be created");
-      assert.ok(fs.existsSync(logFile), "Helper should have been called and logged language");
-      const receivedLang = fs.readFileSync(logFile, "utf8").trim();
-      assert.equal(receivedLang, payload.trim(), "Helper should receive intact language argument");
+        assert.equal(result.text, "mocked");
+        assert.equal(fs.existsSync(sentinel), false, "Sentinel file must not be created");
+        const receivedLang = fs.readFileSync(logFile, "utf8").trim();
+        assert.equal(receivedLang, "auto", "Malicious language parameter must be normalized to auto");
+      }
 
-      // Also verify normal language argument with spaces works
-      const spacedLang = "en US";
-      const resultSpaced = await transcribeAudio({
-        dataBase64: Buffer.from("dummy").toString("base64"),
-        mimeType: "audio/webm",
-        language: spacedLang,
-      });
-      assert.equal(resultSpaced.text, "mocked");
-      const receivedSpaced = fs.readFileSync(logFile, "utf8").trim();
-      assert.equal(receivedSpaced, spacedLang);
+      // Verify legitimate language tags are preserved
+      for (const lang of ["en", "ru", "en-US", "zh-CN", "auto"]) {
+        const result = await transcribeAudio({
+          dataBase64: Buffer.from("dummy").toString("base64"),
+          mimeType: "audio/webm",
+          language: lang,
+        });
+        assert.equal(result.text, "mocked");
+        const received = fs.readFileSync(logFile, "utf8").trim();
+        assert.equal(received.toLowerCase(), lang.toLowerCase(), `Valid language tag ${lang} must be preserved`);
+      }
     } finally {
       if (previous === undefined) delete process.env.AI_FREE_STT_BIN;
       else process.env.AI_FREE_STT_BIN = previous;
