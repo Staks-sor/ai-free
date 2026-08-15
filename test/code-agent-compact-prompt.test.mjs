@@ -38,7 +38,7 @@ describe("code agent compact prompt", () => {
       });
       assert.doesNotMatch(prompts[0], /coding agent/i);
     } finally {
-      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 });

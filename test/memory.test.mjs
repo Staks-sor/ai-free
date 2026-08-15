@@ -15,9 +15,13 @@ describe("memory vault + search", () => {
     await memory.warmMemoryBackend();
   });
 
-  after(() => {
+  after(async () => {
     delete process.env.AI_FREE_MEMORY_DIR;
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    const { resetMemoryBackendForTests } = await import("../src/memory/db.mjs");
+    const { resetGraphBackendForTests } = await import("../src/memory/graph/store.mjs");
+    resetMemoryBackendForTests();
+    resetGraphBackendForTests();
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
   it("writes markdown vault files on addMemory", async () => {

@@ -24,7 +24,7 @@ describe("memory graph", () => {
     const { resetGraphBackendForTests } = await import("../src/memory/graph/store.mjs");
     resetMemoryBackendForTests();
     resetGraphBackendForTests();
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
   it("links experience items and expands context via graph", async () => {

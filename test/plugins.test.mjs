@@ -18,7 +18,7 @@ describe("plugins codex/claude compatibility", () => {
     const { clearSkillCache } = await import("../src/skills/registry.mjs");
     clearPluginCache();
     clearSkillCache();
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
   it("loads Codex plugin with SKILL.md skills", async () => {

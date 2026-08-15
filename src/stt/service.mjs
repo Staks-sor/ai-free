@@ -4,6 +4,21 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+function safeSpawn(command, args, options) {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+    const escapedArgs = args.map((arg) => {
+      const s = String(arg);
+      if (/[ &|<>^%!\r\n"]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    });
+    const cmdLine = `"${command}" ${escapedArgs.join(" ")}`;
+    return spawn("cmd.exe", ["/d", "/s", "/c", `"${cmdLine}"`], {
+      ...options,
+      windowsVerbatimArguments: true,
+    });
+  }
+  return spawn(command, args, options);
+}
 import {
   STT_DIR,
 } from "../config.mjs";
@@ -113,6 +128,13 @@ async function installSttRuntimeOnce({ onLog } = {}) {
   return getVoiceStatus();
 }
 
+export function normalizeLanguageTag(lang) {
+  const clean = String(lang || "auto").trim().toLowerCase();
+  if (!clean || clean === "auto") return "auto";
+  if (/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(clean)) return clean;
+  return "auto";
+}
+
 export async function transcribeAudio({ dataBase64, mimeType = "audio/webm", language = "auto" } = {}) {
   const status = getVoiceStatus();
   if (!status.helperAvailable) {
@@ -137,7 +159,7 @@ export async function transcribeAudio({ dataBase64, mimeType = "audio/webm", lan
   try {
     return await runHelper(status.helper, input, {
       model: DEFAULT_STT_MODEL,
-      language: String(language || "auto"),
+      language: normalizeLanguageTag(language),
     });
   } finally {
     try { fs.rmSync(input, { force: true }); } catch {}
@@ -147,7 +169,7 @@ export async function transcribeAudio({ dataBase64, mimeType = "audio/webm", lan
 function runHelper(helper, input, { model, language }) {
   const paths = getSttPaths();
   return new Promise((resolve, reject) => {
-    const child = spawn(helper, [
+    const child = safeSpawn(helper, [
       "transcribe",
       "--input", input,
       "--model", model,
@@ -263,7 +285,7 @@ exit /b %ERRORLEVEL%
 
 function runCommand(command, args, { timeoutMs, env = {} }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = safeSpawn(command, args, {
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });

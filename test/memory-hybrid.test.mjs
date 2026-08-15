@@ -18,8 +18,10 @@ describe("memory hybrid search", () => {
   after(async () => {
     delete process.env.AI_FREE_MEMORY_DIR;
     const { resetMemoryBackendForTests } = await import("../src/memory/db.mjs");
+    const { resetGraphBackendForTests } = await import("../src/memory/graph/store.mjs");
     resetMemoryBackendForTests();
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    resetGraphBackendForTests();
+    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
   it("merges FTS and vector results", async () => {
