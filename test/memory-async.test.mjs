@@ -20,12 +20,17 @@ describe("memory async queue", () => {
     await warmGraphBackend();
   });
 
-  after(async () => {  const m = await import('../src/memory/store.mjs');
-    if (m.closeMemoryBackend) m.closeMemoryBackend();
-    const g = await import('../src/memory/graph/store.mjs');
-    if (g.closeGraphBackend) g.closeGraphBackend();
+  after(async () => {
+    const { flushMemoryQueueForTests, resetMemoryQueueForTests } = await import("../src/memory/async-queue.mjs");
+    const { resetMemoryBackendForTests } = await import("../src/memory/db.mjs");
+    const { resetGraphBackendForTests } = await import("../src/memory/graph/store.mjs");
+    await flushMemoryQueueForTests();
+    resetMemoryQueueForTests();
+    resetMemoryBackendForTests();
+    resetGraphBackendForTests();
+    delete process.env.AI_FREE_MEMORY_DIR;
     fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-});
+  });
 
   it("returns immediately and saves in background", async () => {
     const {

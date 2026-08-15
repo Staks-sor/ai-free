@@ -98,28 +98,48 @@ chmod +x ${shellQuote(parakeet)}
     }
   });
 
-  it("prevents command injection on Windows via language parameter", async () => {
+  it("prevents command injection via language parameter", async () => {
+    const isWin = process.platform === "win32";
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-stt-sec-"));
     const previous = process.env.AI_FREE_STT_BIN;
-    
-    // We mock the batch file to echo the language parameter.
-    // If command injection works, it would execute the injected command (e.g. echo INJECTED).
-    fs.mkdirSync(path.join(dir, "runtime"), { recursive: true });
-    const mockBin = path.join(dir, "runtime", "ai-free-stt.cmd");
-    fs.writeFileSync(mockBin, "@echo off\necho {\"text\": \"mocked\", \"language\": \"%~7\"}\n");
-    process.env.AI_FREE_STT_BIN = mockBin;
+    const logFile = path.join(dir, "received.txt");
+    const sentinel = path.join(dir, "sentinel.txt");
+    const helper = path.join(dir, isWin ? "ai-free-stt.cmd" : "ai-free-stt");
+
+    const helperScript = isWin
+      ? `@echo off\r\nsetlocal\r\nset "LANG=%~7"\r\nsetlocal EnableDelayedExpansion\r\n> "${logFile}" echo(!LANG!\r\necho {"text":"mocked","language":"ok","durationMs":1}\r\n`
+      : `#!/bin/sh\nprintf '%s' "$7" > ${shellQuote(logFile)}\nprintf '{"text":"mocked","language":"ok","durationMs":1}'\n`;
+
+    fs.writeFileSync(helper, helperScript, { mode: 0o755 });
+    process.env.AI_FREE_STT_BIN = helper;
+
+    const payload = isWin
+      ? `en & echo INJECTED > ${sentinel}`
+      : `en; echo INJECTED > ${shellQuote(sentinel)}`;
 
     try {
       const result = await transcribeAudio({
         dataBase64: Buffer.from("dummy").toString("base64"),
         mimeType: "audio/webm",
-        // The malicious payload:
-        language: "en\" & echo INJECTED",
+        language: payload,
       });
-      assert.ok(result.text.includes("mocked"));
-      // If the parameter was passed safely, the script echoes the exact payload.
-      // If injection succeeded, the batch script wouldn't output the valid JSON.
-      assert.ok(result.text.includes("INJECTED"));
+
+      assert.equal(result.text, "mocked");
+      assert.equal(fs.existsSync(sentinel), false, "Sentinel file should not be created");
+      assert.ok(fs.existsSync(logFile), "Helper should have been called and logged language");
+      const receivedLang = fs.readFileSync(logFile, "utf8").trim();
+      assert.equal(receivedLang, payload.trim(), "Helper should receive intact language argument");
+
+      // Also verify normal language argument with spaces works
+      const spacedLang = "en US";
+      const resultSpaced = await transcribeAudio({
+        dataBase64: Buffer.from("dummy").toString("base64"),
+        mimeType: "audio/webm",
+        language: spacedLang,
+      });
+      assert.equal(resultSpaced.text, "mocked");
+      const receivedSpaced = fs.readFileSync(logFile, "utf8").trim();
+      assert.equal(receivedSpaced, spacedLang);
     } finally {
       if (previous === undefined) delete process.env.AI_FREE_STT_BIN;
       else process.env.AI_FREE_STT_BIN = previous;
