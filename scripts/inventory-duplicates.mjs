@@ -26,7 +26,9 @@ export const KNOWN_DESKTOP_ONLY = new Set([
 ]);
 
 // Модули, присутствующие только в VS Code расширении
-export const KNOWN_VSCODE_ONLY = new Set();
+export const KNOWN_VSCODE_ONLY = new Set([
+  "plugin-for-vscode/api/README.md",
+]);
 
 function hashContent(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
@@ -170,7 +172,7 @@ export function formatInventoryReport(inventory = getDuplicateInventory()) {
     `- **Полностью идентичные модули:** ${inventory.summary.identicalCount} файлов (${inventory.summary.totalDuplicateKilobytes} KB)`,
     `- **Платформенно-специфичные модули:** ${inventory.summary.platformSpecificCount} файла`,
     `- **Модули только для Desktop:** ${inventory.summary.desktopOnlyCount} файла`,
-    `- **Модули только для VS Code:** ${inventory.summary.vscodeOnlyCount} файла`,
+    `- **Модули только для VS Code:** ${inventory.summary.vscodeOnlyCount} файл`,
     `- **Случайно разошедшиеся модули (Divergent):** ${inventory.summary.divergentCount} файлов`,
     "",
     "## Платформенно-специфичные модули (Намеренные различия)",
@@ -187,6 +189,13 @@ export function formatInventoryReport(inventory = getDuplicateInventory()) {
   lines.push("## Модули только для Desktop");
   lines.push("");
   for (const item of inventory.desktopOnly) {
+    lines.push(`- \`${item.path}\` (${item.size} bytes)`);
+  }
+  lines.push("");
+
+  lines.push("## Модули только для VS Code");
+  lines.push("");
+  for (const item of inventory.vscodeOnly) {
     lines.push(`- \`${item.path}\` (${item.size} bytes)`);
   }
   lines.push("");

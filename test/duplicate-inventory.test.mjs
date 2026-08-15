@@ -7,6 +7,7 @@ import {
   assertInventoryInvariants,
   KNOWN_PLATFORM_SPECIFIC,
   KNOWN_DESKTOP_ONLY,
+  KNOWN_VSCODE_ONLY,
 } from "../scripts/inventory-duplicates.mjs";
 
 describe("duplicate module inventory", () => {
@@ -16,6 +17,7 @@ describe("duplicate module inventory", () => {
     assert.ok(inventory.summary.identicalCount >= 150, "Should track at least 150 identical files");
     assert.equal(inventory.summary.platformSpecificCount, KNOWN_PLATFORM_SPECIFIC.size);
     assert.equal(inventory.summary.desktopOnlyCount, KNOWN_DESKTOP_ONLY.size);
+    assert.equal(inventory.summary.vscodeOnlyCount, KNOWN_VSCODE_ONLY.size);
   });
 
   it("documents known intentional platform-specific differences", () => {
