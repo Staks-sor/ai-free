@@ -161,6 +161,8 @@ export const language = {
     "chat.history": "历史：{file}",
     "chat.you": "你",
     "chat.assistant": "助手",
+    "chat.reasoningProcess": "思考过程",
+    "chat.reasoningThinking": "思考中…",
     "chat.question": "问题",
     "chat.system": "系统",
     "install.title": "安装工具",

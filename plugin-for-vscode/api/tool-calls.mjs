@@ -226,3 +226,42 @@ function decodeXmlText(value) {
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&");
 }
+
+export function formatCompactTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return "[]";
+  const cleaned = tools
+    .map((t) => {
+      const fn = t?.function || t;
+      if (!fn?.name) return null;
+      const cleanParams = cleanJsonSchema(fn.parameters || fn.input_schema);
+      return {
+        type: "function",
+        function: {
+          name: fn.name,
+          ...(fn.description ? { description: fn.description.trim() } : {}),
+          ...(cleanParams ? { parameters: cleanParams } : {}),
+        },
+      };
+    })
+    .filter(Boolean);
+  return JSON.stringify(cleaned);
+}
+
+function cleanJsonSchema(schema) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
+  const { $schema, $id, additionalProperties, title, ...rest } = schema;
+  const res = { ...rest };
+  if (res.properties && typeof res.properties === "object") {
+    const cleanedProps = {};
+    for (const [k, v] of Object.entries(res.properties)) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        const { $schema: _, $id: __, additionalProperties: ___, ...propRest } = v;
+        cleanedProps[k] = propRest;
+      } else {
+        cleanedProps[k] = v;
+      }
+    }
+    res.properties = cleanedProps;
+  }
+  return res;
+}

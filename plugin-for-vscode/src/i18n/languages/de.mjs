@@ -161,6 +161,8 @@ export const language = {
     "chat.history": "Verlauf: {file}",
     "chat.you": "Sie",
     "chat.assistant": "Assistent",
+    "chat.reasoningProcess": "Denkprozess",
+    "chat.reasoningThinking": "Denkt nach…",
     "chat.question": "Frage",
     "chat.system": "System",
     "install.title": "Werkzeug installieren",

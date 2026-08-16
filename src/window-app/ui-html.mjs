@@ -2075,6 +2075,34 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       tab.addEventListener("click", () => setAgentDrawerTab(tab.dataset.tab));
     }
 
+    function splitThinkingContent(rawText) {
+      const text = String(rawText || "");
+      if (!text.includes("<think>")) {
+        return { hasThinking: false, thinking: "", content: text, isThinkingClosed: true };
+      }
+      const thinkStartIndex = text.indexOf("<think>");
+      const thinkEndIndex = text.indexOf("</think>");
+      const before = text.slice(0, thinkStartIndex).trim();
+      if (thinkEndIndex === -1) {
+        const thinking = text.slice(thinkStartIndex + "<think>".length).trimStart();
+        return {
+          hasThinking: true,
+          thinking,
+          content: before,
+          isThinkingClosed: false,
+        };
+      }
+      const thinking = text.slice(thinkStartIndex + "<think>".length, thinkEndIndex).trim();
+      const after = text.slice(thinkEndIndex + "</think>".length).trimStart();
+      const content = before ? (before + "\\n\\n" + after) : after;
+      return {
+        hasThinking: true,
+        thinking,
+        content,
+        isThinkingClosed: true,
+      };
+    }
+
     function renderConversation(conversation, options = {}) {
       stopTypewriters();
       const conversationChanged = renderedConversationId !== conversation.id;
@@ -2251,29 +2279,69 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           bubble.appendChild(tools);
         }
         if (message.content) {
-          const textEl = document.createElement("div");
-          if (message.streaming) {
-            textEl.className = "streamingText";
-            const progressiveKey = [
-              conversation.id,
-              message.createdAt || index,
-            ].join(":");
-            typeProgressiveText(textEl, message.content || "…", progressiveKey, () => {
-              scrollMessagesToBottomIfFollowing();
-            });
-          } else if (index === animateIndex) {
-            progressiveTextState.delete([
-              conversation.id,
-              message.createdAt || index,
-            ].join(":"));
-            textEl.textContent = "";
-            typeText(textEl, message.content, () => {
-              scrollMessagesToBottomIfFollowing();
-            });
-          } else {
-            textEl.textContent = message.content;
+          const thinkingData = splitThinkingContent(message.content);
+          if (thinkingData.hasThinking && thinkingData.thinking) {
+            const thinkingDetails = document.createElement("details");
+            thinkingDetails.className = "thinkingAccordion";
+            if (message.streaming && !thinkingData.isThinkingClosed) {
+              thinkingDetails.open = true;
+            }
+            const thinkingSummary = document.createElement("summary");
+            thinkingSummary.className = "thinkingSummary";
+            const thinkingIcon = document.createElement("span");
+            thinkingIcon.textContent = "🧠";
+            const thinkingTitle = document.createElement("span");
+            thinkingTitle.textContent = t("chat.reasoningProcess");
+            const thinkingBadge = document.createElement("span");
+            thinkingBadge.className = "thinkingBadge";
+            thinkingBadge.textContent = !thinkingData.isThinkingClosed && message.streaming
+              ? t("chat.reasoningThinking")
+              : t("chat.reasoningProcess");
+            thinkingSummary.append(thinkingIcon, thinkingTitle, thinkingBadge);
+            thinkingDetails.appendChild(thinkingSummary);
+
+            const thinkingBody = document.createElement("div");
+            thinkingBody.className = "thinkingBody";
+            thinkingBody.textContent = thinkingData.thinking;
+            thinkingDetails.appendChild(thinkingBody);
+
+            bubble.appendChild(thinkingDetails);
           }
-          bubble.appendChild(textEl);
+
+          const visibleContent = thinkingData.hasThinking ? thinkingData.content : message.content;
+          if (visibleContent || (message.streaming && !thinkingData.hasThinking)) {
+            const textEl = document.createElement("div");
+            if (message.streaming) {
+              textEl.className = "streamingText";
+              const progressiveKey = [
+                conversation.id,
+                message.createdAt || index,
+              ].join(":");
+              if (thinkingData.hasThinking) {
+                typeProgressiveText(textEl, thinkingData.content || "", progressiveKey, () => {
+                  scrollMessagesToBottomIfFollowing();
+                });
+              } else {
+                typeProgressiveText(textEl, message.content || "…", progressiveKey, () => {
+                  scrollMessagesToBottomIfFollowing();
+                });
+              }
+            } else if (index === animateIndex) {
+              progressiveTextState.delete([
+                conversation.id,
+                message.createdAt || index,
+              ].join(":"));
+              textEl.textContent = "";
+              typeText(textEl, visibleContent, () => {
+                scrollMessagesToBottomIfFollowing();
+              });
+            } else {
+              textEl.textContent = visibleContent;
+            }
+            if (visibleContent || message.streaming) {
+              bubble.appendChild(textEl);
+            }
+          }
         }
         // Сгенерированные ChatGPT картинки (data-URL) — рендерим как <img>.
         if (Array.isArray(message.images) && message.images.length) {

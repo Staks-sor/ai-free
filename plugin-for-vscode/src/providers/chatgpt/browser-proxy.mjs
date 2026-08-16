@@ -1193,9 +1193,10 @@ async function createProxy({ debug, adoptedSession = null }) {
       }
     }
     await page.keyboard.press("Escape").catch(() => {});
-    throw new Error(
-      `ChatGPT: режим «${model?.label || modelId}» недоступен для этого аккаунта. Выберите другой режим.`,
+    console.log(
+      `[chatgpt] Model «${model?.label || modelId}» not explicitly found in menu, falling back to active session model (${current || "default"}).`,
     );
+    return true;
   }
 
   async function sendChatOnce({ prompt, model, conversationId, onText, images = [], attemptState = null }) {

@@ -103,6 +103,34 @@ describe("extractDeltaText", () => {
     // На втором проходе вычитаем уже виденное — должен прийти только новый кусок.
     assert.equal(second.text, " world");
   });
+
+  it("wraps THINK events in <think> and closes tag when RESPONSE starts", () => {
+    const cache = new Map();
+    const thinkChunk = extractDeltaText(
+      { type: "THINK", content: "Thinking step 1", id: 2, role: "ASSISTANT" },
+      cache,
+    );
+    assert.equal(thinkChunk.text, "<think>\nThinking step 1");
+
+    const responseChunk = extractDeltaText(
+      { type: "RESPONSE", content: "Final answer", id: 2, role: "ASSISTANT" },
+      cache,
+    );
+    assert.equal(responseChunk.text, "\n</think>\n\nFinal answer");
+  });
+
+  it("closes <think> tag when fragment 1 APPEND operation arrives", () => {
+    const cache = new Map();
+    extractDeltaText(
+      { type: "THINK", content: "Reasoning", id: 3, role: "ASSISTANT" },
+      cache,
+    );
+    const fragment1 = extractDeltaText(
+      { o: "APPEND", p: "/response/fragments/1/content", v: "Answer delta", response_message_id: 3 },
+      cache,
+    );
+    assert.equal(fragment1.text, "\n</think>\n\nAnswer delta");
+  });
 });
 
 describe("streamSse", () => {
