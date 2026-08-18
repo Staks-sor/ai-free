@@ -1,6 +1,6 @@
 {
   "name": "ai-free",
-  "version": "0.4.23",
+  "version": "0.4.24",
   "description": "Free local AI client for DeepSeek, Qwen and ChatGPT with OpenAI-compatible API, CLI, code agent, memory and skills.",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",

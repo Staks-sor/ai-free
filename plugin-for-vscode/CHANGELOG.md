@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.24
+
+- Keeps Qwen reasoning chunks alive during browser streaming and compacts large tool schemas for reliable OpenAI-compatible tool calls.
+- Adds a localized, collapsible reasoning view and fixes DeepSeek reasoning boundaries in streamed responses.
+- Falls back to the active ChatGPT web model when an account does not expose the requested model label.
+- Adds CI inventory checks that prevent accidental drift between Desktop and VS Code shared modules.
+- Keeps Desktop, VS Code and JetBrains/PyCharm release versions synchronized.
+
 ## 0.4.23
 
 - Makes Windows test cleanup reliable by closing SQLite memory and graph handles before removing temporary data.

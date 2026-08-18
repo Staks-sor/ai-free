@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,32 +35,34 @@ function hashContent(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
+function listTrackedFiles(baseDir) {
+  const output = execFileSync("git", ["ls-files", "-z", "--", baseDir], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  const prefix = `${baseDir}/`;
+  return output
+    .split("\0")
+    .filter((file) => file.startsWith(prefix))
+    .map((file) => file.slice(prefix.length));
+}
+
 function scanFiles(baseDir) {
   const result = new Map();
   const absBase = path.join(root, baseDir);
   if (!fs.existsSync(absBase)) return result;
 
-  function walk(current) {
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.name.startsWith(".") || entry.name === "Thumbs.db") {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        walk(fullPath);
-      } else if (entry.isFile()) {
-        const rel = path.relative(absBase, fullPath).replace(/\\/g, "/");
-        const content = fs.readFileSync(fullPath);
-        result.set(rel, {
-          relPath: `${baseDir}/${rel}`,
-          subPath: rel,
-          size: content.length,
-          hash: hashContent(content),
-        });
-      }
-    }
+  for (const rel of listTrackedFiles(baseDir)) {
+    const fullPath = path.join(absBase, rel);
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) continue;
+    const content = fs.readFileSync(fullPath);
+    result.set(rel, {
+      relPath: `${baseDir}/${rel}`,
+      subPath: rel,
+      size: content.length,
+      hash: hashContent(content),
+    });
   }
-  walk(absBase);
   return result;
 }
 
