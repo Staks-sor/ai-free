@@ -57,11 +57,12 @@ check("desktop, VS Code and JetBrains package versions are synchronized", () => 
   assert.equal(json("package.json").version, jetbrainsVersion, "desktop and JetBrains versions differ");
 });
 
-check("desktop and VS Code model catalogs are synchronized", () => {
-  assert.equal(
-    read("plugin-for-vscode/src/providers/model-catalog.mjs"),
-    read("src/providers/model-catalog.mjs"),
-  );
+check("desktop, VS Code and shared core model catalogs are synchronized", async () => {
+  const { PROVIDER_CATALOG: desktop } = await import("../src/providers/model-catalog.mjs");
+  const { PROVIDER_CATALOG: plugin } = await import("../plugin-for-vscode/src/providers/model-catalog.mjs");
+  const { PROVIDER_CATALOG: core } = await import("../packages/core/src/providers/model-catalog.mjs");
+  assert.deepEqual(desktop, core, "desktop catalog differs from core");
+  assert.deepEqual(plugin, core, "plugin catalog differs from core");
 });
 
 check("desktop and VS Code diagnostics are synchronized", () => {
@@ -157,7 +158,10 @@ check("desktop and VS Code STT and memory runtimes are synchronized", () => {
 check("desktop and VS Code duplicate module inventory is synchronized", () => {
   const inventory = assertInventoryInvariants();
   assert.equal(inventory.divergent.length, 0, "Divergent modules detected between desktop and VS Code");
-  assert.ok(inventory.summary.identicalCount >= 150, "Expected at least 150 tracked identical modules");
+  assert.ok(
+    inventory.summary.identicalCount + inventory.summary.coreSharedCount >= 150,
+    "Expected at least 150 tracked identical or core-shared modules",
+  );
 });
 
 check("Git does not track generated VSIX or operating-system metadata", () => {

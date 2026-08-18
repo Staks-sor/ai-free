@@ -66,6 +66,17 @@ function scanFiles(baseDir) {
   return result;
 }
 
+function isCoreReExport(filePath) {
+  try {
+    const full = path.join(root, filePath);
+    if (!fs.existsSync(full)) return false;
+    const content = fs.readFileSync(full, "utf8");
+    return content.includes("packages/core/") || content.includes("@ai-free/core");
+  } catch {
+    return false;
+  }
+}
+
 export function getDuplicateInventory() {
   const pairs = [
     { name: "src", desktop: "src", vscode: "plugin-for-vscode/src" },
@@ -73,6 +84,7 @@ export function getDuplicateInventory() {
   ];
 
   const identical = [];
+  const coreShared = [];
   const platformSpecific = [];
   const divergent = [];
   const desktopOnly = [];
@@ -97,6 +109,13 @@ export function getDuplicateInventory() {
             vscodePath: vscodeRel,
             size: d.size,
             hash: d.hash,
+          });
+        } else if (isCoreReExport(desktopRel) && isCoreReExport(vscodeRel)) {
+          coreShared.push({
+            subPath: key,
+            desktopPath: desktopRel,
+            vscodePath: vscodeRel,
+            corePath: `packages/core/src/${key}`,
           });
         } else if (KNOWN_PLATFORM_SPECIFIC.has(desktopRel)) {
           platformSpecific.push({
@@ -148,12 +167,14 @@ export function getDuplicateInventory() {
 
   return {
     identical,
+    coreShared,
     platformSpecific,
     desktopOnly,
     vscodeOnly,
     divergent,
     summary: {
       identicalCount: identical.length,
+      coreSharedCount: coreShared.length,
       platformSpecificCount: platformSpecific.length,
       desktopOnlyCount: desktopOnly.length,
       vscodeOnlyCount: vscodeOnly.length,
@@ -170,17 +191,24 @@ export function formatInventoryReport(inventory = getDuplicateInventory()) {
     "",
     `Дата формирования: ${new Date().toISOString().split("T")[0]}`,
     "",
-    "## Сводка",
-    "",
+    `- **Вынесено в @ai-free/core (Unified Shared Core):** ${inventory.summary.coreSharedCount} файлов`,
     `- **Полностью идентичные модули:** ${inventory.summary.identicalCount} файлов (${inventory.summary.totalDuplicateKilobytes} KB)`,
     `- **Платформенно-специфичные модули:** ${inventory.summary.platformSpecificCount} файла`,
     `- **Модули только для Desktop:** ${inventory.summary.desktopOnlyCount} файла`,
     `- **Модули только для VS Code:** ${inventory.summary.vscodeOnlyCount} файл`,
     `- **Случайно разошедшиеся модули (Divergent):** ${inventory.summary.divergentCount} файлов`,
     "",
-    "## Платформенно-специфичные модули (Намеренные различия)",
+    "## Модули общего ядра (@ai-free/core)",
     "",
   ];
+
+  for (const item of inventory.coreShared) {
+    lines.push(`- \`${item.corePath}\` (re-exported in Desktop and VS Code)`);
+  }
+  lines.push("");
+
+  lines.push("## Платформенно-специфичные модули (Намеренные различия)");
+  lines.push("");
 
   for (const item of inventory.platformSpecific) {
     lines.push(`### \`${item.desktopPath}\``);

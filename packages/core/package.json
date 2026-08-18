@@ -1,0 +1,21 @@
+{
+  "name": "@ai-free/core",
+  "version": "0.4.24",
+  "description": "Shared core abstractions, model catalog, i18n, and pure utilities for AI Free",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./models": "./src/providers/model-catalog.mjs",
+    "./providers/*": "./src/providers/*.mjs",
+    "./i18n": "./src/i18n/index.mjs",
+    "./i18n/*": "./src/i18n/*.mjs",
+    "./code-agent/*": "./src/code-agent/*.mjs",
+    "./memory/*": "./src/memory/*.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
