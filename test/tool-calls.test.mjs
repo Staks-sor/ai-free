@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
 
-import { normalizeToolCallsForSchemas, parseModelToolCalls } from "../api/tool-calls.mjs";
+import { formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls } from "../api/tool-calls.mjs";
 
 describe("model tool-call bridge", () => {
   it("parses markdown tool_calls blocks into normalized calls", () => {
@@ -91,5 +91,33 @@ describe("model tool-call bridge", () => {
     }]);
 
     assert.deepEqual(result.errors, [{ name: "Edit", missing: ["new_string"] }]);
+  });
+
+  it("compacts tool schemas by stripping redundant $schema and additionalProperties", () => {
+    const verboseTools = [
+      {
+        type: "function",
+        function: {
+          name: "bash",
+          description: "Execute bash command",
+          parameters: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              command: { type: "string", description: "The command to run", $schema: "draft-7" },
+            },
+            required: ["command"],
+            additionalProperties: false,
+          },
+        },
+      },
+    ];
+
+    const compact = formatCompactTools(verboseTools);
+    const parsed = JSON.parse(compact);
+    assert.equal(parsed[0].function.name, "bash");
+    assert.equal(parsed[0].function.parameters.$schema, undefined);
+    assert.equal(parsed[0].function.parameters.additionalProperties, undefined);
+    assert.equal(parsed[0].function.parameters.properties.command.type, "string");
   });
 });

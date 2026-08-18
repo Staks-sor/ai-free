@@ -161,6 +161,8 @@ export const language = {
     "chat.history": "इतिहास: {file}",
     "chat.you": "आप",
     "chat.assistant": "सहायक",
+    "chat.reasoningProcess": "विचार प्रक्रिया",
+    "chat.reasoningThinking": "सोच रहा है…",
     "chat.question": "प्रश्न",
     "chat.system": "सिस्टम",
     "install.title": "टूल इंस्टॉल करें",

@@ -106,6 +106,9 @@ export function extractDeltaText(value, cache, eventName = "") {
     if (typeof node.message_id === "number") messageId = node.message_id;
     if (typeof node.id === "number" && node.role === "ASSISTANT") messageId = node.id;
 
+    const startedKey = "think_started";
+    const endedKey = "think_ended";
+
     if (path === "$" && Object.keys(node).length === 1 && typeof node.v === "string") {
       text += node.v;
       return;
@@ -117,6 +120,20 @@ export function extractDeltaText(value, cache, eventName = "") {
       node.p.endsWith("/content") &&
       typeof node.v === "string"
     ) {
+      const isFragment0 = node.p.includes("/fragments/0/") || node.p.includes(".fragments.0.");
+      const isFragment1Plus = /\/fragments\/[1-9]\//.test(node.p) || /\.fragments\.[1-9]\./.test(node.p);
+
+      if (isFragment1Plus) {
+        if (cache.get(startedKey) && !cache.get(endedKey)) {
+          cache.set(endedKey, true);
+          text += "\n</think>\n\n";
+        }
+      } else if (isFragment0) {
+        if (!cache.get(startedKey)) {
+          cache.set(startedKey, true);
+          text += "<think>\n";
+        }
+      }
       text += node.v;
       return;
     }
@@ -135,7 +152,21 @@ export function extractDeltaText(value, cache, eventName = "") {
       const current = node.content;
       const delta = current.startsWith(previous) ? current.slice(previous.length) : current;
       cache.set(key, current);
-      text += delta;
+
+      if (node.type === "THINK") {
+        if (!cache.get(startedKey)) {
+          cache.set(startedKey, true);
+          text += "<think>\n";
+        }
+        text += delta;
+      } else if (node.type === "RESPONSE" || node.type === "TEMPLATE_RESPONSE") {
+        if (cache.get(startedKey) && !cache.get(endedKey)) {
+          cache.set(endedKey, true);
+          text += "\n</think>\n\n";
+        }
+        text += delta;
+      }
+      return;
     }
 
     if (typeof node?.choices?.[0]?.delta?.content === "string") {

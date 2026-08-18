@@ -176,4 +176,12 @@ describe("ui-html inline script", () => {
     assert.ok(providerCheckIndex >= 0, "submit handler must check provider availability");
     assert.ok(claimIndex < providerCheckIndex, "composer must be claimed before the first await");
   });
+
+  it("renders a collapsible reasoning accordion when assistant message contains <think>", () => {
+    const html = renderWindowHtml({ language: "ru" });
+    assert.match(html, /function splitThinkingContent/);
+    assert.match(html, /thinkingDetails\.className = "thinkingAccordion"/);
+    assert.match(html, /thinkingSummary\.className = "thinkingSummary"/);
+    assert.match(html, /thinkingBody\.className = "thinkingBody"/);
+  });
 });

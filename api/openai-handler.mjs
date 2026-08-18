@@ -27,7 +27,7 @@ import { getQwenLiveCatalogOverride } from "../src/providers/qwen/model-sync.mjs
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
-import { normalizeToolCallsForSchemas, parseModelToolCalls } from "./tool-calls.mjs";
+import { formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls } from "./tool-calls.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
@@ -394,7 +394,7 @@ Rules:
 7. For an action request, do the work with tools now. Never tell the user to edit files manually when a matching tool is available.
 ${reasonerNote}
 Available tools:
-${JSON.stringify(body.tools, null, 2)}
+${formatCompactTools(body.tools)}
 [END TOOL INSTRUCTIONS]\n\n---\n\n`;
   }
 

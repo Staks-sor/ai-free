@@ -1471,6 +1471,50 @@ export const STYLES = `
       font: 11px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
       white-space: pre;
     }
+    .thinkingAccordion {
+      margin-bottom: 10px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      background: var(--surface-inset);
+    }
+    .thinkingSummary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      color: var(--muted);
+      font: 12px/1.4 system-ui, -apple-system, sans-serif;
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+    }
+    .thinkingSummary:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+    .thinkingBadge {
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: var(--surface-hover);
+      color: var(--muted);
+      margin-left: auto;
+    }
+    .thinkingAccordion[open] .thinkingBadge {
+      background: var(--surface-active, var(--surface-hover));
+    }
+    .thinkingBody {
+      padding: 9px 12px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font: 12.5px/1.55 system-ui, -apple-system, sans-serif;
+      font-style: italic;
+      white-space: pre-wrap;
+      max-height: 380px;
+      overflow-y: auto;
+    }
     .msg.streaming .streamingText::after {
       content: "▋";
       display: inline-block;

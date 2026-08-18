@@ -743,6 +743,7 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
   return {
     push(chunk) {
       const textLengthBefore = fullText.length;
+      const thinkingLengthBefore = thinkingBuf.length;
       buffer += String(chunk || "");
       let boundary;
       while ((boundary = buffer.indexOf("\n\n")) >= 0) {
@@ -750,7 +751,7 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
         buffer = buffer.slice(boundary + 2);
         if (error) break;
       }
-      return fullText.length > textLengthBefore;
+      return fullText.length > textLengthBefore || thinkingBuf.length > thinkingLengthBefore;
     },
     finish(rawFallback = "") {
       if (buffer.trim()) consumeEvent(buffer);
