@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.25
+
+- Recovers valid unfenced Qwen tool calls and emits the required terminal `finish_reason: "tool_calls"` chunk.
+- Holds bare tool-call JSON out of streamed assistant prose so OpenAI-compatible agents receive one unambiguous tool turn.
+- Extends Qwen first-content and total request timeouts for slow but active generations.
+- Prevents technical prose mentioning HTTP authorization errors from invalidating a healthy Qwen session.
+- Loads `.env` before provider modules and moves shared pure modules into `packages/core`.
+- Keeps Desktop, VS Code and JetBrains/PyCharm release versions synchronized.
+
 ## 0.4.24
 
 - Keeps Qwen reasoning chunks alive during browser streaming and compacts large tool schemas for reliable OpenAI-compatible tool calls.

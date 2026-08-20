@@ -1,2 +1,2 @@
 // Re-export from @ai-free/core for backward compatibility.
-export * from "../../../packages/core/src/code-agent/parser.mjs";
+export * from "../../packages/core/src/code-agent/parser.mjs";

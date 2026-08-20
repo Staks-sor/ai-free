@@ -60,10 +60,10 @@ People usually look for this project as a **free AI coding assistant**, **local 
   <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
 </p>
 
-<p align="center"><strong>AI Free 0.4.24</strong></p>
+<p align="center"><strong>AI Free 0.4.25</strong></p>
 
 <p align="center">
-  <img src="docs/assets/ai-free-agent-0.4.13.png" width="100%" alt="AI Free 0.4.24: desktop code agent with compact tool timeline">
+  <img src="docs/assets/ai-free-agent-0.4.13.png" width="100%" alt="AI Free 0.4.25: desktop code agent with compact tool timeline">
 </p>
 
 > Локальный AI-клиент, который превращает веб-чаты DeepSeek, Qwen и ChatGPT в инструмент для разработчика: окно чатов, CLI, совместимые API, `/code`-агент, память, skills и IDE-интеграции.
@@ -105,9 +105,9 @@ People usually look for this project as a **free AI coding assistant**, **local 
 
 ### Версия продукта
 
-Текущий релиз desktop/CLI/API, расширения VS Code и плагина PyCharm — **AI Free 0.4.24**.
+Текущий релиз desktop/CLI/API, расширения VS Code и плагина PyCharm — **AI Free 0.4.25**.
 
-Что вошло в `0.4.24`: [release notes](docs/RELEASE_NOTES_0.4.24.md).
+Что вошло в `0.4.25`: [release notes](docs/RELEASE_NOTES_0.4.25.md).
 
 ---
 

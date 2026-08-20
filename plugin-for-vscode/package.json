@@ -2,7 +2,7 @@
   "name": "ai-free-vscode",
   "displayName": "AI Free Chat & Agent",
   "description": "AI chat and coding agents for DeepSeek, Qwen and ChatGPT in the VS Code sidebar",
-  "version": "0.4.24",
+  "version": "0.4.25",
   "publisher": "developers-daily-life",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/marketplace-icon.png",
@@ -57,7 +57,7 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "package": "npx @vscode/vsce package"
+    "package": "npm run build && npx @vscode/vsce package"
   },
   "dependencies": {
     "patchright": "^1.60.2",

@@ -29,3 +29,30 @@ test("README presents the current desktop agent screenshot", () => {
   assert.ok(fs.existsSync(path.join(root, asset)), `${asset} must exist`);
   assert.match(read("README.md"), new RegExp(asset.replaceAll(".", "\\.")));
 });
+
+test("plugin packages keep shared core inside their distributable runtime", () => {
+  const rootPackage = JSON.parse(read("package.json"));
+  assert.equal(rootPackage.workspaces.includes("plugin-for-vscode"), false);
+
+  const vscodeRoot = path.join(root, "plugin-for-vscode");
+  const wrapperFiles = [
+    "src/code-agent/parser.mjs",
+    "src/i18n/index.mjs",
+    "src/i18n/languages/en.mjs",
+    "src/memory/markdown.mjs",
+    "src/memory/search/fts-query.mjs",
+    "src/providers/model-catalog.mjs",
+  ];
+
+  for (const relativePath of wrapperFiles) {
+    const source = read(`plugin-for-vscode/${relativePath}`);
+    const importPath = source.match(/from\s+"([^"]+packages\/core[^"]+)"/)?.[1];
+    assert.ok(importPath, `${relativePath} must re-export shared core`);
+    const resolved = path.resolve(path.dirname(path.join(vscodeRoot, relativePath)), importPath);
+    assert.ok(resolved.startsWith(`${vscodeRoot}${path.sep}`), `${relativePath} must not escape the VS Code package`);
+  }
+
+  assert.match(read("plugin-for-vscode/build.mjs"), /sharedCoreSource[\s\S]+\.\.\/packages\/core/);
+  assert.match(read("plugin-for-vscode/build.mjs"), /fs\.cpSync\(sharedCoreSource, sharedCoreTarget/);
+  assert.match(read("plugin-for-jetbrains/build.gradle.kts"), /include\([^\n]*"packages\/core\/\*\*"/);
+});

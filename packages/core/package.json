@@ -1,6 +1,6 @@
 {
   "name": "@ai-free/core",
-  "version": "0.4.24",
+  "version": "0.4.25",
   "description": "Shared core abstractions, model catalog, i18n, and pure utilities for AI Free",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",

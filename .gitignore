@@ -1,4 +1,5 @@
 node_modules/
+plugin-for-vscode/packages/
 .env
 .DS_Store
 .deepseek-cli/

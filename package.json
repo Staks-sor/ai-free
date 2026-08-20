@@ -1,13 +1,12 @@
 {
   "name": "ai-free",
-  "version": "0.4.24",
+  "version": "0.4.25",
   "description": "Free local AI client for DeepSeek, Qwen and ChatGPT with OpenAI-compatible API, CLI, code agent, memory and skills.",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "workspaces": [
-    "packages/*",
-    "plugin-for-vscode"
+    "packages/*"
   ],
   "repository": {
     "type": "git",
@@ -66,6 +65,7 @@
     "check": "node ./bin/deepseek.mjs --check",
     "check:ci": "node ./scripts/check-ci-invariants.mjs",
     "inventory": "node ./scripts/inventory-duplicates.mjs --report",
+    "pretest": "node plugin-for-vscode/build.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "engines": {

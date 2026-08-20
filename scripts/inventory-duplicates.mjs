@@ -102,20 +102,20 @@ export function getDuplicateInventory() {
       const vscodeRel = `${pair.vscode}/${key}`;
 
       if (d && v) {
-        if (d.hash === v.hash) {
+        if (isCoreReExport(desktopRel) && isCoreReExport(vscodeRel)) {
+          coreShared.push({
+            subPath: key,
+            desktopPath: desktopRel,
+            vscodePath: vscodeRel,
+            corePath: `packages/core/src/${key}`,
+          });
+        } else if (d.hash === v.hash) {
           identical.push({
             subPath: key,
             desktopPath: desktopRel,
             vscodePath: vscodeRel,
             size: d.size,
             hash: d.hash,
-          });
-        } else if (isCoreReExport(desktopRel) && isCoreReExport(vscodeRel)) {
-          coreShared.push({
-            subPath: key,
-            desktopPath: desktopRel,
-            vscodePath: vscodeRel,
-            corePath: `packages/core/src/${key}`,
           });
         } else if (KNOWN_PLATFORM_SPECIFIC.has(desktopRel)) {
           platformSpecific.push({

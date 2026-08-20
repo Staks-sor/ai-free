@@ -49,7 +49,7 @@ intellijPlatform {
             AI Free inside PyCharm: DeepSeek, Qwen and ChatGPT chats,
             coding agents, project tools, memory, voice input and local APIs.
         """.trimIndent()
-        changeNotes = "Improved Qwen tool-call streaming, added a collapsible reasoning view, fixed DeepSeek reasoning boundaries, and added synchronization checks for shared Desktop and VS Code modules."
+        changeNotes = "Recovered unfenced Qwen tool calls for OpenAI-compatible agents, extended slow-stream timeouts, fixed false Qwen session expiry, and moved shared pure modules into packages/core."
     }
     pluginVerification {
         ides {
@@ -68,7 +68,7 @@ intellijPlatform {
 
 val syncAiFreeRuntime by tasks.registering(Sync::class) {
     from(rootProject.projectDir.resolve("..")) {
-        include("api/**", "bin/**", "src/**", "node_modules/**", "package.json", "LICENSE")
+        include("api/**", "bin/**", "src/**", "packages/core/**", "node_modules/**", "package.json", "LICENSE")
         exclude("plugin-for-vscode/**")
         exclude("plugin-for-jetbrains/**")
         exclude("test/**")

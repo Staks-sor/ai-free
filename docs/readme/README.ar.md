@@ -25,7 +25,7 @@
   <img src="https://img.shields.io/badge/المزودون-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
 </p>
 
-<p align="center"><strong>AI Free 0.4.24</strong></p>
+<p align="center"><strong>AI Free 0.4.25</strong></p>
 
 > أداة سطر أوامر وتطبيق سطح مكتب يجمعان محادثات الذكاء الاصطناعي المجانية في واجهة واحدة. يدعم حاليًا **DeepSeek وQwen وChatGPT** على macOS وLinux وWindows.
 

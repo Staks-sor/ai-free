@@ -123,6 +123,6 @@ describe("architecture invariants", () => {
     assert.equal(PLUGIN_VERSION, pluginPackage.version);
     assert.equal(ROOT_VERSION, PLUGIN_VERSION);
     assert.equal(ROOT_VERSION, jetbrainsVersion);
-    assert.equal(ROOT_VERSION, "0.4.24");
+    assert.equal(ROOT_VERSION, "0.4.25");
   });
 });

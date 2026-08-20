@@ -3,6 +3,11 @@ import path from "node:path";
 import url from "node:url";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+const sharedCoreSource = path.resolve(__dirname, "../packages/core");
+const sharedCoreTarget = path.join(__dirname, "packages/core");
+
+fs.rmSync(sharedCoreTarget, { recursive: true, force: true });
+fs.cpSync(sharedCoreSource, sharedCoreTarget, { recursive: true });
 
 const requiredPaths = [
   "extension.js",
@@ -16,6 +21,7 @@ const requiredPaths = [
   "src/window-app/ui-html.mjs",
   "api/models.mjs",
   "api/openai-handler.mjs",
+  "packages/core/src/index.mjs",
 ];
 
 let failed = false;
