@@ -71,11 +71,15 @@ export function formatQwenAntiBotMessage({ code = "Bad_Request", details = "" } 
 }
 
 export function isQwenSessionExpiredText(text = "") {
-  const blob = String(text || "").toLowerCase();
+  const source = String(text || "");
+  const blob = source.toLowerCase();
   if (!blob) return false;
   if (/<!doctype html|<html[\s>]/i.test(blob) && /login|sign.?in|auth/i.test(blob)) return true;
-  if (/unauthorized|not logged|login required|token expired|session expired|invalid token/i.test(blob)) return true;
-  if (/сессия qwen устарела/i.test(blob)) return true;
+  const looksLikeAssistantProse = source.length > 300 || /\n/.test(source.slice(0, 300));
+  if (!looksLikeAssistantProse && /unauthorized|not logged|login required|token expired|session expired|invalid token/i.test(blob)) {
+    return true;
+  }
+  if (/token.{0,20}expired|session.{0,20}expired|сессия qwen устарела/i.test(blob)) return true;
   return false;
 }
 

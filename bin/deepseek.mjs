@@ -9,10 +9,13 @@ import path from "node:path";
 import url from "node:url";
 import { spawnSync } from "node:child_process";
 import { AI_FREE_VERSION } from "../src/config.mjs";
+import { loadDotEnv } from "../src/args.mjs";
 import { createFileLogger, installProcessErrorLogging } from "../src/logging/logger.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(here, "..");
+
+loadDotEnv();
 
 // Help / version не требуют зависимостей — пропускаем bootstrap, иначе юзер
 // не сможет даже посмотреть `--help` без интернета.

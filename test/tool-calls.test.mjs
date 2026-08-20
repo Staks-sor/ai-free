@@ -1,7 +1,12 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
 
-import { formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls } from "../api/tool-calls.mjs";
+import {
+  extractBareToolCalls,
+  formatCompactTools,
+  normalizeToolCallsForSchemas,
+  parseModelToolCalls,
+} from "../api/tool-calls.mjs";
 
 describe("model tool-call bridge", () => {
   it("parses markdown tool_calls blocks into normalized calls", () => {
@@ -29,6 +34,43 @@ describe("model tool-call bridge", () => {
     const parsed = parseModelToolCalls("Обычный ответ без инструментов.");
     assert.equal(parsed.content, "Обычный ответ без инструментов.");
     assert.deepEqual(parsed.calls, []);
+  });
+
+  it("extracts unfenced tool-call JSON embedded in model prose", () => {
+    const calls = extractBareToolCalls([
+      "Сначала проверю конфигурацию.",
+      '{"name":"read_file","arguments":{"path":"src/app.js"}}',
+    ].join("\n"));
+
+    assert.deepEqual(calls, [{
+      name: "read_file",
+      arguments: JSON.stringify({ path: "src/app.js" }),
+    }]);
+  });
+
+  it("extracts multiple unfenced calls and preserves braces inside strings", () => {
+    const calls = extractBareToolCalls([
+      "Выполняю действия:",
+      '[{"name":"write_file","arguments":{"path":"a.js","content":"export default { ok: true };"}},',
+      '{"name":"run_shell","arguments":{"command":"node -e \\\"console.log({ok:true})\\\""}}]',
+    ].join("\n"));
+
+    assert.equal(calls.length, 2);
+    assert.deepEqual(JSON.parse(calls[0].arguments), {
+      path: "a.js",
+      content: "export default { ok: true };",
+    });
+    assert.deepEqual(JSON.parse(calls[1].arguments), {
+      command: 'node -e "console.log({ok:true})"',
+    });
+  });
+
+  it("does not treat ordinary JSON or quoted schema examples as tool calls", () => {
+    assert.deepEqual(extractBareToolCalls('{"users":[{"name":"Ada"}],"total":1}'), []);
+    assert.deepEqual(
+      extractBareToolCalls('Формат: "name": "read_file", "arguments": {"path":"x"}.'),
+      [],
+    );
   });
 
   it("parses XML tool_call blocks into normalized calls", () => {

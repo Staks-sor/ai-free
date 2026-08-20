@@ -50,6 +50,18 @@ describe("qwen session errors", () => {
     assert.equal(isQwenSessionExpiredText(text), false);
   });
 
+  it("does not reset auth when a long model answer only discusses unauthorized errors", () => {
+    const text = [
+      "Если сервер отвечает 401 Unauthorized или 403 Forbidden, проверьте его настройки.",
+      "Это описание диагностики, а не ошибка текущей сессии Qwen.",
+      "Продолжаю анализ проекта и следующих шагов. ".repeat(12),
+    ].join("\n");
+
+    assert.equal(isQwenSessionExpiredText(text), false);
+    assert.equal(isQwenSessionExpiredText("Unauthorized"), true);
+    assert.equal(isQwenSessionExpiredText("token expired, please sign in"), true);
+  });
+
   it("detects browser navigation loss as a transient transport error", () => {
     const error = new Error("page.evaluate: Execution context was destroyed, most likely because of a navigation.");
     assert.equal(isQwenTransientBrowserTransportError(error), true);

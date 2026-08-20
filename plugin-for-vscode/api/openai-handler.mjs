@@ -27,7 +27,7 @@ import { getQwenLiveCatalogOverride } from "../src/providers/qwen/model-sync.mjs
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
-import { formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls } from "./tool-calls.mjs";
+import { extractBareToolCalls, formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls } from "./tool-calls.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
@@ -1359,15 +1359,22 @@ export class StreamParser {
     this.buffer = "";
     this.isTools = false;
     this.isXmlTools = false;
+    this.isBareTools = false;
     this.toolsBuffer = "";
     this.first = true;
     this.ended = false;
     this.id = `chatcmpl-${Math.floor(Date.now() / 1000)}${Math.random().toString(36).slice(2, 10)}`;
     this.tools = tools;
     this.outputCount = 0;
+    this.rawText = "";
   }
 
   onText(textDelta) {
+    this.rawText += textDelta;
+    if (this.isBareTools) {
+      this.buffer += textDelta;
+      return;
+    }
     if (this.first) {
       this.sendChunk({ role: "assistant" }, true);
       this.first = false;
@@ -1402,6 +1409,14 @@ export class StreamParser {
           this.toolsBuffer = this.buffer.slice(actualIdx + offset);
         }
       } else {
+        const bareStart = findBareToolStart(this.buffer, this.tools);
+        if (bareStart !== -1) {
+          const before = this.buffer.slice(0, bareStart);
+          if (before) this.sendChunk({ content: before });
+          this.buffer = this.buffer.slice(bareStart);
+          this.isBareTools = true;
+          return;
+        }
         if (this.buffer.length > 96) {
           const toEmit = this.buffer.slice(0, -80);
           if (toEmit) {
@@ -1424,7 +1439,28 @@ export class StreamParser {
       this.first = false;
       this.sendChunk({ content: "[Error] Upstream model stream ended without response content. Retry the request." });
     }
-    if (!this.isTools && !this.isXmlTools && this.buffer) {
+    if (this.isBareTools) {
+      const availableNames = this.tools
+        .map((tool) => tool?.function?.name || tool?.name)
+        .filter(Boolean);
+      const bareCalls = extractBareToolCalls(this.buffer, { allowedNames: availableNames });
+      const sent = this.sendToolCalls(bareCalls);
+      if (sent > 0) finishReason = "tool_calls";
+      else this.sendChunk({ content: this.buffer });
+    } else if (!this.isTools && !this.isXmlTools && this.buffer) {
+      const availableNames = this.tools
+        .map((tool) => tool?.function?.name || tool?.name)
+        .filter(Boolean);
+      const bareCalls = extractBareToolCalls(this.rawText, {
+        allowedNames: availableNames.length ? availableNames : undefined,
+      });
+      if (bareCalls.length) {
+        const sent = this.sendToolCalls(bareCalls);
+        if (sent > 0) {
+          this.sendTerminalChunk("tool_calls");
+          return;
+        }
+      }
       // Just in case it never closes or emits normal text
       this.sendChunk({ content: this.buffer });
     } else if (this.isXmlTools) {
@@ -1629,4 +1665,17 @@ function findXmlToolStart(buffer) {
     lower.indexOf("<function="),
   ].filter((idx) => idx !== -1);
   return starts.length ? Math.min(...starts) : -1;
+}
+
+function findBareToolStart(buffer, tools) {
+  const available = new Set((tools || [])
+    .map((tool) => tool?.function?.name || tool?.name)
+    .filter(Boolean));
+  if (!available.size) return -1;
+
+  const pattern = /\{\s*"name"\s*:\s*"([^"]+)"/g;
+  for (const match of String(buffer || "").matchAll(pattern)) {
+    if (available.has(match[1])) return match.index ?? -1;
+  }
+  return -1;
 }

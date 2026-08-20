@@ -184,6 +184,28 @@ describe("OpenAI-compatible handler", () => {
     assert.equal(events.at(-1).choices[0].finish_reason, "stop");
   });
 
+  it("recovers an unfenced Qwen tool call after already streamed prose", () => {
+    const res = makeWritableResponse();
+    const parser = new StreamParser("qwen3.8-max", res, {
+      tools: [{ type: "function", function: { name: "read_file", parameters: { type: "object" } } }],
+    });
+
+    parser.onText("Анализирую проект. ".repeat(12));
+    parser.onText('{"name":"read_file","arguments":{"path":"package.json"}}');
+    parser.onEnd();
+
+    const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
+    const toolCall = events.find((event) => event.choices[0].delta.tool_calls)?.choices[0].delta.tool_calls[0];
+
+    assert.equal(toolCall.function.name, "read_file");
+    assert.deepEqual(JSON.parse(toolCall.function.arguments), { path: "package.json" });
+    assert.equal(
+      events.map((event) => event.choices[0].delta.content || "").join("").includes('"name":"read_file"'),
+      false,
+    );
+    assert.equal(events.at(-1).choices[0].finish_reason, "tool_calls");
+  });
+
   it("does not terminate an empty tool_calls block as a successful tool turn", () => {
     const res = makeWritableResponse();
     const parser = new StreamParser("qwen3.7-max", res);

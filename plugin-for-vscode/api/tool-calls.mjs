@@ -91,6 +91,67 @@ function parseCallsJson(jsonStr) {
   }
 }
 
+export function extractBareToolCalls(text, { allowedNames } = {}) {
+  const source = String(text || "");
+  const allowed = allowedNames ? new Set(allowedNames) : null;
+  const calls = [];
+  const seen = new Set();
+
+  for (let start = 0; start < source.length; start += 1) {
+    if (source[start] !== "{") continue;
+    const end = findBalancedJsonObjectEnd(source, start);
+    if (end === -1) continue;
+
+    let parsed;
+    try {
+      parsed = JSON.parse(source.slice(start, end + 1));
+    } catch {
+      continue;
+    }
+
+    const call = normalizeCall(parsed);
+    const hasExplicitArguments = parsed && typeof parsed === "object"
+      && (parsed.arguments !== undefined || parsed.args !== undefined || parsed.input !== undefined);
+    if (!call || !hasExplicitArguments || (allowed && !allowed.has(call.name))) continue;
+
+    const key = `${call.name}\0${call.arguments}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      calls.push(call);
+    }
+    start = end;
+  }
+
+  return calls;
+}
+
+function findBalancedJsonObjectEnd(source, start) {
+  const stack = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") stack.push(char === "{" ? "}" : "]");
+    else if (char === "}" || char === "]") {
+      if (stack.pop() !== char) return -1;
+      if (!stack.length) return index;
+    }
+  }
+
+  return -1;
+}
+
 function normalizeCall(call) {
   if (!call || typeof call !== "object") return null;
   const name = typeof call.name === "string"
@@ -100,7 +161,7 @@ function normalizeCall(call) {
       : "";
   if (!name) return null;
 
-  let args = call.arguments;
+  let args = call.arguments ?? call.args ?? call.input;
   if (args === undefined) {
     const { name: _name, tool: _tool, ...rest } = call;
     args = rest;

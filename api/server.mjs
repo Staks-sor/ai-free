@@ -22,9 +22,17 @@
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleRequest } from "./openai-handler.mjs";
+import { loadDotEnv } from "../src/args.mjs";
 import { resolveOpenAICompatApiKey } from "../src/state/settings.mjs";
 import { createFileLogger } from "../src/logging/logger.mjs";
+
+loadDotEnv();
+
+let handleRequestFn;
+async function resolveRequestHandler() {
+  if (!handleRequestFn) ({ handleRequest: handleRequestFn } = await import("./openai-handler.mjs"));
+  return handleRequestFn;
+}
 
 export const DEFAULT_API_PORT = 4318;
 export const DEFAULT_API_HOST = "127.0.0.1"; // намеренно НЕ слушаем на 0.0.0.0 — только локально
@@ -60,6 +68,7 @@ export function createOpenAICompatServer() {
     }
     req.openAICompatProvider = apiAuth.provider;
     try {
+      const handleRequest = await resolveRequestHandler();
       await handleRequest(req, res);
     } catch (e) {
       apiLogger.error("api.request.error", e, {
