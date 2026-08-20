@@ -27,7 +27,7 @@ import { getQwenLiveCatalogOverride } from "../src/providers/qwen/model-sync.mjs
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
-import { extractBareToolCalls, formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls } from "./tool-calls.mjs";
+import { extractBareToolCalls, formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls, repairTruncatedToolCallJson, escapeUnescapedInnerQuotes } from "./tool-calls.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
@@ -975,6 +975,9 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
       } catch (error) {
         lastError = error;
         if (error?.code === "EMPTY_UPSTREAM_STREAM") throw error;
+        // Baxia punish (антибот-капча): кулдаун активен, слепой retry
+        // с пересозданием чата только сильнее разгоняет скоринг.
+        if (error?.code === "QWEN_ANTIBOT_PUNISH") throw error;
         if (sawDelta || attempt >= 1 || typeof refreshClient !== "function") throw error;
         logQwenTiming(requestId, "retry_before_first_delta", {
           attempt: attempt + 1,
@@ -1587,11 +1590,39 @@ export class StreamParser {
           calls = calls.flat(Infinity);
           
           console.log(`[API] Parsed streaming tool calls (after brace fix): ${calls.length}`);
-          
           const sent = this.sendToolCalls(calls);
           if (sent > 0) finishReason = "tool_calls";
           else this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
         } catch (e2) {
+          // Попытка 2: неэкранированные кавычки внутри строк (Qwen кладёт
+          // shell-команды с quoted-аргументами в "command" без экранирования).
+          try {
+            const quotesFixed = escapeUnescapedInnerQuotes(jsonStr);
+            let calls = JSON.parse(quotesFixed);
+            if (!Array.isArray(calls)) calls = [calls];
+            calls = calls.flat(Infinity);
+            console.log(`[API] Parsed streaming tool calls (after quote-escape fix): ${calls.length}`);
+            const sent = this.sendToolCalls(calls);
+            if (sent > 0) finishReason = "tool_calls";
+            else this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
+            this.sendTerminalChunk(finishReason);
+            return;
+          } catch {}
+          // Попытка 3: модель могла упереться в лимит выходных токенов
+          // посреди блока — JSON обрезан, но стрим завершился штатно. Дописываем
+          // незакрытые строки/скобки и парсим salvaged-вызовы.
+          try {
+            const truncFixed = escapeUnescapedInnerQuotes(repairTruncatedToolCallJson(jsonStr));
+            let calls = JSON.parse(truncFixed);
+            if (!Array.isArray(calls)) calls = [calls];
+            calls = calls.flat(Infinity);
+            console.log(`[API] Parsed streaming tool calls (after truncation repair): ${calls.length}`);
+            const sent = this.sendToolCalls(calls);
+            if (sent > 0) finishReason = "tool_calls";
+            else this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
+            this.sendTerminalChunk(finishReason);
+            return;
+          } catch {}
           console.error("[API] Error parsing tool calls from streaming response:", e2.message);
           fs.writeFileSync("/tmp/failed_json.txt", jsonStr); console.error("[API] Problematic JSON string was:\n", JSON.stringify(jsonStr));
           // Fallback: send as normal text so the UI doesn't hang completely
