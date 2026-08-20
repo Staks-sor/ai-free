@@ -43,13 +43,13 @@ describe("architecture invariants", () => {
     assert.equal(pluginSse, desktopSse, "providers/deepseek/sse.mjs");
   });
 
-  it("keeps root and VS Code model catalogs in sync", () => {
-    const rootCatalog = fs.readFileSync(new URL("../src/providers/model-catalog.mjs", import.meta.url), "utf8");
-    const pluginCatalog = fs.readFileSync(
-      new URL("../plugin-for-vscode/src/providers/model-catalog.mjs", import.meta.url),
-      "utf8",
-    );
-    assert.equal(pluginCatalog, rootCatalog);
+  it("keeps root and VS Code model catalogs in sync with core", async () => {
+    const desktop = await import("../src/providers/model-catalog.mjs");
+    const plugin = await import("../plugin-for-vscode/src/providers/model-catalog.mjs");
+    const core = await import("../packages/core/src/providers/model-catalog.mjs");
+    assert.deepEqual(desktop.PROVIDER_CATALOG, core.PROVIDER_CATALOG);
+    assert.deepEqual(plugin.PROVIDER_CATALOG, core.PROVIDER_CATALOG);
+    assert.deepEqual(plugin.OPENAI_COMPAT_MODELS, desktop.OPENAI_COMPAT_MODELS);
   });
 
   it("keeps desktop and VS Code diagnostics in sync", () => {

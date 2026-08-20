@@ -14,7 +14,11 @@ describe("duplicate module inventory", () => {
   it("synchronizes all duplicate files with zero unexpected divergences", () => {
     const inventory = assertInventoryInvariants();
     assert.equal(inventory.divergent.length, 0, "No divergent modules should exist");
-    assert.ok(inventory.summary.identicalCount >= 150, "Should track at least 150 identical files");
+    assert.ok(
+      inventory.summary.identicalCount + inventory.summary.coreSharedCount >= 150,
+      "Should track at least 150 synchronized or core-shared files",
+    );
+    assert.ok(inventory.summary.coreSharedCount >= 10, "Should track at least 10 core-shared files");
     assert.equal(inventory.summary.platformSpecificCount, KNOWN_PLATFORM_SPECIFIC.size);
     assert.equal(inventory.summary.desktopOnlyCount, KNOWN_DESKTOP_ONLY.size);
     assert.equal(inventory.summary.vscodeOnlyCount, KNOWN_VSCODE_ONLY.size);
