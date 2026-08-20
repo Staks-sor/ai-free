@@ -22,4 +22,20 @@ describe("Qwen stream timeouts", () => {
     assert.equal(timeouts.firstContentMs, 75_000);
     assert.equal(timeouts.idleMs, 100_000);
   });
+
+  it("gives long agent streams enough headroom before the hard fetch cap aborts them", () => {
+    // Observed in the wild (issue #21): healthy Qwen tool-call generations
+    // stream for 250-320s. The 600s hard cap leaves generous headroom.
+    const timeouts = resolveQwenStreamTimeouts({});
+
+    assert.equal(timeouts.fetchMs, 600_000);
+  });
+
+  it("keeps explicit fetch timeout overrides", () => {
+    const timeouts = resolveQwenStreamTimeouts({
+      QWEN_FETCH_TIMEOUT_MS: "600000",
+    });
+
+    assert.equal(timeouts.fetchMs, 600_000);
+  });
 });
