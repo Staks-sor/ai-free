@@ -20,6 +20,8 @@ import { QWEN_AUTH_FILE, QWEN_BASE_URL, QWEN_BROWSER_PROFILE } from "./config.mj
 import { applyQwenCookiesToContext, readQwenAuth } from "./auth-files.mjs";
 import { randomUUID } from "node:crypto";
 import { resolveQwenStreamTimeouts } from "./stream-timeouts.mjs";
+import { isQwenPunishResponse, startQwenPunishCooldown, clearQwenPunishCooldown } from "./request-pacing.mjs";
+import { resolveBaxiaSolverConfig, trySolveBaxiaOnPage } from "./baxia-solver.mjs";
 
 let proxyPromise = null;
 const QWEN_NAV_TIMEOUT_MS = Number(process.env.QWEN_NAV_TIMEOUT_MS || 90_000);
@@ -131,6 +133,30 @@ async function createProxy({ debug }) {
   }
 
   attachPageDiagnostics(firstPage, "page0");
+
+  /**
+   * Попытка решить Baxia punish-слайдер на странице воркера.
+   * Возвращает true при успехе (x5sec установлен, кулдаун снят).
+   * Любая ошибка проглатывается — фоллбэком остаётся punish-кулдаун.
+   */
+  const trySolvePunishOnWorker = async (worker, pathLabel) => {
+    const cfg = resolveBaxiaSolverConfig();
+    if (!cfg.enabled) return false;
+    try {
+      const res = await trySolveBaxiaOnPage(worker.page, cfg, {
+        log: (msg) => console.warn(`[qwen-proxy:${worker.label}] baxia-solver(${pathLabel}): ${msg}`),
+      });
+      if (res.solved) {
+        clearQwenPunishCooldown();
+        return true;
+      }
+      console.warn(`[qwen-proxy:${worker.label}] baxia-solver(${pathLabel}): not solved (${res.error} after ${res.tries} tries) — fallback to cooldown`);
+      return false;
+    } catch (err) {
+      console.warn(`[qwen-proxy:${worker.label}] baxia-solver(${pathLabel}) failed: ${err?.message || err}`);
+      return false;
+    }
+  };
 
   let rawStreamHandler = null;
   await context.exposeFunction("__qwenRawStreamChunk", async (chunk) => {
@@ -434,6 +460,18 @@ async function createProxy({ debug }) {
         result.text += `\nnetwork=${failure.errorText}\nnetworkMethod=${failure.method}`;
       }
     }
+    // Baxia punish (антибот-капча): детект по contentType/text и включение
+    // кулдауна, чтобы выше по стеку не долбить новыми запросами.
+    if (/\/api\/v2\/chat\/completions(?:$|\?)/.test(url) && isQwenPunishResponse(result)) {
+      const solved = await trySolvePunishOnWorker(worker, "text");
+      if (solved) {
+        console.warn(`[qwen-proxy:${worker.label}] Baxia slider solved (text path) — cooldown cleared`);
+      } else {
+        const { backoffMs } = startQwenPunishCooldown();
+        result = { ...result, ok: false, punish: true };
+        console.warn(`[qwen-proxy:${worker.label}] Baxia punish detected — cooldown ${Math.round(backoffMs / 1000)}s (see browser window to solve captcha)`);
+      }
+    }
     return result;
   }
 
@@ -611,6 +649,20 @@ async function createProxy({ debug }) {
         result.text += `\nnetwork=${failure.errorText}\nnetworkMethod=${failure.method}`;
       }
     }
+    // Baxia punish (антибот-капча). Пробуем решить слайдер локально;
+    // если не вышло — остаёмся на кулдауне из request-pacing.
+    if (/\/api\/v2\/chat\/completions(?:$|\?)/.test(url) && isQwenPunishResponse(result)) {
+      const solved = await trySolvePunishOnWorker(worker, "text");
+      if (solved) {
+        // Baxia сам реплеит запрос после setCookieSuccess — просто отдаём
+        // результат как есть, клиент сделает новую попытку без кулдауна.
+        console.warn(`[qwen-proxy:${worker.label}] Baxia slider solved (stream path) — cooldown cleared`);
+      } else {
+        const { backoffMs } = startQwenPunishCooldown();
+        result = { ...result, ok: false, punish: true };
+        console.warn(`[qwen-proxy:${worker.label}] Baxia punish detected (stream) — cooldown ${Math.round(backoffMs / 1000)}s`);
+      }
+    }
     return result;
   }
 
@@ -641,6 +693,38 @@ async function createProxy({ debug }) {
         streamIdleTimeoutMs,
         maxAttempts,
       }));
+    },
+    // Same-origin POST к API chat.qwen.ai из контекста страницы — для файловых
+    // эндпоинтов (getstsToken / parse / parse/status). bx-ua подписывается
+    // JS-бандлом страницы автоматически, как у настоящего веб-интерфейса.
+    // ВАЖНО: page.evaluate сериализует результат (JSON) — функции не переносятся,
+    // поэтому json возвращаем как plain-поле, а не метод.
+    async proxyApiPost({ path, body, chatId, timeoutMs = 30_000 }) {
+      const worker = pickWorker(chatId || null);
+      return enqueue(worker, () => worker.page.evaluate(
+        async ({ path, body, timeoutMs }) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort("qwen_fetch_timeout"), timeoutMs);
+          try {
+            const res = await fetch(path, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                accept: "application/json, text/plain, */*",
+                source: "web",
+              },
+              credentials: "include",
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            });
+            const json = await res.json().catch(() => null);
+            return { ok: res.ok, status: res.status, json };
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        },
+        { path, body, timeoutMs },
+      ));
     },
     async close() { await close(); },
   };

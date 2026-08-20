@@ -29,6 +29,8 @@ import {
 } from "./session-errors.mjs";
 import { getQwenBrowserProxy, resetQwenBrowserProxy } from "./browser-proxy.mjs";
 import { buildQwenCompletionPayload } from "./completion-payload.mjs";
+import { resolveQwenContextFileConfig, splitPromptForFileUpload, uploadQwenContextFile } from "./context-file.mjs";
+import { waitForQwenCompletionSlot, createQwenPunishError, qwenAntibotCooldownRemainingMs } from "./request-pacing.mjs";
 import { createFileLogger } from "../../logging/logger.mjs";
 
 const providerLogger = createFileLogger({ component: "provider.qwen" });
@@ -420,13 +422,39 @@ export class QwenChatClient {
     onThinking,
     model,
   }) {
+    // Большой промпт → файл-вложение context.txt (аналог вставки большого
+    // текста в поле ввода веб-интерфейса). Антибот Qwen при промпте свыше
+    // ~118k символов молча возвращает punish-заглушку вместо ответа.
+    let promptToUse = String(prompt || "");
+    let contextFiles = null;
+    const contextFileConfig = resolveQwenContextFileConfig();
+    const split = splitPromptForFileUpload(promptToUse, contextFileConfig);
+    if (split) {
+      const proxy = await getQwenBrowserProxy({ debug: this.debug });
+      providerLogger.info("provider.qwen.context_file", {
+        operation: "upload",
+        fileChars: split.fileChars,
+        inlineChars: split.inlineChars,
+      });
+      const attachment = await uploadQwenContextFile({
+        proxyApiPost: (path, apiBody) => proxy.proxyApiPost({ path, body: apiBody, chatId }),
+        content: split.fileText,
+      });
+      promptToUse = split.inline;
+      contextFiles = [attachment];
+      if (this.debug) {
+        console.log(`[qwen] context moved to file: ${split.fileChars} chars → ${attachment.name} (${attachment.id}); inline left: ${split.inlineChars}`);
+      }
+    }
+
     const body = buildQwenCompletionPayload({
       chatId,
-      prompt,
+      prompt: promptToUse,
       parentId,
       model,
       thinking,
       search,
+      files: contextFiles,
     });
 
     const headers = {
@@ -460,6 +488,13 @@ export class QwenChatClient {
           const streamParser = useLiveStream
             ? createQwenIncrementalParser({ onText, onThinking })
             : null;
+          // Pacing: минимальный интервал между POST /completions, чтобы не
+          // разгонять риск-скоринг Baxia. Также кидает QWEN_ANTIBOT_PUNISH,
+          // если активен кулдаун после детектированной punish-страницы.
+          const pacingWaitMs = await waitForQwenCompletionSlot();
+          if (pacingWaitMs > 0 && this.debug) {
+            console.log(`[qwen] pacing: waited ${pacingWaitMs}ms before completion`);
+          }
           const result = useLiveStream
             ? await proxy.proxyFetchStream({
               url,
@@ -471,6 +506,11 @@ export class QwenChatClient {
             : await proxy.proxyFetch({ url, body: bodyStr, chatId });
 
           throwIfQwenFirstContentTimeout(result);
+          // Прокси пометил ответ как Baxia punish (антибот-капча) —
+          // кулдаун уже включён в прокси, наверх уходит понятная ошибка.
+          if (result.punish) {
+            throw createQwenPunishError(qwenAntibotCooldownRemainingMs());
+          }
           providerLogger.info("provider.qwen.response", {
             operation: "completion",
             transport: "browser",
@@ -533,6 +573,9 @@ export class QwenChatClient {
             transport: "browser",
             attempt: attempt + 1,
           });
+          // Punish/кулдаун не ретраим на месте — ошибка уходит наверх,
+          // агентный слой получит понятный код и сообщение о капче.
+          if (error?.code === "QWEN_ANTIBOT_PUNISH") throw error;
           if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) {
             // Транспортная/авторизационная ошибка не считается «in progress».
             if (chatInProgressSeen) return { result: null, chatInProgressStuck: true };
@@ -603,6 +646,19 @@ function formatQwenInvalidParentUserMessage() {
 // SSE-событие с полем error (квота, rate limit и т.д.) — не содержит текста ответа.
 export function formatQwenStreamError(parsed) {
   if (!parsed || typeof parsed !== "object") return null;
+  // Punish-заглушка антибота Alibaba TMD: /completions при превышении лимита
+  // контекста (~118-120k символов промпта) молча отдаёт JSON с ret[] и
+  // data.url=.../_____tmd_____/punish вместо SSE-стрима (наблюдалось 2026-08).
+  const rets = Array.isArray(parsed.ret) ? parsed.ret : null;
+  if (rets && rets.some((r) => String(r).includes("RGV587") || String(r).includes("FAIL_SYS_USER_VALIDATE"))) {
+    const punishUrl = parsed?.data?.url || "";
+    return (
+      "Qwen отклонил запрос антибот-заглушкой (RGV587 punish). Обычно это значит, что промпт слишком большой " +
+      "(лимит ~118k символов на сообщение) — сократи контекст или он уйдёт файлом-вложением (context.txt), " +
+      "если включена автозагрузка больших промптов.\n\n" +
+      `ret: ${rets.join(", ")}\n${punishUrl ? `punish: ${punishUrl.slice(0, 160)}\n` : ""}`
+    );
+  }
   const err = parsed.error;
   if (err && typeof err === "object") {
     const code = String(err.code || err.type || "error");
