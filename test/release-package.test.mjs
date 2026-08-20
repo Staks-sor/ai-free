@@ -33,6 +33,7 @@ test("README presents the current desktop agent screenshot", () => {
 test("plugin packages keep shared core inside their distributable runtime", () => {
   const rootPackage = JSON.parse(read("package.json"));
   assert.equal(rootPackage.workspaces.includes("plugin-for-vscode"), false);
+  assert.equal(rootPackage.scripts["precheck:ci"], "node plugin-for-vscode/build.mjs");
 
   const vscodeRoot = path.join(root, "plugin-for-vscode");
   const wrapperFiles = [
