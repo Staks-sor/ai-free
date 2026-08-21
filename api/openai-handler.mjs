@@ -28,11 +28,20 @@ import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
 import { extractBareToolCalls, formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls, repairTruncatedToolCallJson, escapeUnescapedInnerQuotes } from "./tool-calls.mjs";
+import { createThinkTagFilter, stripThinkBlocks } from "./think-filter.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
 import { createFileLogger } from "../src/logging/logger.mjs";
 import { runWithEmptyStreamRetry } from "./stream-retry.mjs";
+
+// parseModelToolCalls с предварительной зачисткой литеральных <think>-блоков:
+// деградировавший Qwen кладёт reasoning (с черновиками tool-call JSON)
+// прямо в текстовый канал — без зачистки детектор выдёргивает черновики
+// как реальные вызовы ("Tool X does not exists" каскад).
+export function parseModelToolCallsSafe(text) {
+  return parseModelToolCalls(stripThinkBlocks(text));
+}
 
 const compatLogger = createFileLogger({ component: "openai-handler" });
 
@@ -695,7 +704,7 @@ function toResponsesResponse(model, text) {
   const createdAt = Math.floor(Date.now() / 1000);
   const id = `resp_${createdAt}${Math.random().toString(36).slice(2, 10)}`;
   const itemId = `msg_${Math.random().toString(36).slice(2, 10)}`;
-  const parsed = parseModelToolCalls(text);
+  const parsed = parseModelToolCallsSafe(text);
   const toolOutput = parsed.calls.map((call) => ({
     id: `fc_${Math.random().toString(36).slice(2, 10)}`,
     type: "function_call",
@@ -905,6 +914,10 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
   const requestId = `qwen_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   const startedAt = Date.now();
   const parser = new StreamParser(modelName, res, { tools });
+  // Деградировавший Qwen шлёт reasoning литеральным текстом с <think>-тегами;
+  // внутри — черновики tool-call JSON, которые детектор ловил как реальные
+  // вызовы. Фильтр вырезает think-блоки до того, как буфер увидит парсер.
+  const thinkFilter = createThinkTagFilter({ onText: (t) => parser.onText(t) });
   let sawDelta = false;
   let firstDeltaAt = 0;
   const heartbeat = setInterval(() => {
@@ -953,7 +966,7 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
                 completion_to_first_delta_ms: elapsedMs(completionStartedAt),
               });
             }
-            parser.onText(textDelta);
+            thinkFilter.push(textDelta);
           },
           beforeRetry: async ({ attempt: emptyAttempt, error }) => {
             if (typeof createChat !== "function") throw error;
@@ -992,6 +1005,7 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
     if (lastError) throw lastError;
     clearInterval(heartbeat);
     if (res.destroyed || res.writableEnded) return;
+    thinkFilter.flush();
     parser.onEnd();
     writeSseRaw(res, "data: [DONE]\n\n");
     if (!res.destroyed && !res.writableEnded) res.end();
@@ -1042,7 +1056,6 @@ async function handleChatGPTStream(client, prompt, modelName, model, res, { tool
     sendStreamError(res, modelName, e.message);
   }
 }
-
 // Обработка streaming-запроса к DeepSeek.
 async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res, {
   thinking = false,
@@ -1095,7 +1108,7 @@ function toOpenAIResponse(model, text, tools = []) {
   let content = text;
   let finish_reason = "stop";
 
-  const parsed = parseModelToolCalls(text);
+  const parsed = parseModelToolCallsSafe(text);
   const normalized = normalizeToolCallsForSchemas(parsed.calls, tools);
   if (normalized.calls.length) {
     content = parsed.content;
@@ -1132,7 +1145,7 @@ function toOpenAIResponse(model, text, tools = []) {
 }
 
 export function toAnthropicMessageResponse(model, text) {
-  const parsed = parseModelToolCalls(text);
+  const parsed = parseModelToolCallsSafe(text);
   const content = [];
   if (parsed.content) {
     content.push({ type: "text", text: parsed.content });
