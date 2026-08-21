@@ -136,6 +136,27 @@ export async function removeAccountInteractive() {
   await prompt("ENTER чтобы вернуться...");
 }
 
+// Health-check всех аккаунтов: ping через browser-proxy, обновление статусов.
+async function healthCheckInteractive() {
+  console.log("\nПроверяю аккаунты (ping chat.qwen.ai)...");
+  const { testQwenAccounts } = await import("./account-health.mjs");
+  const { closeQwenBrowserProxy } = await import("./browser-proxy.mjs");
+  try {
+    const results = await testQwenAccounts();
+    console.log("\nРезультаты:");
+    for (const r of results) {
+      const label = r.verdict === "OK" ? "✅ OK"
+        : r.verdict === "RATELIMIT" ? `⏳ Rate-limited (${r.hours}ч)`
+        : r.verdict === "UNAUTHORIZED" ? "❌ Недействителен (нужен перелогин)"
+        : `⚠️ ${r.verdict}${r.reason ? `: ${r.reason}` : ""}`;
+      console.log(`  ${r.id} | ${label}`);
+    }
+  } finally {
+    await closeQwenBrowserProxy(null);
+  }
+  await prompt("\nНажмите Enter, чтобы вернуться в меню...");
+}
+
 // Главное меню (как scripts/auth.js FreeQwenAPI: 1-add/2-relogin/3-remove/4-list/5-exit).
 export async function interactiveAccountMenu() {
   while (true) {
@@ -148,9 +169,10 @@ export async function interactiveAccountMenu() {
     console.log("2 - Перелогинить аккаунт с истекшим токеном");
     console.log("3 - Удалить аккаунт");
     console.log("4 - Показать список и статусы");
-    console.log("5 - Выход");
-    const choice = await prompt("Ваш выбор (Enter = 5): ");
-    const normalized = choice || "5";
+    console.log("5 - Проверить все аккаунты (health-check)");
+    console.log("6 - Выход");
+    const choice = await prompt("Ваш выбор (Enter = 6): ");
+    const normalized = choice || "6";
 
     if (normalized === "1") {
       await addAccountInteractive();
@@ -162,6 +184,8 @@ export async function interactiveAccountMenu() {
       handleList(accounts);
       await prompt("\nНажмите Enter, чтобы вернуться в меню...");
     } else if (normalized === "5") {
+      await healthCheckInteractive();
+    } else if (normalized === "6") {
       console.log("Выход из скрипта.");
       break;
     }

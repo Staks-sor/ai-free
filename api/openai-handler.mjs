@@ -62,6 +62,57 @@ function isQwenRateLimitError(error) {
   return /rate.?limit|too many requests|429|quota/i.test(String(error?.message || ""));
 }
 
+// Часы cooldown из тела ошибки провайдера (FreeQwenAPI: errorBody.num).
+function qwenRateLimitHours(error) {
+  const inline = String(error?.message || "").match(/"num"\s*:\s*(\d+(?:\.\d+)?)/);
+  if (inline) {
+    const n = Number(inline[1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 24;
+}
+
+// Единая точка маркировки pool-аккаунта по ошибке апстрима (стрим и non-stream).
+// Ошибки, при которых имеет смысл попробовать ДРУГОЙ аккаунт сразу:
+// auth-сбой и rate-limit. Сетевые/антибот — не переключаем (серверная сторона).
+function isAccountSwitchEligibleError(error) {
+  if (isQwenAuthErrorByMessage(error)) return true;
+  if (isQwenRateLimitError(error)) return true;
+  const msg = String(error?.message || "");
+  if (/empty.?upstream.?stream|no response content before timeout/i.test(msg)) return true;
+  return false;
+}
+
+function markQwenAccountOnUpstreamError(accountId, error) {
+  if (!accountId || accountId === 'default') return;
+  try {
+    if (isQwenAuthErrorByMessage(error)) {
+      markInvalid(accountId);
+      return;
+    }
+    if (isQwenRateLimitError(error)) {
+      markRateLimited(accountId, qwenRateLimitHours(error));
+    }
+  } catch (e) {
+    // Маркировка — вспомогательная операция: сбой записи accounts.json
+    // не должен ломать отправку ошибки клиенту.
+    console.warn(`[API][qwen-account] failed to mark ${accountId}: ${e.message}`);
+  }
+}
+
+// Следующий доступный pool-аккаунт, исключая уже пробованные.
+// null — исчерпаны (или пул не используется).
+async function nextPoolAccountExcluding(triedIds) {
+  const { hasAvailableAccounts, getAvailableAccount } = await import("../src/providers/qwen/account-store.mjs");
+  if (!hasAvailableAccounts()) return null;
+  for (let i = 0; i < 32; i += 1) {
+    const acc = await getAvailableAccount();
+    if (!acc) return null;
+    if (!triedIds.has(acc.id)) return acc;
+  }
+  return null;
+}
+
 async function getQwenClientForAccount(accountId, { allowRefresh = true } = {}) {
   if (!accountId) accountId = 'default';
   if (qwenClients.has(accountId)) return qwenClients.get(accountId);
@@ -243,6 +294,9 @@ async function handleChatCompletions(req, res) {
       if (acc) qwenAccountId = acc.id;
     }
   }
+  if (mapping.provider === "qwen") {
+    console.log(`[API][qwen-account] ${qwenAccountId === 'default' ? 'default (auth.json)' : qwenAccountId}`);
+  }
 
   try {
     if (mapping.provider === "qwen") {
@@ -255,12 +309,9 @@ async function handleChatCompletions(req, res) {
             tools: body.tools,
             createChat: (currentClient) => currentClient.createChat({ model: mapping.model, title: "API request" }),
             refreshClient: async (error) => {
+              markQwenAccountOnUpstreamError(qwenAccountId, error);
               const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
               if (!isQwenAuthError(error)) throw error;
-              if (qwenAccountId !== 'default') {
-                if (isQwenAuthErrorByMessage(error)) markInvalid(qwenAccountId);
-                else if (isQwenRateLimitError(error)) markRateLimited(qwenAccountId);
-              }
               qwenClients.delete(qwenAccountId);
               const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
               const newClient = new QwenChatClient({
@@ -285,25 +336,40 @@ async function handleChatCompletions(req, res) {
         return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
       };
 
-      let client = await getQwenClientForAccount(qwenAccountId);
-      try {
-        return await runQwen(client);
-      } catch (e) {
-        if (qwenAccountId !== 'default') {
-          if (isQwenAuthErrorByMessage(e)) markInvalid(qwenAccountId);
-          else if (isQwenRateLimitError(e)) markRateLimited(qwenAccountId);
+      // Retry-цикл по pool-аккаунтам (как retryAfterAccountSwitch FreeQwenAPI):
+      // 401/429/rate-limit -> маркируем аккаунт -> берём следующий -> новый чат.
+      const triedAccountIds = new Set();
+      let currentAccountId = qwenAccountId;
+      for (let accountAttempt = 0; accountAttempt < 3; accountAttempt += 1) {
+        let client = await getQwenClientForAccount(currentAccountId);
+        try {
+          return await runQwen(client);
+        } catch (e) {
+          markQwenAccountOnUpstreamError(currentAccountId, e);
+          const { isQwenAuthError } = await import("../src/providers/qwen/auth-manager.mjs");
+          const accountSwitchEligible = isAccountSwitchEligibleError(e);
+          // Default-путь: старое поведение — refresh auth.json и один повтор.
+          if (currentAccountId === 'default') {
+            if (!isQwenAuthError(e)) throw e;
+            const { getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
+            qwenClients.delete('default');
+            const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
+            client = new QwenChatClient({
+              token: fresh.token,
+              cookieHeader: fresh.cookieHeader,
+              debug: Boolean(process.env.API_DEBUG),
+            });
+            qwenClients.set('default', client);
+            return await runQwen(client);
+          }
+          if (!accountSwitchEligible || accountAttempt >= 2) throw e;
+          const next = await nextPoolAccountExcluding(triedAccountIds);
+          if (!next) throw e;
+          triedAccountIds.add(currentAccountId);
+          console.log(`[API][qwen-account] ${currentAccountId} failed (${e.message.slice(0, 80)}), switching to ${next.id}`);
+          qwenClients.delete(currentAccountId);
+          currentAccountId = next.id;
         }
-        const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
-        if (!isQwenAuthError(e)) throw e;
-        qwenClients.delete(qwenAccountId);
-        const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
-        client = new QwenChatClient({
-          token: fresh.token,
-          cookieHeader: fresh.cookieHeader,
-          debug: Boolean(process.env.API_DEBUG),
-        });
-        qwenClients.set(qwenAccountId, client);
-        return await runQwen(client);
       }
     }
     if (mapping.provider === "deepseek") {
@@ -1017,7 +1083,7 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
         if (!activeChatId) {
           if (typeof createChat !== "function") throw new Error("Qwen stream requires chatId or createChat callback");
           const createStartedAt = Date.now();
-          logQwenTiming(requestId, "create_chat_start", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
+          logQwenTiming(requestId, "create_chat_start", { account: accountId || "default", attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
           activeChatId = await createChat(activeClient);
           logQwenTiming(requestId, "create_chat_done", {
             attempt: attempt + 1,
