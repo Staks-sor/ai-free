@@ -34,7 +34,34 @@ export async function run() {
 
   if (args.loginQwen) {
     const { loginQwenAndSave } = await import("../providers/qwen/browser-login.mjs");
-    await loginQwenAndSave();
+    const { interactiveAccountMenu } = await import("../providers/qwen/account-setup.mjs");
+    // Старое поведение (один аккаунт): если мультиаккаунтов ещё нет — сразу окно логина.
+    // После первого добавленного аккаунта --login-qwen открывает меню управления.
+    const { loadAccounts } = await import("../providers/qwen/account-store.mjs");
+    const accounts = loadAccounts();
+    if (accounts.length === 0) {
+      console.log("Мультиаккаунт Qwen: сохранённый аккаунт один — логин как раньше.");
+      console.log("После логина он станет аккаунтом №1 (acc_1); повторный запуск покажет меню.");
+      await loginQwenAndSave();
+      const { addAccount } = await import("../providers/qwen/account-store.mjs");
+      const { readQwenAuth } = await import("../providers/qwen/auth-files.mjs");
+      const { QWEN_AUTH_FILE, QWEN_BROWSER_PROFILE } = await import("../providers/qwen/config.mjs");
+      const auth = readQwenAuth(QWEN_AUTH_FILE);
+      if (auth?.token) {
+        addAccount({
+          id: "acc_1",
+          token: auth.token,
+          cookies: auth.cookies,
+          cookieHeader: auth.cookieHeader,
+          userId: auth.userId,
+          // acc_1 наследует дефолтный профиль (там его Google-сессия).
+          profileDir: QWEN_BROWSER_PROFILE,
+        });
+        console.log("✅ Аккаунт acc_1 добавлен в пул. Дальше npm run login-qwen открывает меню.");
+      }
+      return;
+    }
+    await interactiveAccountMenu();
     return;
   }
 

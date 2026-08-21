@@ -82,13 +82,173 @@ function extractToolCallsBlock(source) {
 }
 
 function parseCallsJson(jsonStr) {
-  try {
-    const parsed = JSON.parse(jsonStr);
-    const list = Array.isArray(parsed) ? parsed : [parsed];
-    return list.map(normalizeCall).filter(Boolean);
-  } catch {
-    return [];
+  const attempts = [jsonStr, escapeUnescapedInnerQuotes(jsonStr)];
+  for (const attempt of attempts) {
+    try {
+      const parsed = JSON.parse(attempt);
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      const calls = list.map(normalizeCall).filter(Boolean);
+      if (calls.length) return calls;
+    } catch { /* next attempt */ }
   }
+  return [];
+}
+
+// Ремонт обрезанного tool-call JSON: модель упёрлась в лимит выходных токенов
+// посреди блока ```tool_calls — стрим завершается штатно (stream_done), но
+// массив не закрыт. Дописываем незакрытую строку/скобки, чтобы спасти вызов.
+export function repairTruncatedToolCallJson(jsonStr) {
+  let s = String(jsonStr || "").trim();
+  if (!s) return s;
+  // Быстрая проверка: если уже валиден — не трогаем.
+  try {
+    JSON.parse(s);
+    return s;
+  } catch {}
+  // Считаем незакрытые строки: если внутри строки — закрываем кавычку.
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\") { if (inString) escaped = true; continue; }
+    if (ch === '"') inString = !inString;
+  }
+  if (inString) {
+    if (escaped) s = s.slice(0, -1); // dangling backslash
+    s += '"';
+  }
+  // Убираем висячую запятую перед закрытием.
+  s = s.replace(/,\s*$/, "");
+  // Дописываем скобки по стеку.
+  const stack = [];
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  if (stack.length) s += stack.reverse().join("");
+  try {
+    JSON.parse(s);
+    return s;
+  } catch {
+    return String(jsonStr || "");
+  }
+}
+
+// Ремонт неэкранированных двойных кавычек внутри JSON-строк.
+// Деградировавший Qwen кладёт shell-команды с quoted-аргументами в
+// "command" без экранирования: "grep -n "foo" bar" ломает JSON.
+// Эвристика: если после закрывающей кавычки НЕ идёт структурный символ
+// JSON (,:}] или конец ввода) — эта кавычка на самом деле литеральная,
+// экранируем её. Итеративно, т.к. одна строка может содержать несколько.
+export function escapeUnescapedInnerQuotes(jsonStr) {
+  const s = String(jsonStr || "");
+  // Быстрая проверка: валидный JSON — не трогаем.
+  try {
+    JSON.parse(s);
+    return s;
+  } catch {}
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === "\\") {
+      // Валидные JSON-эскейпы пробрасываем; невалидные (\| ! ^ и т.п.,
+      // которые модель пишет для grep-regex) удваиваем бэкслеш.
+      const nextCh = s[i + 1];
+      if (nextCh !== undefined && nextCh !== "" && /[\\/"]|[bfnrtu]/.test(nextCh)) {
+        out += ch + nextCh;
+      } else if (nextCh !== undefined) {
+        out += "\\\\" + nextCh;
+      } else {
+        out += ch; // dangling backslash
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      if (!inString) {
+        inString = true;
+        out += ch;
+        continue;
+      }
+      // Мы внутри строки и встретили '"'. Смотрим следующий значимый символ.
+      let j = i + 1;
+      while (j < s.length && /\s/.test(s[j])) j += 1;
+      const next = s[j];
+      if (next === undefined || /[,:\]}]/.test(next)) {
+        // Структурный символ — это настоящая закрывающая кавычка.
+        inString = false;
+        out += ch;
+      } else {
+        // Литеральная кавычка внутри строки — экранируем.
+        out += '\\"';
+      }
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+// Salvage tool-calls из прозы БЕЗ fence-маркера (```tool_calls / ```json).
+// Деградировавший Qwen иногда выдаёт голый JSON-массив в тексте —
+// стрим-детектор openai-handler его не видит, весь ответ уходит клиенту как
+// проза, и агентный цикл ломается. Порт идеи prePassDeinterleave из
+// FreeQwenApi: скан от каждого "name": назад к "{", подбор балансных скобок,
+// серия ремонтов (переносы строк, незакрытые строки/скобки).
+export function extractBareToolCallsArray(text) {
+  const source = String(text || "");
+  if (!source) return null;
+  const nameRegex = /"\s*name\s*"\s*:\s*"([^"\n]+)"/g;
+  const calls = [];
+  const seen = new Set();
+  let m;
+  while ((m = nameRegex.exec(source)) !== null) {
+    // Ищем открывающую "{" перед "name" (не дальше 200 символов).
+    let braceStart = -1;
+    for (let i = m.index - 1; i >= Math.max(0, m.index - 200); i -= 1) {
+      if (source[i] === "{") { braceStart = i; break; }
+    }
+    if (braceStart < 0) continue;
+    // Подбираем балансные скобки объекта.
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let i = braceStart; i < source.length && i < braceStart + 100_000; i += 1) {
+      const ch = source[i];
+      if (esc) { esc = false; continue; }
+      if (ch === "\\" && inStr) { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (!inStr) {
+        if (ch === "{") depth += 1;
+        else if (ch === "}") { depth -= 1; if (depth === 0) { end = i; break; } }
+      }
+    }
+    let candidate;
+    if (end >= 0) {
+      candidate = source.slice(braceStart, end + 1);
+    } else {
+      // Обрезанный объект — пробуем ремонт.
+      candidate = repairTruncatedToolCallJson(source.slice(braceStart));
+    }
+    const attempts = [candidate, repairTruncatedToolCallJson(candidate)];
+    for (const attempt of attempts) {
+      try {
+        const obj = JSON.parse(attempt);
+        const name = obj.name || obj.tool;
+        const hasArgs = obj.arguments !== undefined || obj.args !== undefined || obj.input !== undefined;
+        if (!name || !hasArgs || typeof obj !== "object") continue;
+        const args = obj.arguments ?? obj.args ?? obj.input ?? {};
+        const key = `${name}::${JSON.stringify(args).slice(0, 200)}`;
+        if (seen.has(key)) break;
+        seen.add(key);
+        calls.push({ name, arguments: typeof args === "string" ? args : JSON.stringify(args) });
+        break;
+      } catch { /* next attempt */ }
+    }
+  }
+  return calls.length ? calls : null;
 }
 
 export function extractBareToolCalls(text, { allowedNames } = {}) {
@@ -288,24 +448,59 @@ function decodeXmlText(value) {
     .replace(/&amp;/g, "&");
 }
 
+// Потолок длины описания тула в компактном списке. Полные простыни
+// описаний дублируют прозу системного промпта Hermes (которая уезжает в
+// context.txt) и раздувают промпт на десятки КБ.
+const TOOL_DESCRIPTION_CAP = 200;
+const PROPERTY_DESCRIPTION_CAP = 100;
+
 export function formatCompactTools(tools) {
   if (!Array.isArray(tools) || !tools.length) return "[]";
   const cleaned = tools
     .map((t) => {
       const fn = t?.function || t;
       if (!fn?.name) return null;
+      const description = fn.description?.trim() || "";
       const cleanParams = cleanJsonSchema(fn.parameters || fn.input_schema);
       return {
         type: "function",
         function: {
           name: fn.name,
-          ...(fn.description ? { description: fn.description.trim() } : {}),
-          ...(cleanParams ? { parameters: cleanParams } : {}),
+          ...(description ? { description: cap(description, TOOL_DESCRIPTION_CAP) } : {}),
+          ...(cleanParams ? { parameters: shrinkParams(cleanParams) } : {}),
         },
       };
     })
     .filter(Boolean);
   return JSON.stringify(cleaned);
+}
+
+function cap(text, max) {
+  if (text.length <= max) return text;
+  return text.slice(0, max - 1).replace(/\s+\S*$/, "") + "…";
+}
+
+// Схема параметров в «рационе»: типы + required + короткие описания.
+// enums сохраняются (модели обязаны знать допустимые значения), дефолты тоже.
+function shrinkParams(schema) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
+  const res = { ...schema };
+  if (res.properties && typeof res.properties === "object") {
+    const shrunk = {};
+    for (const [k, v] of Object.entries(res.properties)) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        const { description, ...rest } = v;
+        shrunk[k] = typeof description === "string" && description.trim()
+          ? { ...rest, description: cap(description, PROPERTY_DESCRIPTION_CAP) }
+          : rest;
+      } else {
+        shrunk[k] = v;
+      }
+    }
+    res.properties = shrunk;
+  }
+  // вложенные items/objects не обходим: чистка первого уровня даёт основной выигрыш
+  return res;
 }
 
 function cleanJsonSchema(schema) {

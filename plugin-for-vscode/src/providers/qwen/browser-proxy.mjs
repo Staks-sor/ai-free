@@ -20,8 +20,10 @@ import { QWEN_AUTH_FILE, QWEN_BASE_URL, QWEN_BROWSER_PROFILE } from "./config.mj
 import { applyQwenCookiesToContext, readQwenAuth } from "./auth-files.mjs";
 import { randomUUID } from "node:crypto";
 import { resolveQwenStreamTimeouts } from "./stream-timeouts.mjs";
+import { isQwenPunishResponse, startQwenPunishCooldown, clearQwenPunishCooldown } from "./request-pacing.mjs";
+import { resolveBaxiaSolverConfig, trySolveBaxiaOnPage } from "./baxia-solver.mjs";
 
-let proxyPromise = null;
+const proxyContexts = new Map(); // accountId -> { promise }
 const QWEN_NAV_TIMEOUT_MS = Number(process.env.QWEN_NAV_TIMEOUT_MS || 90_000);
 const QWEN_READY_DELAY_MS = Number(process.env.QWEN_READY_DELAY_MS || 3000);
 const QWEN_READY_POLL_MS = Number(process.env.QWEN_READY_POLL_MS || 100);
@@ -49,33 +51,38 @@ function hashChatId(chatId) {
 }
 
 // Сброс singleton после re-login / refresh — следующий запрос поднимет прокси с новыми куками.
-export async function closeQwenBrowserProxy() {
-  const current = proxyPromise;
-  proxyPromise = null;
-  if (!current) return;
-  try {
-    const proxy = await current;
-    await proxy.close?.();
-  } catch {}
+export async function closeQwenBrowserProxy(accountId = null) {
+  if (accountId) {
+    const entry = proxyContexts.get(accountId);
+    if (entry) {
+      proxyContexts.delete(accountId);
+      try { const proxy = await entry.promise; await proxy.close?.(); } catch {}
+    }
+    return;
+  }
+  for (const [id, entry] of proxyContexts.entries()) {
+    try { const proxy = await entry.promise; await proxy.close?.(); } catch {}
+  }
+  proxyContexts.clear();
 }
 
-export function resetQwenBrowserProxy() {
-  return closeQwenBrowserProxy();
+export function resetQwenBrowserProxy(accountId = null) {
+  return closeQwenBrowserProxy(accountId);
 }
 
 // Возвращает singleton-инстанс прокси. Все вызовы делят один Chromium.
-export function getQwenBrowserProxy({ debug = false } = {}) {
-  if (!proxyPromise) {
-    proxyPromise = createProxy({ debug }).catch((err) => {
-      // При сбое сбрасываем, чтобы следующий вызов попробовал заново.
-      proxyPromise = null;
+export function getQwenBrowserProxy({ accountId = 'default', debug = false } = {}) {
+  if (!proxyContexts.has(accountId)) {
+    const p = createProxy({ accountId, debug }).catch((err) => {
+      proxyContexts.delete(accountId);
       throw err;
     });
+    proxyContexts.set(accountId, { promise: p });
   }
-  return proxyPromise;
+  return proxyContexts.get(accountId).promise;
 }
 
-async function createProxy({ debug }) {
+async function createProxy({ accountId, debug }) {
   const { ensureBrowserBinaries } = await import("../../browser/ensure-binaries.mjs");
   const browserReady = await ensureBrowserBinaries();
   if (!browserReady.ok) {
@@ -86,7 +93,17 @@ async function createProxy({ debug }) {
 
   if (debug) console.log("[qwen-proxy] launching headless Chromium with profile…");
 
-  const context = await chromium.launchPersistentContext(QWEN_BROWSER_PROFILE, {
+  const pathMod = await import('node:path');
+  const baseProfile = QWEN_BROWSER_PROFILE;
+  let profileDir = accountId === 'default' ? baseProfile : pathMod.resolve(baseProfile, '..', `qwen-profile-${accountId}`);
+  if (accountId !== 'default') {
+    try {
+      const { getAccountById } = await import('./account-store.mjs');
+      const account = getAccountById(accountId);
+      if (account?.profileDir) profileDir = account.profileDir;
+    } catch {}
+  }
+  const context = await chromium.launchPersistentContext(profileDir, {
     headless: true,
     viewport: { width: 1280, height: 800 },
     locale: "ru-RU",
@@ -132,17 +149,51 @@ async function createProxy({ debug }) {
 
   attachPageDiagnostics(firstPage, "page0");
 
+  /**
+   * Попытка решить Baxia punish-слайдер на странице воркера.
+   * Возвращает true при успехе (x5sec установлен, кулдаун снят).
+   * Любая ошибка проглатывается — фоллбэком остаётся punish-кулдаун.
+   */
+  const trySolvePunishOnWorker = async (worker, pathLabel) => {
+    const cfg = resolveBaxiaSolverConfig();
+    if (!cfg.enabled) return false;
+    try {
+      const res = await trySolveBaxiaOnPage(worker.page, cfg, {
+        log: (msg) => console.warn(`[qwen-proxy:${worker.label}] baxia-solver(${pathLabel}): ${msg}`),
+      });
+      if (res.solved) {
+        clearQwenPunishCooldown();
+        return true;
+      }
+      console.warn(`[qwen-proxy:${worker.label}] baxia-solver(${pathLabel}): not solved (${res.error} after ${res.tries} tries) — fallback to cooldown`);
+      return false;
+    } catch (err) {
+      console.warn(`[qwen-proxy:${worker.label}] baxia-solver(${pathLabel}) failed: ${err?.message || err}`);
+      return false;
+    }
+  };
+
   let rawStreamHandler = null;
   await context.exposeFunction("__qwenRawStreamChunk", async (chunk) => {
     return typeof rawStreamHandler === "function" && rawStreamHandler(chunk) === true;
   });
 
   // auth.json может быть свежее профиля (import-qwen, silent refresh). Подмешиваем куки до goto.
-  const savedAuth = readQwenAuth(QWEN_AUTH_FILE);
-  const authToken = savedAuth?.token || "";
-  if (savedAuth?.cookies?.length) {
-    const n = await applyQwenCookiesToContext(context, savedAuth.cookies);
-    if (debug) console.log(`[qwen-proxy] injected ${n} cookies from auth.json`);
+  let authToken = "";
+  let cookiesToInject = [];
+  if (accountId !== 'default') {
+    const { getAccountById } = await import("./account-store.mjs");
+    const account = getAccountById(accountId);
+    authToken = account?.token || "";
+    cookiesToInject = account?.cookies || [];
+  } else {
+    const savedAuth = readQwenAuth(QWEN_AUTH_FILE);
+    authToken = savedAuth?.token || "";
+    cookiesToInject = savedAuth?.cookies || [];
+  }
+  if (cookiesToInject.length) {
+    const n = await applyQwenCookiesToContext(context, cookiesToInject);
+    if (debug) console.log(`[qwen-proxy:${accountId}] injected ${n} cookies`);
   }
 
   async function primeQwenPageAuth(page) {
@@ -422,7 +473,7 @@ async function createProxy({ debug }) {
           if (isClosedBrowserError(error)) await recreateWorkerPage(worker);
           else await reloadWorker(worker);
         } catch (recoverError) {
-          proxyPromise = null;
+          proxyContexts.delete(accountId);
           throw recoverError;
         }
       }
@@ -432,6 +483,18 @@ async function createProxy({ debug }) {
       const failure = latestFailureFor(url);
       if (failure) {
         result.text += `\nnetwork=${failure.errorText}\nnetworkMethod=${failure.method}`;
+      }
+    }
+    // Baxia punish (антибот-капча): детект по contentType/text и включение
+    // кулдауна, чтобы выше по стеку не долбить новыми запросами.
+    if (/\/api\/v2\/chat\/completions(?:$|\?)/.test(url) && isQwenPunishResponse(result)) {
+      const solved = await trySolvePunishOnWorker(worker, "text");
+      if (solved) {
+        console.warn(`[qwen-proxy:${worker.label}] Baxia slider solved (text path) — cooldown cleared`);
+      } else {
+        const { backoffMs } = startQwenPunishCooldown();
+        result = { ...result, ok: false, punish: true };
+        console.warn(`[qwen-proxy:${worker.label}] Baxia punish detected — cooldown ${Math.round(backoffMs / 1000)}s (see browser window to solve captcha)`);
       }
     }
     return result;
@@ -444,7 +507,17 @@ async function createProxy({ debug }) {
     const firstContentTimeoutMs = Number(streamFirstContentTimeoutMs || QWEN_STREAM_FIRST_CONTENT_TIMEOUT_MS);
     const idleTimeoutMs = Number(streamIdleTimeoutMs || QWEN_STREAM_IDLE_TIMEOUT_MS);
     const attempts = Math.max(1, Math.min(5, Number(maxAttempts || QWEN_PROXY_MAX_ATTEMPTS)));
-    rawStreamHandler = typeof onRawChunk === "function" ? onRawChunk : null;
+    // Признак того, что сервер уже начал отдавать SSE-чанки. Если после этого
+    // fetch умер (status 0 / abort), повторный POST того же body создал бы
+    // sibling-ветку в дереве сообщений и дублировал текст — вместо этого
+    // обрыв уходит наверх, и клиент восстанавливает стрим по response_id.
+    let sawRawChunk = false;
+    rawStreamHandler = typeof onRawChunk === "function"
+      ? (chunk) => {
+        sawRawChunk = true;
+        return onRawChunk(chunk);
+      }
+      : null;
     try {
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         try {
@@ -455,6 +528,7 @@ async function createProxy({ debug }) {
           const accept = isCompletionRequest
             ? "application/json"
             : "application/json, text/plain, */*";
+          sawRawChunk = false;
           result = await Promise.race([
             worker.page.evaluate(
               async ({ url, body, fetchTimeoutMs, streamFirstContentTimeoutMs, streamIdleTimeoutMs, requestId, accept, isCompletionRequest, authToken }) => {
@@ -586,17 +660,30 @@ async function createProxy({ debug }) {
             ),
           ]);
           if (result.status !== 0 || attempt === attempts - 1) break;
+          if (sawRawChunk) {
+            // Чанки уже шли: POST был принят сервером и генерация началась.
+            // Re-POST создал бы sibling-ветку — отдаём обрыв наверх для
+            // resume по response_id (клиент) вместо слепого повтора.
+            if (debug) console.log(`[qwen-proxy:${worker.label}] stream died mid-response (chunks already received) — NOT re-POSTing, handing break to resume`);
+            break;
+          }
           if (debug) console.log(`[qwen-proxy:${worker.label}] stream fetch failed before HTTP response; reloading page and retrying`);
           await reloadWorker(worker);
         } catch (error) {
           lastError = error;
+          // isCompletionRequest объявлен в try и здесь не виден — пере-тест URL.
+          if (sawRawChunk && /\/api\/v2\/chat\/completions(?:$|\?)/.test(url)) {
+            // Генерация уже шла — повторный POST запретен (sibling-ветки).
+            if (debug) console.log(`[qwen-proxy:${worker.label}] stream failed mid-generation — NOT re-POSTing, handing break to resume`);
+            throw error;
+          }
           if (!isTransientBrowserError(error) || attempt === attempts - 1) throw error;
           if (debug) console.log(`[qwen-proxy:${worker.label}] transient browser error during stream; reloading: ${error.message}`);
           try {
             if (isClosedBrowserError(error)) await recreateWorkerPage(worker);
             else await reloadWorker(worker);
           } catch (recoverError) {
-            proxyPromise = null;
+            proxyContexts.delete(accountId);
             throw recoverError;
           }
         }
@@ -609,6 +696,20 @@ async function createProxy({ debug }) {
       const failure = latestFailureFor(url);
       if (failure) {
         result.text += `\nnetwork=${failure.errorText}\nnetworkMethod=${failure.method}`;
+      }
+    }
+    // Baxia punish (антибот-капча). Пробуем решить слайдер локально;
+    // если не вышло — остаёмся на кулдауне из request-pacing.
+    if (/\/api\/v2\/chat\/completions(?:$|\?)/.test(url) && isQwenPunishResponse(result)) {
+      const solved = await trySolvePunishOnWorker(worker, "text");
+      if (solved) {
+        // Baxia сам реплеит запрос после setCookieSuccess — просто отдаём
+        // результат как есть, клиент сделает новую попытку без кулдауна.
+        console.warn(`[qwen-proxy:${worker.label}] Baxia slider solved (stream path) — cooldown cleared`);
+      } else {
+        const { backoffMs } = startQwenPunishCooldown();
+        result = { ...result, ok: false, punish: true };
+        console.warn(`[qwen-proxy:${worker.label}] Baxia punish detected (stream) — cooldown ${Math.round(backoffMs / 1000)}s`);
       }
     }
     return result;
@@ -641,6 +742,65 @@ async function createProxy({ debug }) {
         streamIdleTimeoutMs,
         maxAttempts,
       }));
+    },
+    // Same-origin POST к API chat.qwen.ai из контекста страницы — для файловых
+    // эндпоинтов (getstsToken / parse / parse/status). bx-ua подписывается
+    // JS-бандлом страницы автоматически, как у настоящего веб-интерфейса.
+    // ВАЖНО: page.evaluate сериализует результат (JSON) — функции не переносятся,
+    // поэтому json возвращаем как plain-поле, а не метод.
+    async proxyApiPost({ path, body, chatId, timeoutMs = 30_000 }) {
+      const worker = pickWorker(chatId || null);
+      return enqueue(worker, () => worker.page.evaluate(
+        async ({ path, body, timeoutMs }) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort("qwen_fetch_timeout"), timeoutMs);
+          try {
+            const res = await fetch(path, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                accept: "application/json, text/plain, */*",
+                source: "web",
+              },
+              credentials: "include",
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            });
+            const json = await res.json().catch(() => null);
+            return { ok: res.ok, status: res.status, json };
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        },
+        { path, body, timeoutMs },
+      ));
+    },
+    // Same-origin GET к API chat.qwen.ai из контекста страницы — для чтения
+    // истории чата (harvest сохранённого ответа после обрыва стрима).
+    async proxyApiGet({ path, chatId, timeoutMs = 30_000 }) {
+      const worker = pickWorker(chatId || null);
+      return enqueue(worker, () => worker.page.evaluate(
+        async ({ path, timeoutMs }) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort("qwen_fetch_timeout"), timeoutMs);
+          try {
+            const res = await fetch(path, {
+              method: "GET",
+              headers: {
+                accept: "application/json, text/plain, */*",
+                source: "web",
+              },
+              credentials: "include",
+              signal: controller.signal,
+            });
+            const json = await res.json().catch(() => null);
+            return { ok: res.ok, status: res.status, json };
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        },
+        { path, timeoutMs },
+      ));
     },
     async close() { await close(); },
   };
