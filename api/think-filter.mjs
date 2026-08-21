@@ -25,6 +25,14 @@ export function stripThinkBlocks(text) {
   while (i < s.length) {
     if (!inThink) {
       const open = s.indexOf(THINK_OPEN, i);
+      // Осиротевший закрывающий тег (деградация: открывающий съеден или
+      // неполон) — вырезаем, чтобы он не протекал в видимый ответ.
+      const strayClose = s.indexOf(THINK_CLOSE, i);
+      if (open === -1 && strayClose !== -1) {
+        out += s.slice(i, strayClose);
+        i = strayClose + THINK_CLOSE.length;
+        continue;
+      }
       if (open === -1) {
         out += s.slice(i);
         break;
@@ -88,8 +96,21 @@ export function createThinkTagFilter({ onText = null } = {}) {
           progress = true;
           continue;
         }
-        // Открывающего нет. Возможно, хвост — частичный префикс "<th...".
-        const keep = partialTagPrefixLen(hold, THINK_OPEN);
+        // Осиротевший закрывающий тег (деградация: открывающий съеден) —
+        // вырезаем, не протекает в видимый ответ.
+        const strayClose = hold.indexOf(THINK_CLOSE);
+        if (strayClose !== -1) {
+          out += hold.slice(0, strayClose);
+          hold = hold.slice(strayClose + THINK_CLOSE.length);
+          progress = true;
+          continue;
+        }
+        // Открывающего/закрывающего нет. Хвост может быть частичным
+        // префиксом любого из тегов ("<th..." или "</th...").
+        const keep = Math.max(
+          partialTagPrefixLen(hold, THINK_OPEN),
+          partialTagPrefixLen(hold, THINK_CLOSE),
+        );
         out += hold.slice(0, hold.length - keep);
         hold = keep ? hold.slice(-keep) : "";
       }

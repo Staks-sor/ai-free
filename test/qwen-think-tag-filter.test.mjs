@@ -100,3 +100,45 @@ describe("createThinkTagFilter (стриминг)", () => {
     assert.equal(emitted.join(""), "меньше <thi");
   });
 });
+
+describe("stray </think> (деградация: закрывающий без открывающего)", () => {
+  it("stripThinkBlocks вырезает осиротевшие </think> из ответа", () => {
+    const text = "Короткий ответ 1\n</think>\nЕщё текст\n</think>\nфинал";
+    const clean = stripThinkBlocks(text);
+    assert.equal(clean.includes("</think>"), false);
+    assert.equal(clean.includes("Короткий ответ 1"), true);
+    assert.equal(clean.includes("финал"), true);
+  });
+
+  it("стриминг: голый </think> по чанкам не протекает", () => {
+    const emitted = [];
+    const f = createThinkTagFilter({ onText: (t) => emitted.push(t) });
+    f.push("ответ раз\n</th");
+    f.push("ink>\nответ два\n</think>\nфинал");
+    f.flush();
+    const joined = emitted.join("");
+    assert.equal(joined.includes("</think>"), false);
+    assert.equal(joined.includes("ответ раз"), true);
+    assert.equal(joined.includes("ответ два"), true);
+    assert.equal(joined.includes("финал"), true);
+  });
+
+  it("interleaved: think/answer/think/answer многократно, всё чисто", () => {
+    const text = "<think>черновик 1 с JSON {\"name\":\"terminal\"}</think>короткий 1"
+      + "<think>черновик 2 {\"name\":\"execute_code\"}</think>короткий 2"
+      + "<think>черновик 3</think>финальный ответ";
+    const clean = stripThinkBlocks(text);
+    assert.equal(clean, "короткий 1короткий 2финальный ответ");
+  });
+
+  it("стриминг interleaved: три фазы думанья, ответы сохраняются", () => {
+    const emitted = [];
+    const f = createThinkTagFilter({ onText: (t) => emitted.push(t) });
+    f.push("<think>думает 1");
+    f.push("</think>resp1<think>думает 2</think>");
+    f.push("resp2<think>думает 3</think>");
+    f.push("FINAL");
+    f.flush();
+    assert.equal(emitted.join(""), "resp1resp2FINAL");
+  });
+});
