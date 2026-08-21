@@ -28,7 +28,7 @@ import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
 import { extractBareToolCalls, formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls, repairTruncatedToolCallJson, escapeUnescapedInnerQuotes } from "./tool-calls.mjs";
-import { createThinkTagFilter, stripThinkBlocks } from "./think-filter.mjs";
+import { createThinkTagFilter, createToolErrorChipFilter, stripThinkBlocks, stripToolErrorChips } from "./think-filter.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
@@ -40,7 +40,7 @@ import { runWithEmptyStreamRetry } from "./stream-retry.mjs";
 // прямо в текстовый канал — без зачистки детектор выдёргивает черновики
 // как реальные вызовы ("Tool X does not exists" каскад).
 export function parseModelToolCallsSafe(text) {
-  return parseModelToolCalls(stripThinkBlocks(text));
+  return parseModelToolCalls(stripToolErrorChips(stripThinkBlocks(text)));
 }
 
 const compatLogger = createFileLogger({ component: "openai-handler" });
@@ -951,7 +951,10 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
   // Деградировавший Qwen шлёт reasoning литеральным текстом с <think>-тегами;
   // внутри — черновики tool-call JSON, которые детектор ловил как реальные
   // вызовы. Фильтр вырезает think-блоки до того, как буфер увидит парсер.
-  const thinkFilter = createThinkTagFilter({ onText: (t) => parser.onText(t) });
+  // Поверх — чипострига: ошибки бэкенда «Tool X does not exists.» утекают
+  // в видимый текст и не живут в think-канале, поэтому идут вторым слоем.
+  const chipFilter = createToolErrorChipFilter({ onText: (t) => parser.onText(t) });
+  const thinkFilter = createThinkTagFilter({ onText: (t) => chipFilter.push(t) });
   let sawDelta = false;
   let firstDeltaAt = 0;
   const heartbeat = setInterval(() => {
@@ -1040,6 +1043,7 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
     clearInterval(heartbeat);
     if (res.destroyed || res.writableEnded) return;
     thinkFilter.flush();
+    chipFilter.flush();
     parser.onEnd();
     writeSseRaw(res, "data: [DONE]\n\n");
     if (!res.destroyed && !res.writableEnded) res.end();

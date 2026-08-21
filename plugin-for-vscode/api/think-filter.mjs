@@ -16,6 +16,18 @@ const THINK_CLOSE = "</think>";
 // выводе (без полноценных тегов). Вырезаем строку целиком.
 const THINKING_COMPLETED_RE = /(?:^|\n)[ \t]*Thinking completed[ \t]*(?=\n|$)/g;
 
+// Чипы ошибок Qwen-бэкенда: когда модель пытается звать тулы во время
+// thinking-фазы, бэкенд возвращает «Tool <name> does not exists.» (или
+// «does not exist») прямо текстом в контент-канал. В реальных логах чипы
+// приходят слитно, сериями по много штук («…exists.Tool X does not
+// exists.Tool Y does not exists.Замысел: …»). Вырезаем целиком вместе с
+// обрамляющими пробелами; обычная проза про инструменты не матчится.
+const TOOL_CHIP_RE = /[ \t]*Tool[ \t]+\S{1,64}[ \t]+does[ \t]+not[ \t]+exists?[ \t]*\.?/g;
+
+// Максимальная длина потенциального чипа-префикса, который стриминговый
+// фильтр может придержать (см. partialChipPrefixLen).
+const CHIP_PREFIX_MAX = 96;
+
 export function stripThinkBlocks(text) {
   const s = String(text || "");
   if (!s) return s;
@@ -135,6 +147,65 @@ function partialTagPrefixLen(s, tag) {
   for (let len = max; len > 0; len -= 1) {
     if (s.endsWith(tag.slice(0, len))) return len;
     // Суффикс "<think>" длины 7 — это сам тег, не частичный (обработан выше).
+  }
+  return 0;
+}
+
+// Вырезает чипы ошибок бэкенда из готового текста (non-stream путь).
+export function stripToolErrorChips(text) {
+  const s = String(text || "");
+  if (!s) return s;
+  const out = s.replace(TOOL_CHIP_RE, "");
+  // Слитные серии чипов оставляют пустые строки — поджимаем.
+  return /\S/.test(out) ? out.replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ") : "";
+}
+
+// Стриминговая версия: ту же логику, но с удержанием потенциального
+// начала чипа («Tool rea…»), разрезанного по границе чанков. Буфер
+// ограничен CHIP_PREFIX_MAX, поэтому латентность видимого текста
+// растёт максимум на длину одного чипа и только рядом с ним.
+export function createToolErrorChipFilter({ onText = null } = {}) {
+  let hold = "";
+
+  function emit(text) {
+    if (text && typeof onText === "function") onText(text);
+  }
+
+  function process(s) {
+    // Быстрая проверка: без «Tool » чипов быть не может.
+    if (!/(^|[ \t\n])Tool[ \t]/.test(s)) return { out: s, hold: "" };
+    const cleaned = s.replace(TOOL_CHIP_RE, "");
+    // Если в конце остался потенциальный prefix чипа — придержим его.
+    const keep = partialChipPrefixLen(s);
+    if (keep > 0) {
+      return { out: cleaned.slice(0, cleaned.length - keep), hold: cleaned.slice(-keep) };
+    }
+    return { out: cleaned, hold: "" };
+  }
+
+  return {
+    push(delta) {
+      const s = hold + String(delta || "");
+      const r = process(s);
+      hold = r.hold;
+      emit(r.out);
+    },
+    flush() {
+      emit(hold);
+      hold = "";
+    },
+  };
+}
+
+// Длина самого длинного суффикса s, который может стать началом чипа
+// (совпадает с TOOL_CHIP_RE по префиксу «Tool … does not exist…»).
+function partialChipPrefixLen(s) {
+  const max = Math.min(s.length, CHIP_PREFIX_MAX);
+  for (let len = max; len > 0; len -= 1) {
+    const cand = s.slice(s.length - len);
+    if (/^[ \t]*Tool[ \t]+\S{1,64}([ \t]+does)?([ \t]+not)?([ \t]+exists?[ \t]*\.?)?$/.test(cand)) {
+      return len;
+    }
   }
   return 0;
 }
