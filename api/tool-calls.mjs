@@ -448,24 +448,59 @@ function decodeXmlText(value) {
     .replace(/&amp;/g, "&");
 }
 
+// Потолок длины описания тула в компактном списке. Полные простыни
+// описаний дублируют прозу системного промпта Hermes (которая уезжает в
+// context.txt) и раздувают промпт на десятки КБ.
+const TOOL_DESCRIPTION_CAP = 200;
+const PROPERTY_DESCRIPTION_CAP = 100;
+
 export function formatCompactTools(tools) {
   if (!Array.isArray(tools) || !tools.length) return "[]";
   const cleaned = tools
     .map((t) => {
       const fn = t?.function || t;
       if (!fn?.name) return null;
+      const description = fn.description?.trim() || "";
       const cleanParams = cleanJsonSchema(fn.parameters || fn.input_schema);
       return {
         type: "function",
         function: {
           name: fn.name,
-          ...(fn.description ? { description: fn.description.trim() } : {}),
-          ...(cleanParams ? { parameters: cleanParams } : {}),
+          ...(description ? { description: cap(description, TOOL_DESCRIPTION_CAP) } : {}),
+          ...(cleanParams ? { parameters: shrinkParams(cleanParams) } : {}),
         },
       };
     })
     .filter(Boolean);
   return JSON.stringify(cleaned);
+}
+
+function cap(text, max) {
+  if (text.length <= max) return text;
+  return text.slice(0, max - 1).replace(/\s+\S*$/, "") + "…";
+}
+
+// Схема параметров в «рационе»: типы + required + короткие описания.
+// enums сохраняются (модели обязаны знать допустимые значения), дефолты тоже.
+function shrinkParams(schema) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
+  const res = { ...schema };
+  if (res.properties && typeof res.properties === "object") {
+    const shrunk = {};
+    for (const [k, v] of Object.entries(res.properties)) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        const { description, ...rest } = v;
+        shrunk[k] = typeof description === "string" && description.trim()
+          ? { ...rest, description: cap(description, PROPERTY_DESCRIPTION_CAP) }
+          : rest;
+      } else {
+        shrunk[k] = v;
+      }
+    }
+    res.properties = shrunk;
+  }
+  // вложенные items/objects не обходим: чистка первого уровня даёт основной выигрыш
+  return res;
 }
 
 function cleanJsonSchema(schema) {
