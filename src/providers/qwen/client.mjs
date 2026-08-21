@@ -30,7 +30,7 @@ import {
 import { getQwenBrowserProxy, resetQwenBrowserProxy } from "./browser-proxy.mjs";
 import { buildQwenCompletionPayload } from "./completion-payload.mjs";
 import { resolveQwenContextFileConfig, splitPromptForFileUpload, uploadQwenContextFile } from "./context-file.mjs";
-import { harvestQwenChatMessage } from "./harvest.mjs";
+import { harvestQwenChatMessage, harvestTransportFailedCompletion } from "./harvest.mjs";
 import { waitForQwenCompletionSlot, createQwenPunishError, qwenAntibotCooldownRemainingMs } from "./request-pacing.mjs";
 import { createFileLogger } from "../../logging/logger.mjs";
 
@@ -482,6 +482,8 @@ export class QwenChatClient {
 
     if (QWEN_TRANSPORT === "browser") {
       let chatInProgressSeen = false;
+      let roundStreamParser = null; // парсер текущей попытки — виден в catch
+      let postedOnce = false; // completion-POST уже отправлялся в этом чате
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
           const proxy = await getQwenBrowserProxy({ debug: this.debug });
@@ -489,6 +491,7 @@ export class QwenChatClient {
           const streamParser = useLiveStream
             ? createQwenIncrementalParser({ onText, onThinking })
             : null;
+          roundStreamParser = streamParser;
           // Pacing: минимальный интервал между POST /completions, чтобы не
           // разгонять риск-скоринг Baxia. Также кидает QWEN_ANTIBOT_PUNISH,
           // если активен кулдаун после детектированной punish-страницы.
@@ -496,6 +499,7 @@ export class QwenChatClient {
           if (pacingWaitMs > 0 && this.debug) {
             console.log(`[qwen] pacing: waited ${pacingWaitMs}ms before completion`);
           }
+          postedOnce = true;
           const result = useLiveStream
             ? await proxy.proxyFetchStream({
               url,
@@ -603,6 +607,34 @@ export class QwenChatClient {
           // Punish/кулдаун не ретраим на месте — ошибка уходит наверх,
           // агентный слой получит понятный код и сообщение о капче.
           if (error?.code === "QWEN_ANTIBOT_PUNISH") throw error;
+          // 2026-08-21: слепой re-POST того же body ЗАПРЕЩЁН, если POST уже
+          // отправлялся. Сервер мог его получить (AbortError до первого
+          // чанка — POST доставлен, генерация идёт): повтор создал бы
+          // sibling-ветку под тем же юзер-месседжем (полевой инцидент:
+          // «1/2» под запросом, дубль текста). Сначала harvest истории.
+          if (postedOnce && isQwenTransientBrowserTransportError(error)) {
+            const streamedText = roundStreamParser ? (roundStreamParser.snapshot?.() ?? "") : "";
+            providerLogger.warn("provider.qwen.stream_resume", {
+              operation: "transport_failure_harvest",
+              chatId,
+              attempt: attempt + 1,
+              streamedChars: streamedText.length,
+            });
+            const recovered = await harvestTransportFailedCompletion({
+              chatId,
+              streamedText,
+              onText,
+              getProxy: () => getQwenBrowserProxy({ debug: this.debug }),
+              debug: this.debug,
+            });
+            if (recovered) {
+              return { result: finalizeQwenCompletionResult(recovered, "", "completion (browser, transport-harvest)"), chatInProgressStuck: false };
+            }
+            // Harvest не удался (POST не доставлен / прокси мёртв).
+            if (attempt >= 2) throw error;
+            await resetQwenBrowserProxy();
+            continue;
+          }
           if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) {
             // Транспортная/авторизационная ошибка не считается «in progress».
             if (chatInProgressSeen) return { result: null, chatInProgressStuck: true };
@@ -863,6 +895,11 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
         if (error) break;
       }
       return fullText.length > textLengthBefore || thinkingBuf.length > thinkingLengthBefore;
+    },
+    // Мгновенный снимок видимого текста (для transport-harvest: хвост =
+    // harvested минус уже отправленные дельты).
+    snapshot() {
+      return fullText;
     },
     finish(rawFallback = "") {
       if (buffer.trim()) consumeEvent(buffer);

@@ -43,6 +43,7 @@ function messageNodeId(node) {
 // поддерживаем оба формата.
 async function fetchHistoryPage(fetcher, chatId, { cursor = null, direction = "up", limit = 10 } = {}) {
   const result = await fetcher({ chatId, cursor, direction, limit });
+  if (Array.isArray(result)) return result;
   const data = result?.data ?? result?.json?.data;
   if (Array.isArray(data?.messages)) return data.messages;
   if (Array.isArray(data)) return data;
@@ -122,4 +123,128 @@ function nextCursor(messages, _prevCursor, direction) {
   const last = messages[messages.length - 1];
   const id = messageNodeId(last);
   return id || null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Восстановление ТРАНСПОРТНОГО обрыва (2026-08-21, полевой инцидент:
+// чат «Qwen Account Pool Implementation»). AbortError: BodyStreamBuffer /
+// net::ERR_ABORTED до первого чанка: POST доставлен, сервер генерит, но
+// клиент #completionRound слепо re-POSTал тот же body (тот же timestamp_ms)
+// → второй юзер-месседж → sibling-ветка «1/2» под запросом, ответ #1
+// потерян, пользователю уезжает ответ #2.
+//
+// Вместо слепого re-POST: поллим историю чата, ждём завершения генерации
+// и забираем готовый ответ. Если история не показывает НОВЫХ сообщений за
+// разумное время — POST доказуемо не доставлен, только тогда re-POST
+// безопасен (вызывающий слой решает).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Признаки завершённости узла-ассистента в истории.
+function assistantNodeIsDone(node) {
+  if (node?.done === false) return false;
+  if (node?.is_stop === true) return false;
+  return Boolean(savedNodeToText(node).trim());
+}
+
+export async function harvestLatestAssistantMessage({
+  fetcher,
+  chatId,
+  knownIds = [],
+  pollMs = 3000,
+  timeoutMs = 120_000,
+  logger = null,
+}) {
+  const known = new Set(knownIds.map(String));
+  const deadline = Date.now() + Math.max(1000, timeoutMs);
+  let polls = 0;
+  let sawNew = false;
+
+  while (Date.now() < deadline) {
+    polls += 1;
+    let messages = [];
+    try {
+      messages = await fetchHistoryPage(fetcher, chatId, {});
+    } catch (error) {
+      logger?.warn?.("provider.qwen.harvest", { error: error?.message || String(error) });
+    }
+    const fresh = messages.filter((m) => !known.has(messageNodeId(m)));
+    if (fresh.length > 0) sawNew = true;
+    const lastAssistant = [...fresh].reverse().find(
+      (m) => String(m?.role) === "assistant" && assistantNodeIsDone(m),
+    );
+    if (lastAssistant) {
+      return {
+        found: true,
+        text: savedNodeToText(lastAssistant),
+        messageId: messageNodeId(lastAssistant),
+        polls,
+      };
+    }
+    if (fresh.length === 0 && polls >= 2) {
+      // Два опроса подряд без единого нового сообщения: POST не доставлен.
+      return { found: false, reason: "post_not_delivered", polls };
+    }
+    await sleep(pollMs);
+  }
+  return { found: false, reason: sawNew ? "generation_timeout" : "post_not_delivered", polls };
+}
+
+// Обёртка для client.mjs: транспортный сбой после отправки completion-POST.
+// Прокси и паузы инжектируются для тестируемости. Возвращает parsed-объект
+// (совместим с результатом парсера стрима) или null, если восстановить
+// не удалось (POST не доставлен / прокси мёртв) — тогда вызывающий слой
+// может безопасно повторить POST.
+export async function harvestTransportFailedCompletion({
+  chatId,
+  streamedText = "",
+  knownIds = [],
+  onText = null,
+  getProxy,
+  pollMs = 3000,
+  timeoutMs = 120_000,
+  debug = false,
+}) {
+  try {
+    const proxy = await getProxy();
+    const harvested = await harvestLatestAssistantMessage({
+      fetcher: ({ chatId: cid }) => proxy.proxyApiGet({ path: `/api/v2/chats/${cid}?direction=up&limit=20` }),
+      chatId,
+      knownIds,
+      pollMs,
+      timeoutMs,
+      logger: null,
+    });
+    if (!harvested.found) {
+      if (debug) console.log(`[qwen] transport-failure harvest: ${harvested.reason}`);
+      return null;
+    }
+    let tail = "";
+    if (typeof streamedText === "string" && streamedText) {
+      // Дельты уже ушли до обрыва: хвост = harvested минус уже отправленный префикс.
+      if (harvested.text.startsWith(streamedText)) {
+        tail = harvested.text.slice(streamedText.length);
+      } else {
+        tail = harvested.text;
+      }
+    } else {
+      tail = harvested.text;
+    }
+    if (tail && typeof onText === "function") onText(tail);
+    return {
+      text: streamedText ? (harvested.text.startsWith(streamedText) ? harvested.text : streamedText + tail) : tail,
+      thinkingText: "",
+      lastMessageId: harvested.messageId,
+      error: null,
+      streamFinished: true,
+      truncated: false,
+      responseId: "",
+      contentReceived: true,
+      harvested: true,
+      harvestedViaTransportRecovery: true,
+    };
+    // eslint-disable-next-line no-useless-catch
+  } catch (error) {
+    if (debug) console.log(`[qwen] transport-failure harvest error: ${error?.message || error}`);
+    return null;
+  }
 }
