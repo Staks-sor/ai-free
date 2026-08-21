@@ -45,6 +45,9 @@ export function parseModelToolCallsSafe(text) {
 
 const compatLogger = createFileLogger({ component: "openai-handler" });
 
+// Тройной бэктик для вставки в template literals без raw-экранирования.
+const F = "\u0060\u0060\u0060";
+
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.
 let qwenClient = null;
 // Ленивый singleton DeepSeek-клиента — переиспользуем через все вызовы API.
@@ -355,17 +358,34 @@ export function buildPromptFromChatBody(body, modelName, mapping) {
       ? `
 NOTE FOR REASONING MODELS (R1 / QwQ / Reasoner):
 - Do NOT wrap the final answer in <think>…</think>. After your reasoning, your
-  final output MUST be either plain text OR a \`\`\`tool_calls\`\`\` block.
-- If the user asks you to inspect/edit/run anything in a project, you MUST
-  emit a tool_calls block. Never invent shell commands ("rtk cat ...", "kit ls ...")
-  — those tools do not exist. Use ONLY the names from the Available tools list.
+  final output MUST be either plain text OR a ${F}tool_calls${F} block.
 `
       : "";
+
+    // Reasoning-модели Qwen (qwen3-max и др.) видят список тулов и пытаются
+    // вызывать их своим ВНУТРЕННИМ tool-call механизмом прямо во время
+    // thinking-фазы — бэкенд отвечает «Tool X does not exists» и модель
+    // каскадит по всем именам (execute_code, write_file, terminal, …;
+    // воспроизведено в нативной веб-морде 2026-08-21). Запрет обязателен
+    // для ЛЮБОЙ модели с тулами, не только для reasoner-имён.
+    const nativeCallBan = `
+CRITICAL — HOW TOOLS ARE EXECUTED HERE:
+- This chat has NO native/internal tool execution. The ONLY way to run a tool
+  is the ${F}tool_calls${F} markdown block in your FINAL visible answer.
+- NEVER attempt tool calls during your thinking/reasoning phase. Do NOT
+  invoke, announce or "run" tools (including internal helpers like
+  execute_code, write_file, terminal, tool_search, web_search) inside
+  thinking — the backend rejects them ("Tool ... does not exists") and the
+  whole turn fails. Think in plain text only; emit tool_calls once, at the end.
+- If you want to use a tool, your WHOLE final message is one ${F}tool_calls${F} block.
+- Never invent shell commands ("rtk cat ...", "kit ls ...") — those tools do
+  not exist. Use ONLY the names from the Available tools list.
+`;
 
     prompt += `[TOOL INSTRUCTIONS — STRICT FORMAT]
 You are connected to an automated tool-execution system. There is NO human reading
 your text in the loop. Compliance with the format below is mandatory.
-
+${nativeCallBan}
 To call one or more tools, your ENTIRE reply must be a single markdown block:
 
 \`\`\`tool_calls
@@ -445,7 +465,7 @@ Do not copy model identity from earlier assistant messages in the conversation h
     
   // Ensure the prompt ends with a clear directive if tools are available
   if (body.tools && body.tools.length > 0) {
-    prompt += `\n\n---\n[SYSTEM REMINDER]: You MUST use the exact JSON array format wrapped in \`\`\`tool_calls\`\`\` to call tools. If you output plain bash commands, it will fail.`;
+    prompt += `\n\n---\n[SYSTEM REMINDER]: You MUST use the exact JSON array format wrapped in ${F}tool_calls${F} to call tools. If you output plain bash commands, it will fail.`;
   }
 
   return prompt;
