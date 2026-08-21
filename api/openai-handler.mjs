@@ -466,6 +466,20 @@ Do not copy model identity from earlier assistant messages in the conversation h
   // Ensure the prompt ends with a clear directive if tools are available
   if (body.tools && body.tools.length > 0) {
     prompt += `\n\n---\n[SYSTEM REMINDER]: You MUST use the exact JSON array format wrapped in ${F}tool_calls${F} to call tools. If you output plain bash commands, it will fail.`;
+
+    // Транскрипт заканчивается tool-результатом: модель должна продолжить
+    // задачу СЕЙЧАС, а не отвечать на последний user-месседж ("retry and
+    // continue" она читала как yes/no-вопрос и отвечала голым "Yes").
+    const last = messages[messages.length - 1];
+    if (last?.role === "tool") {
+      prompt += `\n\n---\n[TASK IN PROGRESS — CONTINUE NOW]:\n` +
+        `The last message above is a TOOL RESULT, not a user reply. The user's ` +
+        `latest instruction still stands and work is unfinished. Continue the ` +
+        `task right now: either the next ${F}tool_calls${F} block, or (only if ` +
+        `truly everything is done) the final answer to the user's task.\n` +
+        `NEVER reply with bare acknowledgements ("Yes", "OK", "Done") — they ` +
+        `are not valid answers to the task.`;
+    }
   }
 
   return prompt;
