@@ -123,13 +123,15 @@ export async function importQwenFromJson(jsonPath, authFile = QWEN_AUTH_FILE) {
 }
 
 // Главный entry-point для `npm run login-qwen` и in-app re-login.
-export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession = false } = {}) {
-  const profileDir = QWEN_BROWSER_PROFILE;
+// options.profileDir — собственный persistent-профиль аккаунта (мультиаккаунт);
+// без него используется дефолтный QWEN_BROWSER_PROFILE.
+export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession = false, profileDir = null } = {}) {
+  const effectiveProfileDir = profileDir || QWEN_BROWSER_PROFILE;
   const previousToken = clearSession ? (readQwenAuth(authFile)?.token || "") : "";
   const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
   const chromium = await getChatGPTChromium();
   // Переиспользуем launch-функцию от DeepSeek — она запускает реальный Chrome.
-  const context = await launchPersistentDeepSeekContext(chromium, profileDir, false);
+  const context = await launchPersistentDeepSeekContext(chromium, effectiveProfileDir, false);
 
   // Стелс-меры против антибота Alibaba. Маскируем самые палевные follow-up
   // признаки автоматизации — navigator.webdriver, plugins, permissions API.
@@ -193,7 +195,7 @@ export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession
     cookies: captured.cookies,
     token: captured.token,
     userId: captured.userId,
-    profileDir,
+    profileDir: effectiveProfileDir,
   });
   await context.close();
 

@@ -23,7 +23,7 @@ import { resolveQwenStreamTimeouts } from "./stream-timeouts.mjs";
 import { isQwenPunishResponse, startQwenPunishCooldown, clearQwenPunishCooldown } from "./request-pacing.mjs";
 import { resolveBaxiaSolverConfig, trySolveBaxiaOnPage } from "./baxia-solver.mjs";
 
-let proxyPromise = null;
+const proxyContexts = new Map(); // accountId -> { promise }
 const QWEN_NAV_TIMEOUT_MS = Number(process.env.QWEN_NAV_TIMEOUT_MS || 90_000);
 const QWEN_READY_DELAY_MS = Number(process.env.QWEN_READY_DELAY_MS || 3000);
 const QWEN_READY_POLL_MS = Number(process.env.QWEN_READY_POLL_MS || 100);
@@ -51,33 +51,38 @@ function hashChatId(chatId) {
 }
 
 // Сброс singleton после re-login / refresh — следующий запрос поднимет прокси с новыми куками.
-export async function closeQwenBrowserProxy() {
-  const current = proxyPromise;
-  proxyPromise = null;
-  if (!current) return;
-  try {
-    const proxy = await current;
-    await proxy.close?.();
-  } catch {}
+export async function closeQwenBrowserProxy(accountId = null) {
+  if (accountId) {
+    const entry = proxyContexts.get(accountId);
+    if (entry) {
+      proxyContexts.delete(accountId);
+      try { const proxy = await entry.promise; await proxy.close?.(); } catch {}
+    }
+    return;
+  }
+  for (const [id, entry] of proxyContexts.entries()) {
+    try { const proxy = await entry.promise; await proxy.close?.(); } catch {}
+  }
+  proxyContexts.clear();
 }
 
-export function resetQwenBrowserProxy() {
-  return closeQwenBrowserProxy();
+export function resetQwenBrowserProxy(accountId = null) {
+  return closeQwenBrowserProxy(accountId);
 }
 
 // Возвращает singleton-инстанс прокси. Все вызовы делят один Chromium.
-export function getQwenBrowserProxy({ debug = false } = {}) {
-  if (!proxyPromise) {
-    proxyPromise = createProxy({ debug }).catch((err) => {
-      // При сбое сбрасываем, чтобы следующий вызов попробовал заново.
-      proxyPromise = null;
+export function getQwenBrowserProxy({ accountId = 'default', debug = false } = {}) {
+  if (!proxyContexts.has(accountId)) {
+    const p = createProxy({ accountId, debug }).catch((err) => {
+      proxyContexts.delete(accountId);
       throw err;
     });
+    proxyContexts.set(accountId, { promise: p });
   }
-  return proxyPromise;
+  return proxyContexts.get(accountId).promise;
 }
 
-async function createProxy({ debug }) {
+async function createProxy({ accountId, debug }) {
   const { ensureBrowserBinaries } = await import("../../browser/ensure-binaries.mjs");
   const browserReady = await ensureBrowserBinaries();
   if (!browserReady.ok) {
@@ -88,7 +93,17 @@ async function createProxy({ debug }) {
 
   if (debug) console.log("[qwen-proxy] launching headless Chromium with profile…");
 
-  const context = await chromium.launchPersistentContext(QWEN_BROWSER_PROFILE, {
+  const pathMod = await import('node:path');
+  const baseProfile = QWEN_BROWSER_PROFILE;
+  let profileDir = accountId === 'default' ? baseProfile : pathMod.resolve(baseProfile, '..', `qwen-profile-${accountId}`);
+  if (accountId !== 'default') {
+    try {
+      const { getAccountById } = await import('./account-store.mjs');
+      const account = getAccountById(accountId);
+      if (account?.profileDir) profileDir = account.profileDir;
+    } catch {}
+  }
+  const context = await chromium.launchPersistentContext(profileDir, {
     headless: true,
     viewport: { width: 1280, height: 800 },
     locale: "ru-RU",
@@ -164,11 +179,21 @@ async function createProxy({ debug }) {
   });
 
   // auth.json может быть свежее профиля (import-qwen, silent refresh). Подмешиваем куки до goto.
-  const savedAuth = readQwenAuth(QWEN_AUTH_FILE);
-  const authToken = savedAuth?.token || "";
-  if (savedAuth?.cookies?.length) {
-    const n = await applyQwenCookiesToContext(context, savedAuth.cookies);
-    if (debug) console.log(`[qwen-proxy] injected ${n} cookies from auth.json`);
+  let authToken = "";
+  let cookiesToInject = [];
+  if (accountId !== 'default') {
+    const { getAccountById } = await import("./account-store.mjs");
+    const account = getAccountById(accountId);
+    authToken = account?.token || "";
+    cookiesToInject = account?.cookies || [];
+  } else {
+    const savedAuth = readQwenAuth(QWEN_AUTH_FILE);
+    authToken = savedAuth?.token || "";
+    cookiesToInject = savedAuth?.cookies || [];
+  }
+  if (cookiesToInject.length) {
+    const n = await applyQwenCookiesToContext(context, cookiesToInject);
+    if (debug) console.log(`[qwen-proxy:${accountId}] injected ${n} cookies`);
   }
 
   async function primeQwenPageAuth(page) {
@@ -448,7 +473,7 @@ async function createProxy({ debug }) {
           if (isClosedBrowserError(error)) await recreateWorkerPage(worker);
           else await reloadWorker(worker);
         } catch (recoverError) {
-          proxyPromise = null;
+          proxyContexts.delete(accountId);
           throw recoverError;
         }
       }
@@ -658,7 +683,7 @@ async function createProxy({ debug }) {
             if (isClosedBrowserError(error)) await recreateWorkerPage(worker);
             else await reloadWorker(worker);
           } catch (recoverError) {
-            proxyPromise = null;
+            proxyContexts.delete(accountId);
             throw recoverError;
           }
         }

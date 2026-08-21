@@ -30,6 +30,8 @@ import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
 import { extractBareToolCalls, formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls, repairTruncatedToolCallJson, escapeUnescapedInnerQuotes } from "./tool-calls.mjs";
 import { createThinkTagFilter, createToolErrorChipFilter, stripThinkBlocks, stripToolErrorChips } from "./think-filter.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
+import { getAvailableAccount, hasAvailableAccounts, markRateLimited, markInvalid } from "../src/providers/qwen/account-store.mjs";
+import { resolveAccountForUser } from "../src/providers/qwen/session-router.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
 import { createFileLogger } from "../src/logging/logger.mjs";
@@ -49,12 +51,27 @@ const compatLogger = createFileLogger({ component: "openai-handler" });
 const F = "\u0060\u0060\u0060";
 
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.
-let qwenClient = null;
+const qwenClients = new Map(); // accountId -> client
 // Ленивый singleton DeepSeek-клиента — переиспользуем через все вызовы API.
 let deepseekClient = null;
-async function getQwenClient({ allowRefresh = true } = {}) {
-  if (qwenClient) return qwenClient;
+function isQwenAuthErrorByMessage(error) {
+  return /unauthorized|not.?logged|login required|token.?expired|session.?expired|invalid.?token|sign.?in/i.test(String(error?.message || ""));
+}
+
+function isQwenRateLimitError(error) {
+  return /rate.?limit|too many requests|429|quota/i.test(String(error?.message || ""));
+}
+
+async function getQwenClientForAccount(accountId, { allowRefresh = true } = {}) {
+  if (!accountId) accountId = 'default';
+  if (qwenClients.has(accountId)) return qwenClients.get(accountId);
   let auth = readQwenAuth(QWEN_AUTH_FILE);
+  if (accountId !== 'default') {
+    const { getAccountById } = await import("../src/providers/qwen/account-store.mjs");
+    const acc = getAccountById(accountId);
+    if (!acc?.token) throw new Error(`Account ${accountId} not found or missing token`);
+    auth = { token: acc.token, cookieHeader: acc.cookieHeader };
+  }
   if (!auth?.token && allowRefresh) {
     const { getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
     auth = await getQwenAuthManager().refresh({ forceVisible: false });
@@ -64,12 +81,14 @@ async function getQwenClient({ allowRefresh = true } = {}) {
       "Qwen не подключён. Запусти: npm run login-qwen (или npm run welcome)",
     );
   }
-  qwenClient = new QwenChatClient({
+  const client = new QwenChatClient({
     token: auth.token,
     cookieHeader: auth.cookieHeader,
+    accountId,
     debug: Boolean(process.env.API_DEBUG),
   });
-  return qwenClient;
+  qwenClients.set(accountId, client);
+  return client;
 }
 
 async function getDeepSeekClient() {
@@ -213,11 +232,24 @@ async function handleChatCompletions(req, res) {
     );
   }
 
+  let qwenAccountId = 'default';
+  if (mapping.provider === "qwen" && hasAvailableAccounts()) {
+    const telegramUserId = req.headers['x-telegram-user-id'] || req.headers['x-chat-id'] || null;
+    if (telegramUserId) {
+      const acc = resolveAccountForUser(telegramUserId);
+      if (acc) qwenAccountId = acc.id;
+    } else {
+      const acc = await getAvailableAccount();
+      if (acc) qwenAccountId = acc.id;
+    }
+  }
+
   try {
     if (mapping.provider === "qwen") {
       const runQwen = async (client) => {
         if (body.stream === true) {
           return handleQwenStream(client, null, prompt, modelName, mapping.model, res, {
+            accountId: qwenAccountId,
             thinking,
             search,
             tools: body.tools,
@@ -225,14 +257,20 @@ async function handleChatCompletions(req, res) {
             refreshClient: async (error) => {
               const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
               if (!isQwenAuthError(error)) throw error;
-              qwenClient = null;
+              if (qwenAccountId !== 'default') {
+                if (isQwenAuthErrorByMessage(error)) markInvalid(qwenAccountId);
+                else if (isQwenRateLimitError(error)) markRateLimited(qwenAccountId);
+              }
+              qwenClients.delete(qwenAccountId);
               const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
-              qwenClient = new QwenChatClient({
+              const newClient = new QwenChatClient({
                 token: fresh.token,
                 cookieHeader: fresh.cookieHeader,
+                accountId: qwenAccountId,
                 debug: Boolean(process.env.API_DEBUG),
               });
-              return qwenClient;
+              qwenClients.set(qwenAccountId, newClient);
+              return newClient;
             },
           });
         }
@@ -247,20 +285,24 @@ async function handleChatCompletions(req, res) {
         return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
       };
 
-      let client = await getQwenClient();
+      let client = await getQwenClientForAccount(qwenAccountId);
       try {
         return await runQwen(client);
       } catch (e) {
+        if (qwenAccountId !== 'default') {
+          if (isQwenAuthErrorByMessage(e)) markInvalid(qwenAccountId);
+          else if (isQwenRateLimitError(e)) markRateLimited(qwenAccountId);
+        }
         const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
         if (!isQwenAuthError(e)) throw e;
-        qwenClient = null;
+        qwenClients.delete(qwenAccountId);
         const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
         client = new QwenChatClient({
           token: fresh.token,
           cookieHeader: fresh.cookieHeader,
           debug: Boolean(process.env.API_DEBUG),
         });
-        qwenClient = client;
+        qwenClients.set(qwenAccountId, client);
         return await runQwen(client);
       }
     }
@@ -646,20 +688,22 @@ async function completeText(mapping, prompt, { thinking = false, search = false 
       return result.text || "";
     };
 
-    let client = await getQwenClient();
+    const qwenAccountId = 'default';
+    let client = await getQwenClientForAccount(qwenAccountId);
     try {
       return await runQwen(client);
     } catch (e) {
       const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
       if (!isQwenAuthError(e)) throw e;
-      qwenClient = null;
+      qwenClients.delete(qwenAccountId);
       const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
       client = new QwenChatClient({
         token: fresh.token,
         cookieHeader: fresh.cookieHeader,
+        accountId: qwenAccountId,
         debug: Boolean(process.env.API_DEBUG),
       });
-      qwenClient = client;
+      qwenClients.set(qwenAccountId, client);
       return await runQwen(client);
     }
   }
@@ -939,6 +983,7 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
   createChat = null,
   refreshClient = null,
   tools = [],
+  accountId = null,
 } = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
@@ -1056,6 +1101,7 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
       error: e.message,
     });
     console.error("[API] Qwen stream error:", e.message);
+    markQwenAccountOnUpstreamError(accountId, e);
     sendStreamError(res, modelName, e.message);
   }
 }

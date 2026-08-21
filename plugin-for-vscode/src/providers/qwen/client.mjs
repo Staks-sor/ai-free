@@ -142,9 +142,10 @@ const QWEN_DEBUG_DIR = path.join(os.tmpdir(), "qwen-debug");
 const ENV_DEFAULT_MODEL = process.env.QWEN_MODEL || QWEN_DEFAULT_MODEL;
 
 export class QwenChatClient {
-  constructor({ token, cookieHeader, debug = false }) {
+  constructor({ token, cookieHeader, accountId = 'default', debug = false }) {
     this.token = token;
     this.cookieHeader = cookieHeader;
+    this.accountId = accountId;
     this.debug = debug;
   }
 
@@ -171,7 +172,7 @@ export class QwenChatClient {
       return fallbackId;
     }
 
-    const proxy = await getQwenBrowserProxy({ debug: this.debug });
+    const proxy = await getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug });
     const url = `${QWEN_BASE_URL}/api/v2/chats/new`;
     const body = JSON.stringify({
       title,
@@ -431,7 +432,7 @@ export class QwenChatClient {
     const contextFileConfig = resolveQwenContextFileConfig();
     const split = splitPromptForFileUpload(promptToUse, contextFileConfig);
     if (split) {
-      const proxy = await getQwenBrowserProxy({ debug: this.debug });
+      const proxy = await getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug });
       providerLogger.info("provider.qwen.context_file", {
         operation: "upload",
         fileChars: split.fileChars,
@@ -486,7 +487,7 @@ export class QwenChatClient {
       let postedOnce = false; // completion-POST уже отправлялся в этом чате
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          const proxy = await getQwenBrowserProxy({ debug: this.debug });
+          const proxy = await getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug });
           const useLiveStream = typeof onText === "function" || typeof onThinking === "function";
           const streamParser = useLiveStream
             ? createQwenIncrementalParser({ onText, onThinking })
@@ -593,7 +594,7 @@ export class QwenChatClient {
 
           if (attempt < 2 && isQwenRecoverableStreamError(parsed, result.text)) {
             if (this.debug) console.log("[qwen] recoverable stream error, resetting browser proxy…");
-            await resetQwenBrowserProxy();
+            await resetQwenBrowserProxy(this.accountId);
             continue;
           }
 
@@ -624,7 +625,7 @@ export class QwenChatClient {
               chatId,
               streamedText,
               onText,
-              getProxy: () => getQwenBrowserProxy({ debug: this.debug }),
+              getProxy: () => getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug }),
               debug: this.debug,
             });
             if (recovered) {
@@ -632,7 +633,7 @@ export class QwenChatClient {
             }
             // Harvest не удался (POST не доставлен / прокси мёртв).
             if (attempt >= 2) throw error;
-            await resetQwenBrowserProxy();
+            await resetQwenBrowserProxy(this.accountId);
             continue;
           }
           if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) {
@@ -641,7 +642,7 @@ export class QwenChatClient {
             throw error;
           }
           if (this.debug) console.log(`[qwen] transient browser transport error, resetting proxy and retrying: ${error.message}`);
-          await resetQwenBrowserProxy();
+          await resetQwenBrowserProxy(this.accountId);
           continue;
         }
       }
@@ -691,7 +692,7 @@ export class QwenChatClient {
       truncated,
       onText,
       onThinking,
-      getProxy: () => getQwenBrowserProxy({ debug: this.debug }),
+      getProxy: () => getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug }),
       debug: this.debug,
     });
   }
