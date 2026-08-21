@@ -1301,14 +1301,22 @@ function hasNativeWebSearchTool(tools) {
   return Array.isArray(tools) && tools.some(isNativeWebSearchTool);
 }
 
+// Нативный (провайдерский) web-search определяется ТОЛЬКО по hosted-формату
+// тулзы: OpenAI Responses/Chat Compat ({ type: "web_search_20250305" }) или
+// Anthropic ({ type: "web_search_20250305", name: "web_search" }).
+//
+// Function-тул с именем web_search (Hermes Gateway и подобные клиенты
+// шлюют его как { type: "function", function: { name: "web_search" } }) —
+// это КЛИЕНТСКИЙ тул: модель должна вызывать его через ```tool_calls,
+// а Hermes исполняет и возвращает результат. Матчить его как нативный
+// нельзя: это включает auto_search у Qwen + врущий промпт-префикс
+// "Web search is enabled" — модель доверяет, зовёт свой внутренний
+// поиск, которого нет в зарегистрированных тулзах, и каскадит
+// "Tool web search does not exist" (issue: thinking-дампы 2026-08).
 function isNativeWebSearchTool(tool) {
   const type = String(tool?.type || tool?.function?.type || "").toLowerCase();
-  const name = String(tool?.name || tool?.function?.name || "").toLowerCase();
-  return type.includes("web_search") ||
-    type.includes("web-search") ||
-    name === "web_search" ||
-    name === "web_search_preview" ||
-    name.includes("web_search");
+  if (!type) return false;
+  return type.includes("web_search") || type.includes("web-search");
 }
 
 export function toolsForModelPrompt(tools) {

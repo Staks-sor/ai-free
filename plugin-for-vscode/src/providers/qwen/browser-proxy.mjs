@@ -482,7 +482,17 @@ async function createProxy({ debug }) {
     const firstContentTimeoutMs = Number(streamFirstContentTimeoutMs || QWEN_STREAM_FIRST_CONTENT_TIMEOUT_MS);
     const idleTimeoutMs = Number(streamIdleTimeoutMs || QWEN_STREAM_IDLE_TIMEOUT_MS);
     const attempts = Math.max(1, Math.min(5, Number(maxAttempts || QWEN_PROXY_MAX_ATTEMPTS)));
-    rawStreamHandler = typeof onRawChunk === "function" ? onRawChunk : null;
+    // Признак того, что сервер уже начал отдавать SSE-чанки. Если после этого
+    // fetch умер (status 0 / abort), повторный POST того же body создал бы
+    // sibling-ветку в дереве сообщений и дублировал текст — вместо этого
+    // обрыв уходит наверх, и клиент восстанавливает стрим по response_id.
+    let sawRawChunk = false;
+    rawStreamHandler = typeof onRawChunk === "function"
+      ? (chunk) => {
+        sawRawChunk = true;
+        return onRawChunk(chunk);
+      }
+      : null;
     try {
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         try {
@@ -493,6 +503,7 @@ async function createProxy({ debug }) {
           const accept = isCompletionRequest
             ? "application/json"
             : "application/json, text/plain, */*";
+          sawRawChunk = false;
           result = await Promise.race([
             worker.page.evaluate(
               async ({ url, body, fetchTimeoutMs, streamFirstContentTimeoutMs, streamIdleTimeoutMs, requestId, accept, isCompletionRequest, authToken }) => {
@@ -624,10 +635,23 @@ async function createProxy({ debug }) {
             ),
           ]);
           if (result.status !== 0 || attempt === attempts - 1) break;
+          if (sawRawChunk) {
+            // Чанки уже шли: POST был принят сервером и генерация началась.
+            // Re-POST создал бы sibling-ветку — отдаём обрыв наверх для
+            // resume по response_id (клиент) вместо слепого повтора.
+            if (debug) console.log(`[qwen-proxy:${worker.label}] stream died mid-response (chunks already received) — NOT re-POSTing, handing break to resume`);
+            break;
+          }
           if (debug) console.log(`[qwen-proxy:${worker.label}] stream fetch failed before HTTP response; reloading page and retrying`);
           await reloadWorker(worker);
         } catch (error) {
           lastError = error;
+          // isCompletionRequest объявлен в try и здесь не виден — пере-тест URL.
+          if (sawRawChunk && /\/api\/v2\/chat\/completions(?:$|\?)/.test(url)) {
+            // Генерация уже шла — повторный POST запретен (sibling-ветки).
+            if (debug) console.log(`[qwen-proxy:${worker.label}] stream failed mid-generation — NOT re-POSTing, handing break to resume`);
+            throw error;
+          }
           if (!isTransientBrowserError(error) || attempt === attempts - 1) throw error;
           if (debug) console.log(`[qwen-proxy:${worker.label}] transient browser error during stream; reloading: ${error.message}`);
           try {
@@ -724,6 +748,33 @@ async function createProxy({ debug }) {
           }
         },
         { path, body, timeoutMs },
+      ));
+    },
+    // Same-origin GET к API chat.qwen.ai из контекста страницы — для чтения
+    // истории чата (harvest сохранённого ответа после обрыва стрима).
+    async proxyApiGet({ path, chatId, timeoutMs = 30_000 }) {
+      const worker = pickWorker(chatId || null);
+      return enqueue(worker, () => worker.page.evaluate(
+        async ({ path, timeoutMs }) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort("qwen_fetch_timeout"), timeoutMs);
+          try {
+            const res = await fetch(path, {
+              method: "GET",
+              headers: {
+                accept: "application/json, text/plain, */*",
+                source: "web",
+              },
+              credentials: "include",
+              signal: controller.signal,
+            });
+            const json = await res.json().catch(() => null);
+            return { ok: res.ok, status: res.status, json };
+          } finally {
+            clearTimeout(timeoutId);
+          }
+        },
+        { path, timeoutMs },
       ));
     },
     async close() { await close(); },

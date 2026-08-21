@@ -30,6 +30,7 @@ import {
 import { getQwenBrowserProxy, resetQwenBrowserProxy } from "./browser-proxy.mjs";
 import { buildQwenCompletionPayload } from "./completion-payload.mjs";
 import { resolveQwenContextFileConfig, splitPromptForFileUpload, uploadQwenContextFile } from "./context-file.mjs";
+import { harvestQwenChatMessage } from "./harvest.mjs";
 import { waitForQwenCompletionSlot, createQwenPunishError, qwenAntibotCooldownRemainingMs } from "./request-pacing.mjs";
 import { createFileLogger } from "../../logging/logger.mjs";
 
@@ -511,6 +512,30 @@ export class QwenChatClient {
           if (result.punish) {
             throw createQwenPunishError(qwenAntibotCooldownRemainingMs());
           }
+
+          // Стрим оборвался без терминального маркера (текст шёл, потом
+          // тишина/abort). Порядок восстановления (см. HAR 2026-08-21):
+          //   1. RESUME: пустой POST ?response_id=... — сервер продолжает
+          //      тот же SSE-ответ, sibling-ветки не плодятся.
+          //   2. HARVEST: GET истории чата — сервер часто уже сохранил
+          //      готовый ответ; забираем его без единого ретрая.
+          // Слепой re-POST полного body ЗАПРЕЩЁН: он создавал "2/2", "3/4"
+          // ретраи в веб-морде и дублированный текст у пользователя.
+          let parsed = useLiveStream
+            ? streamParser.finish(result.text)
+            : parseQwenResponseText(result.text, result.contentType, onText);
+
+          if (useLiveStream && parsed?.truncated && parsed?.responseId) {
+            const recoveredStream = await this.#recoverTruncatedStream({
+              chatId,
+              truncated: parsed,
+              streamParser,
+              onText,
+              onThinking,
+            });
+            if (recoveredStream) parsed = recoveredStream;
+          }
+
           providerLogger.info("provider.qwen.response", {
             operation: "completion",
             transport: "browser",
@@ -518,6 +543,9 @@ export class QwenChatClient {
             statusCode: result.status,
             contentType: result.contentType,
             responseBytes: result.text?.length || 0,
+            streamTruncated: Boolean(parsed?.truncated),
+            streamResumed: Boolean(parsed?.resumed),
+            harvested: Boolean(parsed?.harvested),
           });
 
           if (this.debug) {
@@ -531,13 +559,12 @@ export class QwenChatClient {
             } catch {}
           }
 
-          if (!result.ok) {
+          // result.ok=false (status 0 / HTTP-ошибка): бросаем ТОЛЬКО если
+          // recovery (resume/harvest) не собрал текст. Если обрыв стрима
+          // был восстановлен — работаем с parsed дальше как с успехом.
+          if (!result.ok && !parsed?.text && !parsed?.thinkingText) {
             throwIfQwenAuthFailure(result.status, result.text, "completion (browser)");
           }
-
-          const parsed = useLiveStream
-            ? streamParser.finish(result.text)
-            : parseQwenResponseText(result.text, result.contentType, onText);
 
           if (isQwenInvalidParentError(parsed, result.text)) {
             return { result: null, chatInProgressStuck: false, invalidParentStuck: true };
@@ -619,6 +646,22 @@ export class QwenChatClient {
 
     const directFinalized = finalizeQwenCompletionResult(parsed, directText, "completion (direct)");
     return { result: directFinalized, chatInProgressStuck: false };
+  }
+
+  // Восстановление оборванного SSE-стрима: сначала resume-POST по
+  // response_id (сервер продолжает тот же ответ), затем harvest из
+  // истории чата (сервер уже сохранил готовый ответ).
+  // Возвращает новый parsed-результат или null (восстановить не удалось —
+  // вызывающий код работает с частичным текстом как раньше).
+  async #recoverTruncatedStream({ chatId, truncated, onText, onThinking }) {
+    return recoverTruncatedQwenStream({
+      chatId,
+      truncated,
+      onText,
+      onThinking,
+      getProxy: () => getQwenBrowserProxy({ debug: this.debug }),
+      debug: this.debug,
+    });
   }
 }
 
@@ -770,13 +813,25 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
   let thinkingBuf = "";
   let lastMessageId = null;
   let error = null;
+  // Жизненный цикл стрима: нужен, чтобы отличить честное окончание
+  // ([DONE] / delta.status=finished / finish_reason) от обрыва посреди
+  // генерации — обрыв восстанавливается resume-POST по response_id.
+  let streamFinished = false;
+  let streamResponseId = "";
   const responseSelector = createQwenResponseSelector();
 
   function consumeEvent(raw) {
     const ev = parseSseEvent(raw);
-    if (!ev.data || ev.data === "[DONE]") return;
+    if (!ev.data) return;
+    if (ev.data === "[DONE]") {
+      streamFinished = true;
+      return;
+    }
     let parsed;
     try { parsed = JSON.parse(ev.data); } catch { return; }
+    const rid = qwenStreamResponseIdOf(parsed);
+    if (rid) streamResponseId = rid;
+    if (qwenStreamHasTerminalMarker(parsed)) streamFinished = true;
     if (!responseSelector.accept(parsed)) return;
     const errMsg = formatQwenStreamError(parsed);
     if (errMsg) {
@@ -811,16 +866,218 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
     },
     finish(rawFallback = "") {
       if (buffer.trim()) consumeEvent(buffer);
+      // Обрыв посреди генерации: контент шёл, но терминального маркера не
+      // было. Отдаём частичный текст + флаги, чтобы вызывающий слой мог
+      // переподключиться по response_id (см. createQwenStreamContinuation).
+      const truncated = !streamFinished && (fullText.length > 0 || thinkingBuf.length > 0);
       if (error) {
-        return { text: error, lastMessageId, thinkingText: thinkingBuf, error };
+        return { text: error, lastMessageId, thinkingText: thinkingBuf, error, streamFinished, truncated, responseId: streamResponseId, contentReceived: false };
       }
       if (!fullText && !thinkingBuf) {
         const fallback = emptyQwenParseFallback(rawFallback, rawFallback, 0);
-        return { ...fallback, error: null };
+        // contentReceived=false: это диагностическое сообщение, а НЕ реальный
+        // контент стрима. Resume-конвейер не должен принимать его за успех.
+        return { ...fallback, error: null, streamFinished, truncated: false, responseId: streamResponseId, contentReceived: false };
       }
-      return { text: fullText, lastMessageId, thinkingText: thinkingBuf, error: null };
+      return { text: fullText, lastMessageId, thinkingText: thinkingBuf, error: null, streamFinished, truncated, responseId: streamResponseId, contentReceived: true };
     },
   };
+}
+
+// response_id текущей генерации: приходит и в response.created, и в каждом
+// content-чанке. Нужен для resume-POST (?response_id=...) и для harvest.
+export function qwenStreamResponseIdOf(parsed) {
+  const created = parsed?.["response.created"];
+  if (created && typeof created === "object" && created.response_id != null) {
+    return String(created.response_id);
+  }
+  if (parsed?.response_id != null) return String(parsed.response_id);
+  return "";
+}
+
+// Терминальные маркеры SSE-стрима Qwen (любой из них = генерация завершена):
+//   • choices[0].finish_reason (OpenAI-совместимый маркер)
+//   • choices[0].delta.status === "finished" (собственный формат Qwen v2)
+// [DONE] обрабатывается отдельно в consumeEvent.
+export function qwenStreamHasTerminalMarker(parsed) {
+  const choice = Array.isArray(parsed?.choices) ? parsed.choices[0] : null;
+  if (!choice) return false;
+  if (choice.finish_reason) return true;
+  const status = choice?.delta?.status;
+  return status === "finished" || status === "completed";
+}
+
+// Состояние сессии продолжения оборванного стрима. Морда шлёт ПУСТОЙ POST
+// /api/v2/chat/completions?chat_id=<id>&response_id=<rid> и сервер продолжает
+// тот же SSE-ответ — без создания sibling-ветки в дереве сообщений (слепой
+// re-POST полного body порождает "2/2", "3/4" ретраи в веб-интерфейсе).
+export function createQwenStreamContinuation({ chatId, responseId } = {}) {
+  const rid = String(responseId || "");
+  const maxResumes = Math.max(0, Number(process.env.QWEN_RESUME_MAX_ATTEMPTS ?? 2));
+  let resumesUsed = 0;
+
+  return {
+    resumeUrl() {
+      return `${QWEN_BASE_URL}/api/v2/chat/completions?chat_id=${encodeURIComponent(String(chatId || ""))}&response_id=${encodeURIComponent(rid)}`;
+    },
+    // Морда шлёт пустое тело; заголовки (bx-*, source: web, x-request-id)
+    // проставляет browser-proxy как для обычного completion-запроса.
+    resumeBody() {
+      return "{}";
+    },
+    shouldResume({ truncated, streamFinished: finished } = {}) {
+      if (!rid) return false;
+      if (finished) return false;
+      if (!truncated) return false;
+      return resumesUsed < maxResumes;
+    },
+    markResumeAttempt() {
+      resumesUsed += 1;
+    },
+    remainingResumes() {
+      return Math.max(0, maxResumes - resumesUsed);
+    },
+    retryDelayMs() {
+      return Number(process.env.QWEN_RESUME_RETRY_DELAY_MS || 1500);
+    },
+    get responseId() {
+      return rid;
+    },
+  };
+}
+
+// Полный конвейер восстановления оборванного стрима. Прокси и паузы
+// инжектируются (getProxy / retryDelayMs) — тестируется без браузера.
+export async function recoverTruncatedQwenStream({
+  chatId,
+  truncated,
+  onText = null,
+  onThinking = null,
+  getProxy,
+  debug = false,
+}) {
+  const continuation = createQwenStreamContinuation({
+    chatId,
+    responseId: truncated?.responseId,
+  });
+
+  // --- Этап 1: RESUME (пустой POST ?response_id=...) ---
+  while (continuation.shouldResume({ truncated: true, streamFinished: false })) {
+    continuation.markResumeAttempt();
+    try {
+      const proxy = await getProxy();
+      if (debug) console.log(`[qwen] stream truncated mid-generation; resuming response_id=${truncated.responseId} (remaining ${continuation.remainingResumes()})…`);
+      providerLogger.warn("provider.qwen.stream_resume", {
+        operation: "resume",
+        chatId,
+        responseId: truncated.responseId,
+        remaining: continuation.remainingResumes(),
+      });
+      const resumeParser = createQwenIncrementalParser({ onText, onThinking });
+      const resumeResult = await proxy.proxyFetchStream({
+        url: continuation.resumeUrl(),
+        body: continuation.resumeBody(),
+        chatId,
+        onRawChunk: (chunk) => resumeParser.push(chunk),
+        maxAttempts: 1,
+      });
+      const resumeParsed = resumeParser.finish(resumeResult.text || "");
+      const resumeGotContent = Boolean(resumeParsed.contentReceived);
+      if (resumeParsed.streamFinished || (resumeGotContent && !resumeParsed.truncated)) {
+        // Сервер продолжил стрим: склеиваем хвост с уже полученным текстом.
+        // Дельту уже отдал в onText сам resumeParser (живой стрим наверх).
+        // Диагностический текст от emptyQwenParseFallback (contentReceived=false)
+        // успехом НЕ считается — идём к harvest.
+        return {
+          ...(resumeGotContent ? resumeParsed : {}),
+          text: resumeGotContent ? truncated.text + (resumeParsed.text || "") : truncated.text,
+          thinkingText: (truncated.thinkingText || "") + (resumeGotContent ? resumeParsed.thinkingText || "" : ""),
+          resumed: true,
+          truncated: false,
+          streamFinished: resumeParsed.streamFinished || resumeGotContent,
+          responseId: truncated.responseId,
+        };
+      }
+      if (debug) console.log(`[qwen] resume attempt returned no continuation (${resumeResult.status}, bytes=${resumeResult.text?.length || 0})`);
+    } catch (error) {
+      providerLogger.warn("provider.qwen.stream_resume", {
+        operation: "resume_error",
+        chatId,
+        responseId: truncated.responseId,
+        error: error?.message || String(error),
+      });
+    }
+    await waitForQwenChat(continuation.retryDelayMs());
+  }
+
+  // --- Этап 2: HARVEST (GET истории чата) ---
+  try {
+    const proxy = await getProxy();
+    if (debug) console.log(`[qwen] resume exhausted; harvesting saved response ${truncated.responseId} from chat history…`);
+    providerLogger.warn("provider.qwen.stream_resume", { operation: "harvest", chatId, responseId: truncated.responseId });
+    const harvested = await harvestQwenChatMessage({
+      chatId,
+      responseId: truncated.responseId,
+      fetcher: async ({ cursor }) => proxy.proxyApiGet({
+        path: cursor
+          ? `/api/v2/chats/${encodeURIComponent(chatId)}?cursor=${encodeURIComponent(cursor)}&direction=down&limit=10`
+          : `/api/v2/chats/${encodeURIComponent(chatId)}?direction=up&limit=10`,
+      }),
+    });
+    if (harvested.found && harvested.text) {
+      // В streaming-режиме дельты уже ушли только до места обрыва —
+      // до streamed-текста. Чтобы клиент получил хвост, вычисляем суффикс
+      // сохранённого ответа и отдаём его через onText. Если сервер
+      // переписал начало (общий префикс короткий) — не стримим ничего:
+      // дублировать весь текст хуже, чем оставить честный обрыв.
+      streamHarvestTail({
+        harvestedText: harvested.text,
+        streamedText: String(truncated.text || ""),
+        onText,
+      });
+      return {
+        text: harvested.text,
+        lastMessageId: harvested.messageId,
+        thinkingText: truncated.thinkingText || "",
+        error: null,
+        streamFinished: true,
+        truncated: false,
+        responseId: truncated.responseId,
+        harvested: true,
+      };
+    }
+    if (debug) console.log(`[qwen] harvest not found (${harvested.reason})`);
+  } catch (error) {
+    providerLogger.warn("provider.qwen.stream_resume", {
+      operation: "harvest_error",
+      chatId,
+      responseId: truncated.responseId,
+      error: error?.message || String(error),
+    });
+  }
+
+  return null;
+}
+
+// Отдаёт через onText недостающий хвост harvest-текста (то, что сервер
+// сгенерировал ПОСЛЕ обрыва стрима). Если streamed-текст не является
+// префиксом сохранённого (сервер переписал начало) — хвост не стримим:
+// дублирование хуже честного обрыва.
+export function streamHarvestTail({ harvestedText, streamedText, onText }) {
+  if (typeof onText !== "function") return;
+  const saved = String(harvestedText || "");
+  const streamed = String(streamedText || "");
+  if (!saved) return;
+  if (streamed && saved.startsWith(streamed)) {
+    const tail = saved.slice(streamed.length);
+    if (tail) onText(tail);
+    return;
+  }
+  // Нет общего префикса (или streamed пуст и это не-стрим вызов) —
+  // отдаём сохранённый текст целиком, только если наверх ничего не ушло.
+  if (!streamed) {
+    onText(saved);
+  }
 }
 
 function findQwenErrorInSseText(text) {
