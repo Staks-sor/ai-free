@@ -9,6 +9,7 @@ export function buildQwenCompletionPayload({
   model,
   thinking = false,
   search = false,
+  files = null,
 } = {}) {
   const fid = randomUUID();
   const assistantFid = randomUUID();
@@ -31,7 +32,7 @@ export function buildQwenCompletionPayload({
         role: "user",
         content: String(prompt || ""),
         user_action: "chat",
-        files: [],
+        files: Array.isArray(files) && files.length ? files : [],
         timestamp,
         models: [model],
         chat_type: "t2t",
