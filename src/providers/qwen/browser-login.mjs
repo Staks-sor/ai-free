@@ -19,6 +19,7 @@
 // - Сложного авто-заполнения формы (не делаем до сбора фидбэка)
 
 import fs from "node:fs";
+import path from "node:path";
 import { launchPersistentDeepSeekContext } from "../../browser/launch.mjs";
 import {
   QWEN_AUTH_FILE,
@@ -122,14 +123,78 @@ export async function importQwenFromJson(jsonPath, authFile = QWEN_AUTH_FILE) {
   return { token: tokenCookie.value, userId, cookies: normalized };
 }
 
+// Полный сброс Chromium-профиля перед логин-окном (инцидент 2026-09-29:
+// в профиле жила старая сессия refresh_token → JWT детектился мгновенно,
+// окно схлопывалось, в пул летел СТАРЫЙ аккаунт вместо нового). Каждый
+// логин должен начинаться с чистой разлогиненной сессии.
+// БЕЗОПАСНОСТЬ: удаляем только если каталог похож на Chromium-профиль
+// (есть "Default"/ subdir и/или "Local State"), иначе отказ.
+export function wipeBrowserProfileDir(profileDir) {
+  try {
+    if (!profileDir || typeof profileDir !== "string") return { wiped: false, reason: "empty path" };
+    if (!fs.existsSync(profileDir)) return { wiped: false, reason: "not exists" };
+    const entries = fs.readdirSync(profileDir);
+    if (entries.length === 0) return { wiped: false, reason: "already empty" };
+    const looksLikeChromium = entries.includes("Local State") || entries.includes("Default");
+    if (!looksLikeChromium) return { wiped: false, reason: "not a chromium profile" };
+    fs.rmSync(profileDir, { recursive: true, force: true });
+    return { wiped: true };
+  } catch (error) {
+    return { wiped: false, reason: error.message };
+  }
+}
+
 // Главный entry-point для `npm run login-qwen` и in-app re-login.
-export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession = false } = {}) {
-  const profileDir = QWEN_BROWSER_PROFILE;
+// options.profileDir — собственный persistent-профиль аккаунта (мультиаккаунт);
+// без него используется дефолтный QWEN_BROWSER_PROFILE.
+export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession = false, profileDir = null, headless = false, onLoginWindowOpen = null } = {}) {
+  const effectiveProfileDir = profileDir || QWEN_BROWSER_PROFILE;
   const previousToken = clearSession ? (readQwenAuth(authFile)?.token || "") : "";
+  // Полный сброс профиля: логин-окно ВСЕГДА стартует с чистой разлогиненной
+  // сессии. Иначе старый refresh_token в профиле даёт мгновенный JWT-детект,
+  // окно схлопывается, в пул летит предыдущий аккаунт (инцидент 2026-09-29).
+  // Для дефолтного профиля «первый логин» — то же самое: чистый старт.
+  const wipe = wipeBrowserProfileDir(effectiveProfileDir);
+  if (wipe.wiped) console.log(`🧹 Профиль сброшен (${path.basename(effectiveProfileDir)}) — чистая сессия для нового логина.`);
+  else if (wipe.reason && wipe.reason !== "not exists" && wipe.reason !== "already empty") {
+    console.warn(`⚠️ Профиль не сброшен: ${wipe.reason}`);
+  }
   const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
   const chromium = await getChatGPTChromium();
   // Переиспользуем launch-функцию от DeepSeek — она запускает реальный Chrome.
-  const context = await launchPersistentDeepSeekContext(chromium, profileDir, false);
+  // headless=true — для автологина (QWEN_AUTOLOGIN_HEADLESS=0 — показать окно).
+  const context = await launchPersistentDeepSeekContext(chromium, effectiveProfileDir, headless);
+
+  // F12-Network жучок логин-браузера: от старта окна до JWT-токена.
+  // QWEN_TELEMETRY=1 или QWEN_LOGIN_TELEMETRY=1. Полный след: все
+  // запросы/ответы, навигации (вход/OAuth/punish), антибот, плашка лимита.
+  const { shouldCaptureLoginTelemetry, createTelemetryRecorder } = await import("./telemetry-recorder.mjs");
+  const loginTelemetry = shouldCaptureLoginTelemetry()
+    ? createTelemetryRecorder({
+        root: process.env.QWEN_TELEMETRY_DIR || "telemetry",
+        label: `login-${path.basename(effectiveProfileDir)}`,
+      })
+    : null;
+  if (loginTelemetry) {
+    console.warn(`[qwen-login] telemetry ON (full capture) -> ${loginTelemetry.dir}`);
+    loginTelemetry.attachToContext(context, { capture: "full" });
+    loginTelemetry.record("login_window_opened", { profile: path.basename(effectiveProfileDir) });
+  }
+  try {
+  return await loginQwenAndSaveInner(context, authFile, {
+    clearSession,
+    profileDir: effectiveProfileDir,
+    previousToken,
+    loginTelemetry,
+    onLoginWindowOpen,
+  });
+  } finally {
+    loginTelemetry?.record("login_window_closed", {});
+    await loginTelemetry?.close().catch?.(() => {});
+  }
+}
+
+async function loginQwenAndSaveInner(context, authFile, { clearSession, profileDir, previousToken, loginTelemetry, onLoginWindowOpen = null }) {
 
   // Стелс-меры против антибота Alibaba. Маскируем самые палевные follow-up
   // признаки автоматизации — navigator.webdriver, plugins, permissions API.
@@ -157,9 +222,20 @@ export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession
   });
 
   const page = context.pages()[0] || (await context.newPage());
+  loginTelemetry?.attachToPage(page, "login", { capture: "full" });
+
+  // Снимок куков ДО логина: видно, какие записи остались от прошлой сессии
+  try {
+    const cookiesBefore = await context.cookies(QWEN_BASE_URL);
+    loginTelemetry?.record("cookies_snapshot", {
+      phase: "before_login",
+      names: cookiesBefore.map((c) => c.name),
+    });
+  } catch {}
 
   if (clearSession) {
     console.log("🔒 Сбрасываю старую сессию Qwen в профиле — нужен новый вход.");
+    loginTelemetry?.record("session_cleared", {});
     await context.clearCookies();
     await page.evaluate(() => {
       try { localStorage.removeItem("token"); } catch {}
@@ -179,14 +255,41 @@ export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession
 
   let captured;
   try {
-    captured = await waitForQwenToken(context, { previousToken });
+    // Автологин: скрипт логина крутится ПАРАЛЛЕЛЬНО с ожиданием JWT —
+    // waitForQwenToken ловит токен в момент, когда SPA его положит.
+    // Скрипт упал раньше токена → fail fast с его ошибкой (без 15-мин ожидания).
+    const waitPromise = waitForQwenToken(context, { previousToken, page });
+    if (typeof onLoginWindowOpen === "function") {
+      const scriptPromise = onLoginWindowOpen(page);
+      captured = await new Promise((resolve, reject) => {
+        waitPromise.then(resolve, reject);
+        scriptPromise.catch(reject);
+      });
+    } else {
+      captured = await waitPromise;
+    }
   } catch (error) {
     await context.close().catch(() => {});
     throw error;
   }
+  // JWT пойман — финальный снапшот куков имена+домены (значения секретны)
+  loginTelemetry?.record("login_success", {
+    userId: captured.userId,
+    cookieNames: captured.cookies.map((c) => c.name),
+  });
 
   await page.evaluate((token) => {
-    try { localStorage.setItem("token", token); } catch {}
+    // cookie_gate v2 (2026-09-30): пишем в оба ключа — новый для SPA,
+    // старый как fallback-хранилище для нашего же чтения.
+    try {
+      localStorage.setItem("token", token);
+      var raw = localStorage.getItem("qwen_access_token_state");
+      var st = null;
+      try { st = raw ? JSON.parse(raw) : null; } catch (e) {}
+      if (!st || typeof st !== "object") st = { version: 1 };
+      st.token = token;
+      localStorage.setItem("qwen_access_token_state", JSON.stringify(st));
+    } catch {}
   }, captured.token);
 
   writeQwenAuth(authFile, {
@@ -208,11 +311,30 @@ export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession
   };
 }
 
-// Ждём, пока в cookies появится валидный JWT в `token`.
-// previousToken — при re-login не принимаем тот же JWT, что был до сброса сессии.
+// Детект JWT: Qwen 29.09 перестал гарантированно класть token в cookies —
+// после переделки на кредиты токен часто живёт ТОЛЬКО в localStorage.
+// Инцидент 2026-09-29: юзер залогинился и общался в окне, а детект крутил
+// куки → 300s timeout → context.close() убил браузер прямо в переписке.
+export function findQwenJwt({ cookies, storageToken, previousToken = "" } = {}) {
+  const isJwt = (v) => /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(String(v || ""));
+  const cookieToken = cookies?.find((c) => c.name === QWEN_TOKEN_COOKIE_NAME)?.value || "";
+  const byCookie = isJwt(cookieToken) ? cookieToken : "";
+  const byStorage = isJwt(storageToken) ? storageToken : "";
+  const token = byStorage || byCookie;
+  if (!token) return null;
+  if (previousToken && token === previousToken) return null;
+  const userId =
+    cookies?.find((c) => c.name === "cnaui")?.value ||
+    cookies?.find((c) => c.name === "aui")?.value ||
+    "";
+  return { token, source: byStorage ? "localStorage" : "cookies", userId };
+}
+
+// Ждём появления валидного JWT в куках ИЛИ localStorage.
+// previousToken — при re-login не принимаем тот же JWT, что был до сброса.
 async function waitForQwenToken(
   context,
-  { timeoutMs = 5 * 60 * 1000, intervalMs = 1000, previousToken = "" } = {},
+  { timeoutMs = 15 * 60 * 1000, intervalMs = 1000, previousToken = "", page = null, onProgress = null } = {},
 ) {
   const startedAt = Date.now();
   let lastSeen = "";
@@ -225,63 +347,143 @@ async function waitForQwenToken(
       throw new Error("Qwen login window was closed before authentication completed.");
     }
 
-    const tokenCookie = cookies.find((c) => c.name === QWEN_TOKEN_COOKIE_NAME);
-    const allRequired = QWEN_REQUIRED_COOKIES.every((n) => cookies.some((c) => c.name === n));
-    const token = tokenCookie?.value || "";
-    const looksLikeJwt = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
+    // токен может жить в localStorage (инцидент 2026-09-29)
+    let storageToken = null;
+    try {
+      storageToken = await page.evaluate(() => {
+        try { return (function(){var r=null;try{r=localStorage.getItem("qwen_access_token_state")}catch(e){}if(r){try{var p=JSON.parse(r);if(p&&typeof p.token==="string"&&p.token)return p.token}catch(e){}}try{return localStorage.getItem("token")||null}catch(e){return null}})() || null; } catch { return null; }
+      });
+    } catch {}
 
-    if (allRequired && looksLikeJwt) {
-      if (previousToken && token === previousToken) {
-        if (!staleTokenLogged) {
-          staleTokenLogged = true;
-          console.log("[qwen-login] Старый JWT ещё в профиле — заверши вход заново в окне браузера…");
-        }
-      } else {
-        const userId = cookies.find((c) => c.name === "cnaui")?.value
-          || cookies.find((c) => c.name === "aui")?.value
-          || "";
-        return { cookies, token, userId };
-      }
+    const found = findQwenJwt({ cookies, storageToken, previousToken });
+    if (found) return { cookies, token: found.token, userId: found.userId, source: found.source };
+
+    if (storageToken && storageToken !== lastSeen) {
+      lastSeen = storageToken;
+      console.log(`[qwen-login] token in localStorage (${storageToken.length} chars) — checking format...`);
     }
 
-    if (token && token !== lastSeen) {
-      lastSeen = token;
-      console.log(`[qwen-login] token cookie found (${token.length} chars) — checking format...`);
+    if (onProgress) {
+      try { onProgress({ elapsedMs: Date.now() - startedAt, timeoutMs }); } catch {}
     }
 
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   throw new Error(
-    `Qwen login timeout (${Math.round(timeoutMs / 1000)}s). Не дождались валидного JWT в куках. Попробуй снова.`,
+    `Qwen login timeout (${Math.round(timeoutMs / 1000)}s). Не дождались валидного JWT в куках/localStorage. Попробуй снова.`,
   );
 }
 
 // Считать JWT и куки из уже открытого контекста (после goto на chat.qwen.ai).
-async function captureQwenAuthFromContext(context, authFile, profileDir) {
+// 2026-09-29: токен живёт в localStorage (1-часовой access-JWT), куки token
+// больше нет. Ждём пока SPA сам сделает refresh (его fetch идёт с правильным
+// фингерпринтом) и положит свежий JWT в localStorage — обычно 2-6 секунд.
+async function captureQwenAuthFromContext(context, authFile, profileDir, { waitMs = 20_000, page = null } = {}) {
   const cookies = await context.cookies(QWEN_BASE_URL);
-  const tokenCookie = cookies.find((c) => c.name === QWEN_TOKEN_COOKIE_NAME);
-  const token = tokenCookie?.value || "";
-  const looksLikeJwt = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
-
-  if (!looksLikeJwt) {
-    throw new Error(
-      "В профиле Qwen нет валидного JWT (cookie token). Залогинься: npm run login-qwen",
-    );
+  const startedAt = Date.now();
+  let storageToken = null;
+  while (Date.now() - startedAt < waitMs) {
+    try {
+      storageToken = await page.evaluate(() => {
+        try { return (function(){var r=null;try{r=localStorage.getItem("qwen_access_token_state")}catch(e){}if(r){try{var p=JSON.parse(r);if(p&&typeof p.token==="string"&&p.token)return p.token}catch(e){}}try{return localStorage.getItem("token")||null}catch(e){return null}})() || null; } catch { return null; }
+      });
+    } catch {}
+    const found = findQwenJwt({ cookies, storageToken });
+    if (found) {
+      writeQwenAuth(authFile, { cookies, token: found.token, userId: found.userId, profileDir });
+      return {
+        token: found.token,
+        userId: found.userId,
+        cookieHeader: qwenCookieHeaderFromArray(cookies),
+        cookies,
+        source: authFile,
+      };
+    }
+    await new Promise((r) => setTimeout(r, 500));
   }
-
-  const userId =
-    cookies.find((c) => c.name === "cnaui")?.value ||
-    cookies.find((c) => c.name === "aui")?.value ||
-    "";
-
-  writeQwenAuth(authFile, { cookies, token, userId, profileDir });
-  return {
-    token,
-    userId,
-    cookieHeader: qwenCookieHeaderFromArray(cookies),
-    cookies,
-    source: authFile,
-  };
+  throw new Error(
+    "Не дождались JWT после загрузки chat.qwen.ai (SPA не сделал refresh за " +
+      Math.round(waitMs / 1000) + "s). Возможно, сессия профиля умерла — нужен логин: npm run login-qwen",
+  );
+}
+// Тихий refresh для pool-аккаунта. ПРИОРИТЕТ 1 (2026-09-29, инцидент с убитыми
+// профилями): через УЖЕ ОТКРЫТЫЙ browser-proxy этого аккаунта — reloadForAuth()
+// перезагружает page0, SPA сам делает auth.qwen.ai/api/v2/auths/refresh и
+// кладёт свежий JWT в localStorage. Второй Chromium на том же профиле НЕ
+// открываем: прокси уже держит профиль, дубль перезаписывает cookie-базу
+// (last-writer-wins сносит refresh_token — так умерли 5 профилей 29.09).
+// ПРИОРИТЕТ 2 (fallback): отдельный headless Chromium, только если прокси
+// этого аккаунта не запущен.
+export async function refreshQwenAccountAuthFromProfile(accountId) {
+  // 1) Живой прокси уже открыл профиль — просим его перезагрузиться и
+  //    ДОЖДАТЬСЯ свежий JWT (см. reloadForAuth: ждёт exp > previous + 30s).
+  //    Инцидент 2026-09-30: при таймауте 12s fallback уходил в ветку 2 и
+  //    открывал ВТОРОЙ Chromium на живом профиле (убийца cookie-баз из
+  //    29.09). Теперь ветка 1 живёт дольше (25s) и падает честной ошибкой,
+  //    если SPA так и не обновился.
+  try {
+    const proxyModule = await import("./browser-proxy.mjs");
+    const { getAccountAnyStatus } = await import("./account-store.mjs");
+    const account = getAccountAnyStatus(accountId);
+    const proxy = await proxyModule.getQwenBrowserProxy({ accountId }).catch(() => null);
+    if (proxy?.reloadForAuth) {
+      const token = await proxy.reloadForAuth({ previousToken: account?.token || null, waitMs: 25_000 });
+      const { qwenJwtExp } = await import("./browser-proxy.mjs");
+      if (token && qwenJwtExp(token) > Date.now() / 1000 + 30) {
+        const { updateAccountFromProfile } = await import("./account-store.mjs");
+        const { slotSyncPayload } = await import("./browser-proxy.mjs");
+        // атомарно: токен + свежие куки прокси-контекста (полусвежий слот — бомба)
+        let cookies = [];
+        if (proxy.exportSessionSnapshot) {
+          const snap = await proxy.exportSessionSnapshot().catch(() => null);
+          if (snap?.token) cookies = snap.cookies || [];
+        }
+        updateAccountFromProfile(accountId, slotSyncPayload({ snapshot: { token, cookies }, token }));
+        return { token, cookies, userId: "" };
+      }
+      // Прокси жив, но SPA не обновился — НЕ открываем второй браузер на
+      // живом профиле; отдаём ошибку ротации, аккаунт проверит health-check.
+      throw new Error("живой прокси не выдал свежий JWT за 25s — нужна проверка/ре-логин, второй Chromium не открываем");
+    }
+  } catch (err) {
+    if (String(err?.message || '').includes('не выдал свежий JWT')) throw err;
+  }
+  // 2) Прокси нет — открываем профиль сами (одиночный случай: CLI/меню).
+  const { getAccountAnyStatus, updateAccountFromProfile, getAccountProfileDir } = await import("./account-store.mjs");
+  const account = getAccountAnyStatus(accountId);
+  if (!account) throw new Error(`account not found: ${accountId}`);
+  const profileDir = account.profileDir || getAccountProfileDir(accountId);
+  if (!fs.existsSync(profileDir)) {
+    throw new Error(`profile not found: ${profileDir}`);
+  }
+  const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
+  const chromium = await getChatGPTChromium();
+  const context = await launchPersistentDeepSeekContext(chromium, profileDir, true);
+  try {
+    const page = context.pages()[0] || (await context.newPage());
+    await page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    const startedAt = Date.now();
+    const { qwenJwtExp } = await import("./browser-proxy.mjs");
+    while (Date.now() - startedAt < 20_000) {
+      const cookies = await context.cookies(QWEN_BASE_URL);
+      let storageToken = null;
+      try {
+        storageToken = await page.evaluate(() => {
+          try { return (function(){var r=null;try{r=localStorage.getItem("qwen_access_token_state")}catch(e){}if(r){try{var p=JSON.parse(r);if(p&&typeof p.token==="string"&&p.token)return p.token}catch(e){}}try{return localStorage.getItem("token")||null}catch(e){return null}})() || null; } catch { return null; }
+        });
+      } catch {}
+      const found = findQwenJwt({ cookies, storageToken, previousToken: account.token });
+      // Тот же анти-самообман: только токен живее 30s считается обновлением.
+      if (found && qwenJwtExp(found.token) > Date.now() / 1000 + 30) {
+        updateAccountFromProfile(accountId, { token: found.token, cookies });
+        return { token: found.token, cookies, userId: found.userId };
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    throw new Error("SPA не сделал refresh за 20s — сессия профиля умерла, нужен re-login");
+  } finally {
+    await context.close().catch(() => {});
+  }
 }
 
 // Тихий refresh: headless Chromium с тем же профилем, что при login-qwen.
@@ -306,7 +508,9 @@ export async function refreshQwenAuthFromProfile(authFile = QWEN_AUTH_FILE) {
     const page = context.pages()[0] || (await context.newPage());
     await page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForTimeout(2000);
-    return await captureQwenAuthFromContext(context, authFile, profileDir);
+    // SPA сам дёрнет auth.qwen.ai/api/v2/auths/refresh со своим фингерпринтом
+    // и положит свежий 1-часовой JWT в localStorage — ждём и забираем.
+    return await captureQwenAuthFromContext(context, authFile, profileDir, { page });
   } finally {
     await context.close().catch(() => {});
   }

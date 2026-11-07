@@ -22,3 +22,8 @@ api/README.md
 .kilo/
 package-lock.json
 !plugin-for-vscode/package-lock.json
+
+# Qwen telemetry dumps (local runtime data)
+telemetry/
+logins.txt
+qwen-fix(24).zip

@@ -6,9 +6,11 @@ import {
   captureRunningClarification,
   takeRunningClarifications,
   isChatGPTLoginRecoveryRequired,
+  listenLoopbackWithRetry,
   shouldAutoRunCodeTask,
 } from "../src/window-app/server.mjs";
 import { resolveConversationAgentTask } from "../src/window-app/agent-task.mjs";
+import http from "node:http";
 
 describe("shouldAutoRunCodeTask", () => {
   it("routes direct project work to the code agent", () => {
@@ -91,3 +93,64 @@ describe("running clarification capture", () => {
     assert.deepEqual(takeRunningClarifications(conversation), ["уточнение"]);
   });
 });
+
+describe("listenLoopbackWithRetry", () => {
+  const findFreePort = () => new Promise((resolve, reject) => {
+    const probe = http.createServer(() => {});
+    probe.listen(0, "127.0.0.1", () => {
+      const port = probe.address().port;
+      probe.close(() => resolve(port));
+    });
+    probe.once("error", reject);
+  });
+
+  it("binds immediately when the port is free", async () => {
+    const port = await findFreePort();
+    const server = http.createServer(() => {});
+    await listenLoopbackWithRetry(server, port);
+    assert.equal(server.address().port, port);
+    server.close();
+  });
+
+  it("waits out a shutting-down previous instance and then binds", async () => {
+    const port = await findFreePort();
+    const holder = http.createServer(() => {});
+    await new Promise((resolve) => holder.listen(port, "127.0.0.1", resolve));
+    // "Старый инстанс" освобождает порт через 300 мс (graceful shutdown).
+    setTimeout(() => holder.close(), 300);
+
+    const server = http.createServer(() => {});
+    const retries = [];
+    await listenLoopbackWithRetry(server, port, {
+      retries: 20,
+      delayMs: 50,
+      onRetry: (attempt) => retries.push(attempt),
+    });
+    assert.equal(server.address().port, port);
+    assert.ok(retries.length >= 1, "expected at least one retry while the port was held");
+    server.close();
+  });
+
+  it("rejects with EADDRINUSE after exhausting retries", async () => {
+    const port = await findFreePort();
+    const holder = http.createServer(() => {});
+    await new Promise((resolve) => holder.listen(port, "127.0.0.1", resolve));
+    const server = http.createServer(() => {});
+    await assert.rejects(
+      listenLoopbackWithRetry(server, port, { retries: 2, delayMs: 10 }),
+      (error) => error.code === "EADDRINUSE",
+    );
+    holder.close();
+    server.close();
+  });
+
+  it("does not retry non-EADDRINUSE errors", async () => {
+    const server = http.createServer(() => {});
+    // Невалидный порт — ошибка не EADDRINUSE, ретраев быть не должно.
+    await assert.rejects(
+      listenLoopbackWithRetry(server, -1, { retries: 3, delayMs: 10, onRetry: () => { throw new Error("must not retry"); } }),
+    );
+    server.close();
+  });
+});
+

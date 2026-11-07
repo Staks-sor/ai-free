@@ -1,4 +1,6 @@
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 // Прототип OpenAI-совместимого /v1/chat/completions.
 //
 // Поддерживает:
@@ -20,29 +22,170 @@ import fs from 'fs';
 // Это OpenAI-совместимое поведение — у них тоже stateless.
 
 import { findModel, modelsList } from "./models.mjs";
-import { readQwenAuth } from "../src/providers/qwen/auth-files.mjs";
+import { readQwenAuth, qwenCookieHeaderFromArray } from "../src/providers/qwen/auth-files.mjs";
 import { QWEN_AUTH_FILE } from "../src/providers/qwen/config.mjs";
 import { QwenChatClient } from "../src/providers/qwen/client.mjs";
 import { getQwenLiveCatalogOverride } from "../src/providers/qwen/model-sync.mjs";
 import { DEFAULT_AUTH_FILE } from "../src/config.mjs";
 import { readSavedAuth } from "../src/auth/files.mjs";
 import { DeepSeekChatClient } from "../src/providers/deepseek/client.mjs";
-import { extractBareToolCalls, formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls } from "./tool-calls.mjs";
+import { closingFenceIndex, extractBareToolCalls, formatCompactTools, normalizeToolCallsForSchemas, parseModelToolCalls, repairToolCallJson } from "./tool-calls.mjs";
+import { repairToolCallJsonWithLlm } from "./tool-call-llm-repair.mjs";
+import { createThinkTagFilter, createToolErrorChipFilter, stripThinkBlocks, stripToolErrorChips } from "./think-filter.mjs";
 import { readChatGPTAuth } from "../src/providers/chatgpt/auth-files.mjs";
+import { getAvailableAccount, hasAvailableAccounts, markAccountCooldown, markRateLimited, markInvalid, markQwenAuthFailure } from "../src/providers/qwen/account-store.mjs";
+import { startQwenPoolPunishCooldown } from "../src/providers/qwen/request-pacing.mjs";
+import { resolveAccountForUser } from "../src/providers/qwen/session-router.mjs";
 import { CHATGPT_AUTH_FILE } from "../src/providers/chatgpt/config.mjs";
 import { ChatGPTChatClient } from "../src/providers/chatgpt/client.mjs";
 import { createFileLogger } from "../src/logging/logger.mjs";
 import { runWithEmptyStreamRetry } from "./stream-retry.mjs";
 
+// parseModelToolCalls с предварительной зачисткой литеральных <think>-блоков:
+// деградировавший Qwen кладёт reasoning (с черновиками tool-call JSON)
+// прямо в текстовый канал — без зачистки детектор выдёргивает черновики
+// как реальные вызовы ("Tool X does not exists" каскад).
+export function parseModelToolCallsSafe(text) {
+  return parseModelToolCalls(stripToolErrorChips(stripThinkBlocks(text)));
+}
+
 const compatLogger = createFileLogger({ component: "openai-handler" });
 
+// Тройной бэктик для вставки в template literals без raw-экранирования.
+const F = "\u0060\u0060\u0060";
+
 // Ленивый singleton Qwen-клиента — переиспользуем через все вызовы API.
-let qwenClient = null;
+const qwenClients = new Map(); // accountId -> client
 // Ленивый singleton DeepSeek-клиента — переиспользуем через все вызовы API.
 let deepseekClient = null;
-async function getQwenClient({ allowRefresh = true } = {}) {
-  if (qwenClient) return qwenClient;
+function isQwenAuthErrorByMessage(error) {
+  return /unauthorized|not.?logged|login required|token.?expired|session.?expired|invalid.?token|sign.?in/i.test(String(error?.message || ""));
+}
+
+function isQwenRateLimitError(error) {
+  const msg = String(error?.message || "");
+  return /rate.?limit|too many requests|429|quota|daily.?limit|free.?tier|guest.?chat.?limit|reached.?the.?(guest|daily|free)|out.?of.?limit|Вы достигли (дневного )?лимита|достигли лимита/i.test(msg);
+}
+
+// Часы cooldown из тела ошибки провайдера (FreeQwenAPI: errorBody.num).
+function qwenRateLimitHours(error) {
+  const inline = String(error?.message || "").match(/"num"\s*:\s*(\d+(?:\.\d+)?)/);
+  if (inline) {
+    const n = Number(inline[1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 24;
+}
+
+// Единая точка маркировки pool-аккаунта по ошибке апстрима (стрим и non-stream).
+// Ошибки, при которых имеет смысл попробовать ДРУГОЙ аккаунт сразу:
+// auth-сбой и rate-limit. Сетевые/антибот — не переключаем (серверная сторона).
+function isAccountSwitchEligibleError(error) {
+  if (isQwenAuthErrorByMessage(error)) return true;
+  if (isQwenRateLimitError(error)) return true;
+  // Baxia punish карает профиль аккаунта (per-account кулдаун) — запрос
+  // переносим на другой аккаунт пула, а не валим наружу (2026-09-15).
+  if (error?.code === "QWEN_ANTIBOT_PUNISH") return true;
+  const msg = String(error?.message || "");
+  if (/empty.?upstream.?stream|no response content before timeout/i.test(msg)) return true;
+  return false;
+}
+
+function markQwenAccountOnUpstreamError(accountId, error) {
+  if (!accountId || accountId === 'default') return;
+  try {
+    if (isQwenAuthErrorByMessage(error)) {
+      // 401 при живом JWT = риск-флаг провайдера (RGV587-класс): кулдаун
+      // вместо invalid, аккаунт вернётся сам. Просроченный JWT -> invalid.
+      markQwenAuthFailure(accountId, { cooldownMs: 6 * 3600 * 1000 });
+      return;
+    }
+    if (isQwenRateLimitError(error)) {
+      markRateLimited(accountId, qwenRateLimitHours(error));
+      return;
+    }
+    if (error?.code === "QWEN_ANTIBOT_PUNISH") {
+      markAccountCooldown(accountId, error.cooldownMs || 600_000);
+    }
+  } catch (e) {
+    // Маркировка — вспомогательная операция: сбой записи accounts.json
+    // не должен ломать отправку ошибки клиенту.
+    console.warn(`[API][qwen-account] failed to mark ${accountId}: ${e.message}`);
+  }
+}
+
+// Следующий доступный pool-аккаунт, исключая уже пробованные.
+// null — исчерпаны (или пул не используется).
+async function nextPoolAccountExcluding(triedIds) {
+  const { hasAvailableAccounts, getAvailableAccount } = await import("../src/providers/qwen/account-store.mjs");
+  if (!hasAvailableAccounts()) return null;
+  for (let i = 0; i < 32; i += 1) {
+    const acc = await getAvailableAccount();
+    if (!acc) return null;
+    if (!triedIds.has(acc.id)) return acc;
+  }
+  return null;
+}
+
+// Автологин умершего pool-аккаунта (logins.txt: `email password`).
+// Гейты: QWEN_AUTOLOGIN != 0; один прогон на аккаунт на процесс; пароль
+// найден. Headless по умолчанию (QWEN_AUTOLOGIN_HEADLESS=0 — окно видно).
+// Возвращает true при успехе; любая неудача — false (ротация продолжается).
+async function tryQwenAutoLogin(accountId, { reason = "" } = {}) {
+  if (process.env.QWEN_AUTOLOGIN === "0") return false;
+  try {
+    const { getAccountAnyStatus } = await import("../src/providers/qwen/account-store.mjs");
+    const { autoLoginQwenAccount } = await import("../src/providers/qwen/auto-login.mjs");
+    const account = getAccountAnyStatus(accountId);
+    if (!account) return false;
+    console.log(`🤖 [API][qwen-account] ${accountId}: пытаюсь автологин (${reason})`);
+    const headless = !/^(0|false|no|off)$/i.test(String(process.env.QWEN_AUTOLOGIN_HEADLESS ?? "1"));
+    await autoLoginQwenAccount(account, { headless });
+    console.log(`✅ [API][qwen-account] ${accountId}: автологин успешен — пул пополнен`);
+    return true;
+  } catch (err) {
+    console.warn(`⚠️ [API][qwen-account] ${accountId}: автологин не прошёл (${err?.message?.slice(0, 120)})`);
+    return false;
+  }
+}
+
+// Автологин ЛЮБОГО мёртвого слота с паролем — когда пул исчерпан на этапе
+// выбора аккаунта (последняя попытка до ухода на default и ручного окна).
+async function tryQwenAutoLoginAnyDeadAccount({ reason = "" } = {}) {
+  if (process.env.QWEN_AUTOLOGIN === "0") return false;
+  try {
+    const { loadAccounts } = await import("../src/providers/qwen/account-store.mjs");
+    const { resolveQwenAutoLogin, loadQwenLogins } = await import("../src/providers/qwen/auto-login.mjs");
+    const logins = loadQwenLogins();
+    if (!logins || !logins.size) return false;
+    // Сначала честно мёртвые (invalid), потом кулдаунные — invalid вернутся
+    // в ротацию сразу, кулдаунные только после сброса resetAt.
+    const all = loadAccounts();
+    const dead = all.filter((a) => a?.invalid);
+    const cooled = all.filter((a) => !a?.invalid);
+    for (const account of [...dead, ...cooled]) {
+      const plan = resolveQwenAutoLogin({ account, logins, enabled: true });
+      if (!plan || !plan.allowed) continue;
+      const ok = await tryQwenAutoLogin(account.id, { reason: `${reason} → ${account.id}` });
+      if (ok) return true;
+    }
+    return false;
+  } catch (err) {
+    console.warn(`⚠️ [API][qwen-account] автологин мёртвых слотов не прошёл: ${err?.message?.slice(0, 120)}`);
+    return false;
+  }
+}
+
+async function getQwenClientForAccount(accountId, { allowRefresh = true } = {}) {
+  if (!accountId) accountId = 'default';
+  if (qwenClients.has(accountId)) return qwenClients.get(accountId);
   let auth = readQwenAuth(QWEN_AUTH_FILE);
+  if (accountId !== 'default') {
+    const { getAccountById } = await import("../src/providers/qwen/account-store.mjs");
+    const acc = getAccountById(accountId);
+    if (!acc?.token) throw new Error(`Account ${accountId} not found or missing token`);
+    auth = { token: acc.token, cookieHeader: acc.cookieHeader };
+  }
   if (!auth?.token && allowRefresh) {
     const { getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
     auth = await getQwenAuthManager().refresh({ forceVisible: false });
@@ -52,12 +195,14 @@ async function getQwenClient({ allowRefresh = true } = {}) {
       "Qwen не подключён. Запусти: npm run login-qwen (или npm run welcome)",
     );
   }
-  qwenClient = new QwenChatClient({
+  const client = new QwenChatClient({
     token: auth.token,
     cookieHeader: auth.cookieHeader,
+    accountId,
     debug: Boolean(process.env.API_DEBUG),
   });
-  return qwenClient;
+  qwenClients.set(accountId, client);
+  return client;
 }
 
 async function getDeepSeekClient() {
@@ -132,6 +277,65 @@ export async function handleRequest(req, res) {
   res.end(JSON.stringify({ error: { message: "Not found", type: "not_found_error" } }));
 }
 
+// Единая точка выбора pool-аккаунта для запроса (экспортировано для тестов).
+// Пул непуст → обычный выбор (TG-привязка/round-robin). Пул пуст → попытка
+// автологина мёртвого слота с паролем; не вышло → 'default'.
+export async function pickQwenAccountForRequest({ headers = {} } = {}) {
+  if (!hasAvailableAccounts()) {
+    const rescued = await tryQwenAutoLoginAnyDeadAccount({ reason: "pool exhausted at request routing" });
+    if (!rescued) return "default";
+  }
+  const telegramUserId = headers['x-telegram-user-id'] || headers['x-chat-id'] || null;
+  if (telegramUserId) {
+    const acc = resolveAccountForUser(telegramUserId);
+    if (acc) return acc.id;
+  }
+  const acc = await getAvailableAccount();
+  return acc ? acc.id : "default";
+}
+
+// Фабрика refreshClient для стрим-пути pool-аккаунта. Инцидент 03.10:
+// маркировка ДО попытки refresh сжигала пул на естественных часовых exp.
+// Теперь: успешный silent refresh → БЕЗ наказания; провал → маркировка+throw.
+// Экспортировано для теста qwen-refresh-no-penalty.
+export function makeQwenAccountRefreshClient(qwenAccountId, { refreshFromProfile = null } = {}) {
+  return async (error) => {
+    const { isQwenAuthError } = await import("../src/providers/qwen/auth-manager.mjs");
+    if (!isQwenAuthError(error)) throw error;
+    qwenClients.delete(qwenAccountId);
+    if (qwenAccountId !== "default") {
+      try {
+        const refresher = refreshFromProfile
+          || (await import("../src/providers/qwen/browser-login.mjs")).refreshQwenAccountAuthFromProfile;
+        const fresh = await refresher(qwenAccountId);
+        const newClient = new QwenChatClient({
+          token: fresh.token,
+          cookieHeader: qwenCookieHeaderFromArray(fresh.cookies),
+          accountId: qwenAccountId,
+          debug: Boolean(process.env.API_DEBUG),
+        });
+        qwenClients.set(qwenAccountId, newClient);
+        console.log(`🔄 Qwen acc ${qwenAccountId}: JWT тихо обновлён из профиля (1h access-token era).`);
+        return newClient;
+      } catch (refreshError) {
+        console.warn(`[API][qwen-account] silent refresh failed (${refreshError.message}) — ротация на следующий`);
+        markQwenAccountOnUpstreamError(qwenAccountId, error);
+        throw error;
+      }
+    }
+    const { getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
+    const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
+    const newClient = new QwenChatClient({
+      token: fresh.token,
+      cookieHeader: fresh.cookieHeader,
+      accountId: qwenAccountId,
+      debug: Boolean(process.env.API_DEBUG),
+    });
+    qwenClients.set(qwenAccountId, newClient);
+    return newClient;
+  };
+}
+
 async function handleChatCompletions(req, res) {
   let body;
   try {
@@ -149,16 +353,19 @@ async function handleChatCompletions(req, res) {
   if (req.openAICompatProvider === "qwen") {
     const liveQwen = await getQwenLiveCatalogOverride();
     if (liveQwen) {
-      const liveModel = liveQwen.models.find((model) => model.id === modelName);
+      // Fast-варианты («qwen3.8-max-fast») в живом каталоге отсутствуют —
+      // валидируем базовое имя и гасим reasoning.
+      const { base, fast } = stripFastModelSuffix(modelName);
+      const liveModel = liveQwen.models.find((model) => model.id === base);
       if (!liveModel) {
-        return sendError(res, 404, `Qwen model '${modelName}' is not available for the current account. Refresh /v1/models and select an active model.`);
+        return sendError(res, 404, `Qwen model '${base}' is not available for the current account. Refresh /v1/models and select an active model.`);
       }
       mapping = {
-        name: liveModel.id,
+        name: modelName,
         provider: "qwen",
         model: liveModel.id,
         label: liveModel.label,
-        reasoning: liveModel.reasoning === true,
+        reasoning: fast ? false : liveModel.reasoning === true,
         vision: liveModel.vision === true,
       };
     }
@@ -190,7 +397,11 @@ async function handleChatCompletions(req, res) {
   );
   const search = requestSearchEnabled(body);
   const prompt = search ? withWebSearchInstruction(basePrompt) : basePrompt;
-  const thinking = requestThinkingEnabled(body, mapping);
+  const thinking = resolveAdaptiveThinking({
+    thinking: requestThinkingEnabled(body, mapping),
+    toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+    messageCount: messages.length,
+  });
   const images = extractOpenAIChatImages(messages);
 
   if (images.length && mapping.provider === "qwen") {
@@ -201,55 +412,125 @@ async function handleChatCompletions(req, res) {
     );
   }
 
+  let qwenAccountId = 'default';
+  if (mapping.provider === "qwen") {
+    qwenAccountId = await pickQwenAccountForRequest({ headers: req.headers });
+  }
+  if (mapping.provider === "qwen") {
+    console.log(`[API][qwen-account] ${qwenAccountId === 'default' ? 'default (auth.json)' : qwenAccountId}`);
+  }
+
   try {
     if (mapping.provider === "qwen") {
-      const runQwen = async (client) => {
+      const runQwen = async (client, { accountAttempt = 1 } = {}) => {
         if (body.stream === true) {
           return handleQwenStream(client, null, prompt, modelName, mapping.model, res, {
+            accountId: qwenAccountId,
             thinking,
             search,
             tools: body.tools,
             createChat: (currentClient) => currentClient.createChat({ model: mapping.model, title: "API request" }),
-            refreshClient: async (error) => {
-              const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
-              if (!isQwenAuthError(error)) throw error;
-              qwenClient = null;
-              const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
-              qwenClient = new QwenChatClient({
-                token: fresh.token,
-                cookieHeader: fresh.cookieHeader,
-                debug: Boolean(process.env.API_DEBUG),
-              });
-              return qwenClient;
-            },
+            refreshClient: makeQwenAccountRefreshClient(qwenAccountId),
           });
         }
+        // Инцидент 03.10 «субагенты невидимы»: не-стрим путь (субагенты
+        // Hermes, stream:false) не писал таймингов — в консоли видны только
+        // createChat chat_id и тишина. Теперь те же stages, что у стрима.
+        // accountAttempt — параметром (не из замыкания: объявлен в цикле
+        // ротации ниже; инцидент 18:14 «accountAttempt is not defined»).
+        const nonStreamRequestId = `qwen_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+        logQwenTiming(nonStreamRequestId, "create_chat_start", { account: qwenAccountId, attempt: accountAttempt });
         const chatId = await client.createChat({ model: mapping.model, title: "API request" });
-        const result = await client.complete({
-          chatId,
-          prompt,
-          thinking,
-          search,
-          model: mapping.model,
+        logQwenTiming(nonStreamRequestId, "create_chat_done", { attempt: accountAttempt, create_chat_ms: 0 });
+        logQwenTiming(nonStreamRequestId, "completion_start", { attempt: accountAttempt });
+        const result = await client.complete({ chatId, prompt, thinking, search, model: mapping.model });
+        logQwenTiming(nonStreamRequestId, "completion_done", {
+          attempt: accountAttempt,
+          completion_ms: 0,
+          text_chars: String(result?.text || "").length,
         });
+        // Квота аккаунта в тексте ответа (инцидент 2026-10-12): daily limit
+        // приходит HTTP 200 обычным контентом — рвём ход синтетической
+        // rate-limit ошибкой, чтобы сработала account-ротация (24h-кулдаун
+        // → следующий аккаунт пула), а не выдача лимита клиенту «как ответ».
+        const nonStreamQuotaError = quotaLimitErrorFromText(result?.text);
+        if (nonStreamQuotaError) {
+          logQwenTiming(nonStreamRequestId, "quota_limit_detected", { attempt: accountAttempt });
+          throw nonStreamQuotaError;
+        }
         return sendJson(res, toOpenAIResponse(modelName, result.text, body.tools));
       };
 
-      let client = await getQwenClient();
-      try {
-        return await runQwen(client);
-      } catch (e) {
-        const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
-        if (!isQwenAuthError(e)) throw e;
-        qwenClient = null;
-        const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
-        client = new QwenChatClient({
-          token: fresh.token,
-          cookieHeader: fresh.cookieHeader,
-          debug: Boolean(process.env.API_DEBUG),
-        });
-        qwenClient = client;
-        return await runQwen(client);
+      // Retry-цикл по pool-аккаунтам (как retryAfterAccountSwitch FreeQwenAPI):
+      // 401/429/rate-limit -> маркируем аккаунт -> берём следующий -> новый чат.
+      // IP-punish breaker: второй подряд Baxia-punish на разных аккаунтах =
+      // бан по IP, не по профилю — стоп ротации, пулевый кулдаун, честная
+      // ошибка (ротация в шторм только сжигает пул: инцидент 2026-09-16).
+      const triedAccountIds = new Set();
+      let currentAccountId = qwenAccountId;
+      let punishErrorsInARow = 0;
+      for (let accountAttempt = 0; accountAttempt < 3; accountAttempt += 1) {
+        let client = await getQwenClientForAccount(currentAccountId);
+        try {
+          const result = await runQwen(client, { accountAttempt: accountAttempt + 1 });
+          punishErrorsInARow = 0;
+          return result;
+        } catch (e) {
+          markQwenAccountOnUpstreamError(currentAccountId, e);
+          const { isQwenAuthError } = await import("../src/providers/qwen/auth-manager.mjs");
+          const accountSwitchEligible = isAccountSwitchEligibleError(e);
+          if (e?.code === "QWEN_ANTIBOT_PUNISH") {
+            punishErrorsInARow += 1;
+            if (punishErrorsInARow >= 2) {
+              const poolMs = startQwenPoolPunishCooldown();
+              console.warn(`[API][qwen-account] Baxia punish на ${punishErrorsInARow} аккаунтах подряд — вероятен IP-level бан, пулевый кулдаун ${Math.round(poolMs / 1000)}s, ротация остановлена`);
+              const poolErr = new Error(
+                `Qwen Baxia antibot punish на нескольких аккаунтах подряд (вероятно IP-level). Пул в кулдауне ~${Math.round(poolMs / 1000)}s. Решите капчу в окне браузера ai-free, подождите или снизьте частоту (QWEN_COMPLETION_MIN_INTERVAL_MS).`,
+              );
+              poolErr.code = "QWEN_ANTIBOT_PUNISH";
+              poolErr.cooldownMs = poolMs;
+              throw poolErr;
+            }
+          } else {
+            punishErrorsInARow = 0;
+          }
+          // Default-путь: старое поведение — refresh auth.json и один повтор.
+          if (currentAccountId === 'default') {
+            if (!isQwenAuthError(e)) throw e;
+            const { getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
+            qwenClients.delete('default');
+            const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
+            client = new QwenChatClient({
+              token: fresh.token,
+              cookieHeader: fresh.cookieHeader,
+              debug: Boolean(process.env.API_DEBUG),
+            });
+            qwenClients.set('default', client);
+            return await runQwen(client);
+          }
+          if (!accountSwitchEligible || accountAttempt >= 2) throw e;
+          const next = await nextPoolAccountExcluding(triedAccountIds);
+          if (!next) {
+            // Последний шанс: автологин умершего аккаунта (если есть пароль
+            // в logins.txt и QWEN_AUTOLOGIN != 0). Один прогон на процесс.
+            const relogged = await tryQwenAutoLogin(currentAccountId, {
+              reason: `rotation exhausted (${e.message.slice(0, 60)})`,
+            });
+            if (relogged) {
+              triedAccountIds.add(currentAccountId);
+              qwenClients.delete(currentAccountId);
+              // остаёмся на том же аккаунте — следующий attempt пойдёт с живым слотом
+              console.log(`[API][qwen-account] ${currentAccountId}: автологин прошёл, продолжаем на нём`);
+            } else {
+              throw e;
+            }
+          } else {
+            triedAccountIds.add(currentAccountId);
+            console.log(`[API][qwen-account] ${currentAccountId} failed (${e.message.slice(0, 80)}), switching to ${next.id}`);
+            qwenClients.delete(currentAccountId);
+            currentAccountId = next.id;
+          }
+        }
       }
     }
     if (mapping.provider === "deepseek") {
@@ -334,6 +615,7 @@ export function buildPromptFromChatBody(body, modelName, mapping) {
   // потом сделаем proper multi-turn через persistent sessionId + parent_id chain.
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   let prompt = "";
+  let promptLengthAfterTools = 0;
   if (body.tools && body.tools.length > 0) {
     // DeepSeek-Reasoner (R1) и Qwen QwQ часто игнорируют мягкие инструкции —
     // вставляют свои bash-команды, придуманный синтаксис, или прячут tool-вызовы
@@ -346,17 +628,34 @@ export function buildPromptFromChatBody(body, modelName, mapping) {
       ? `
 NOTE FOR REASONING MODELS (R1 / QwQ / Reasoner):
 - Do NOT wrap the final answer in <think>…</think>. After your reasoning, your
-  final output MUST be either plain text OR a \`\`\`tool_calls\`\`\` block.
-- If the user asks you to inspect/edit/run anything in a project, you MUST
-  emit a tool_calls block. Never invent shell commands ("rtk cat ...", "kit ls ...")
-  — those tools do not exist. Use ONLY the names from the Available tools list.
+  final output MUST be either plain text OR a ${F}tool_calls${F} block.
 `
       : "";
+
+    // Reasoning-модели Qwen (qwen3-max и др.) видят список тулов и пытаются
+    // вызывать их своим ВНУТРЕННИМ tool-call механизмом прямо во время
+    // thinking-фазы — бэкенд отвечает «Tool X does not exists» и модель
+    // каскадит по всем именам (execute_code, write_file, terminal, …;
+    // воспроизведено в нативной веб-морде 2026-08-21). Запрет обязателен
+    // для ЛЮБОЙ модели с тулами, не только для reasoner-имён.
+    const nativeCallBan = `
+CRITICAL — HOW TOOLS ARE EXECUTED HERE:
+- This chat has NO native/internal tool execution. The ONLY way to run a tool
+  is the ${F}tool_calls${F} markdown block in your FINAL visible answer.
+- NEVER attempt tool calls during your thinking/reasoning phase. Do NOT
+  invoke, announce or "run" tools (including internal helpers like
+  execute_code, write_file, terminal, tool_search, web_search) inside
+  thinking — the backend rejects them ("Tool ... does not exists") and the
+  whole turn fails. Think in plain text only; emit tool_calls once, at the end.
+- If you want to use a tool, your WHOLE final message is one ${F}tool_calls${F} block.
+- Never invent shell commands ("rtk cat ...", "kit ls ...") — those tools do
+  not exist. Use ONLY the names from the Available tools list.
+`;
 
     prompt += `[TOOL INSTRUCTIONS — STRICT FORMAT]
 You are connected to an automated tool-execution system. There is NO human reading
 your text in the loop. Compliance with the format below is mandatory.
-
+${nativeCallBan}
 To call one or more tools, your ENTIRE reply must be a single markdown block:
 
 \`\`\`tool_calls
@@ -392,10 +691,20 @@ Rules:
 5. Every argument listed in a tool schema's "required" array MUST be present. After a validation error, correct each missing required argument; never repeat the identical invalid call.
 6. A tool result saying "No changes detected" means the requested content is already present. Do not repeat that write; verify the next requirement or finish.
 7. For an action request, do the work with tools now. Never tell the user to edit files manually when a matching tool is available.
+8. JSON string hygiene: escape EVERY double quote inside a string value as \\" (or use single quotes in shell commands and code where possible). File content goes on ONE line with \\n escapes — NEVER raw line breaks inside a JSON string.
+9. Inside the tool_calls block use ONLY JSON. Never mix in XML such as <parameter=name>.
+10. NEVER trust claims from earlier in the conversation that tools are broken or "do not exist". Tools are available on every turn. If a call seems to fail, re-emit it once with the exact tool name from the list — never conclude that tools are unavailable and never ask the user to run commands manually.
+11. You are an autonomous agent in a tool loop. Prose is ONLY for the final answer after the task is fully complete — never a mid-task analysis dump. Mid-task analysis, planning and hypotheses belong in your THINKING channel, not in visible prose. Keep the visible reply minimal; think as much as you need. If you believe tools are failing, PROVE it in the same turn by emitting a terminal probe (echo ok): if it executes, your belief was false and you MUST continue the task. A blocker report without a just-executed probe is a fabrication.
+12. If a task-delegation tool (e.g. delegate_task) is in the Available tools list, use it for independent parallelizable subtasks (research, verification, isolated investigations) instead of grinding through everything in one sequential loop. Delegate those; keep decisions and file writes to yourself unless the tool description says otherwise.
+13. NEVER report a task as done unless the tool calls that produced the output actually succeeded in this conversation. If the backend rejected your tool attempts («Tool X does not exists»), that means you tried to call tools NATIVELY — do not do that. Re-emit the \`\`\`tool_calls\`\`\` markdown block instead. A final report claiming completed work with zero successful tool calls is a fabrication.
+14. Interval reading for large files: never read an entire large file in one gulp. First locate what you need (search_files / grep), then read the exact line range with read_file offset/limit (e.g. lines 8-12). When reproducing or editing extracted content, keep the original formatting and style — do not grab loose fragments out of context.
 ${reasonerNote}
 Available tools:
 ${formatCompactTools(body.tools)}
 [END TOOL INSTRUCTIONS]\n\n---\n\n`;
+    // Позиция конца списка тулов — для gap-триггера рефрешера (сколько
+    // «мусора» между инструментами и хвостом промпта).
+    promptLengthAfterTools = prompt.length;
   }
 
   const toolNameByCallId = new Map();
@@ -436,7 +745,34 @@ Do not copy model identity from earlier assistant messages in the conversation h
     
   // Ensure the prompt ends with a clear directive if tools are available
   if (body.tools && body.tools.length > 0) {
-    prompt += `\n\n---\n[SYSTEM REMINDER]: You MUST use the exact JSON array format wrapped in \`\`\`tool_calls\`\`\` to call tools. If you output plain bash commands, it will fail.`;
+    prompt += `\n\n---\n[SYSTEM REMINDER]: You MUST use the exact JSON array format wrapped in ${F}tool_calls${F} to call tools. If you output plain bash commands, it will fail.`;
+
+    // Глубокий tool-loop (TG-инцидент 02.10 «Hermes не может подгрузить
+    // скиллы», depth 376+): инструкции тулов сидят в голове промпта за
+    // 60–100к символов, attention их теряет — модель отвечает прозой и
+    // «признаётся», что инструменты не отзываются. Повторяем компактный
+    // список тулов + формат в самом хвосте — последнее перед генерацией.
+    // Второй триггер (03.10 00:01): свежая сессия, но system-блок раздут —
+    // gap от конца списка тулов до хвоста промпта.
+    prompt += toolRefresherBlock({
+      tools: body.tools,
+      messageCount: messages.length,
+      promptTailGapChars: prompt.length - promptLengthAfterTools,
+    });
+
+    // Транскрипт заканчивается tool-результатом: модель должна продолжить
+    // задачу СЕЙЧАС, а не отвечать на последний user-месседж ("retry and
+    // continue" она читала как yes/no-вопрос и отвечала голым "Yes").
+    const last = messages[messages.length - 1];
+    if (last?.role === "tool") {
+      prompt += `\n\n---\n[TASK IN PROGRESS — CONTINUE NOW]:\n` +
+        `The last message above is a TOOL RESULT, not a user reply. The user's ` +
+        `latest instruction still stands and work is unfinished. Continue the ` +
+        `task right now: either the next ${F}tool_calls${F} block, or (only if ` +
+        `truly everything is done) the final answer to the user's task.\n` +
+        `NEVER reply with bare acknowledgements ("Yes", "OK", "Done") — they ` +
+        `are not valid answers to the task.`;
+    }
   }
 
   return prompt;
@@ -603,20 +939,22 @@ async function completeText(mapping, prompt, { thinking = false, search = false 
       return result.text || "";
     };
 
-    let client = await getQwenClient();
+    const qwenAccountId = 'default';
+    let client = await getQwenClientForAccount(qwenAccountId);
     try {
       return await runQwen(client);
     } catch (e) {
       const { isQwenAuthError, getQwenAuthManager } = await import("../src/providers/qwen/auth-manager.mjs");
       if (!isQwenAuthError(e)) throw e;
-      qwenClient = null;
+      qwenClients.delete(qwenAccountId);
       const fresh = await getQwenAuthManager().refresh({ forceVisible: false });
       client = new QwenChatClient({
         token: fresh.token,
         cookieHeader: fresh.cookieHeader,
+        accountId: qwenAccountId,
         debug: Boolean(process.env.API_DEBUG),
       });
-      qwenClient = client;
+      qwenClients.set(qwenAccountId, client);
       return await runQwen(client);
     }
   }
@@ -695,7 +1033,7 @@ function toResponsesResponse(model, text) {
   const createdAt = Math.floor(Date.now() / 1000);
   const id = `resp_${createdAt}${Math.random().toString(36).slice(2, 10)}`;
   const itemId = `msg_${Math.random().toString(36).slice(2, 10)}`;
-  const parsed = parseModelToolCalls(text);
+  const parsed = parseModelToolCallsSafe(text);
   const toolOutput = parsed.calls.map((call) => ({
     id: `fc_${Math.random().toString(36).slice(2, 10)}`,
     type: "function_call",
@@ -896,6 +1234,8 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
   createChat = null,
   refreshClient = null,
   tools = [],
+  accountId = null,
+  getClientForAccount = null,
 } = {}) {
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream");
@@ -905,7 +1245,50 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
   const requestId = `qwen_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   const startedAt = Date.now();
   const parser = new StreamParser(modelName, res, { tools });
+  // Деградировавший Qwen шлёт reasoning литеральным текстом с <think>-тегами;
+  // внутри — черновики tool-call JSON, которые детектор ловил как реальные
+  // вызовы. Фильтр вырезает think-блоки до того, как буфер увидит парсер.
+  // Поверх — чипострига: ошибки бэкенда «Tool X does not exists.» утекают
+  // в видимый текст и не живут в think-канале, поэтому идут вторым слоем.
+  // ПОРЯДОК (инцидент 29.10 11:24): чипы могут идти ПЕРЕД валидным
+  // tool_calls-блоком; fabrication-гейт обязан видеть текст ПОСЛЕ
+  // чипостриги, иначе топит рабочий вызов → 3 ретрая → заглушка.
+  // Цепочка: thinkFilter → chipFilter → fabricationGate → parser.
+  let fabricationGate = null;
+  const chipFilter = createToolErrorChipFilter({
+    onText: (t) => {
+      if (fabricationGate && !fabricationGate.fabricated()) {
+        const released = fabricationGate.push(t);
+        if (released) {
+          clientSawText = true;
+          parser.onText(released);
+        }
+      } else if (!fabricationGate) {
+        parser.onText(t);
+      }
+    },
+    // 07.11 шторм-детект: каждый вырезанный чип репортится гейту.
+    // 4+ без доставленного tool_calls → "storm" → ретрай с наддогом.
+    onChip: () => {
+      if (fabricationGate) fabricationGate.registerChip();
+    },
+  });
+  const thinkFilter = createThinkTagFilter({ onText: (t) => chipFilter.push(t) });
+  // Гейт фабрикации (инциденты 03.10 «Model claims tool failure but no tool
+  // calls»): первые символы ответа копятся до отпускания клиенту; если ход
+  // начинается с «инструменты недоступны» — дропаем его целиком и ретраим
+  // в новом чате с контр-наддогом. До 2 попыток на запрос.
+  // Сам объект гейта объявлен выше (chipFilter замыкается на него).
+  let fabricationRetries = 0;
+  const FABRICATION_MAX_RETRIES = Number(process.env.QWEN_FABRICATION_RETRIES ?? 2);
+  let counterNudge = "";
   let sawDelta = false;
+  // Инцидент 04.10 12:02: sawDelta — ТРАНСПОРТНЫЙ прогресс (heartbeat молчит,
+  // ретраи скипаются). Но гейт фабрикации может проглотить весь ход: клиент
+  // ничего не видел, а sawDelta=true. clientSawText — истина только когда
+  // текст реально ушёл клиенту (парсеру). Именно он блокирует
+  // ретрай/ротацию mid-stream; транспортный sawDelta — только heartbeat.
+  let clientSawText = false;
   let firstDeltaAt = 0;
   const heartbeat = setInterval(() => {
     if (!sawDelta) writeSseRaw(res, `: qwen waiting ${elapsedMs(startedAt)}ms\n\n`);
@@ -916,80 +1299,228 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
     let activeClient = client;
     let activeChatId = chatId;
     let lastError = null;
+    // Ротация pool-аккаунтов в стрим-пути (паритет с не-стрим циклом ниже).
+    // Инцидент 2026-09-25: 401 на create_chat валил стрим сразу, клиент
+    // ретраил вручную; не-стрим путь в это время ротировал аккаунты.
+    const triedAccountIds = new Set();
+    let currentAccountId = accountId;
+    let punishErrorsInARow = 0;
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        if (!activeChatId) {
-          if (typeof createChat !== "function") throw new Error("Qwen stream requires chatId or createChat callback");
-          const createStartedAt = Date.now();
-          logQwenTiming(requestId, "create_chat_start", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
-          activeChatId = await createChat(activeClient);
-          logQwenTiming(requestId, "create_chat_done", {
-            attempt: attempt + 1,
-            create_chat_ms: elapsedMs(createStartedAt),
-            total_ms: elapsedMs(startedAt),
-          });
-        }
-
-        const completionStartedAt = Date.now();
-        logQwenTiming(requestId, "completion_start", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
-        await runWithEmptyStreamRetry({
-          requireDelta: true,
-          operation: ({ onDelta }) => activeClient.complete({
-            chatId: activeChatId,
-            prompt,
-            thinking,
-            search,
-            model,
-            onText: onDelta,
-          }),
-          onDelta: (textDelta) => {
-            if (!sawDelta) {
-              sawDelta = true;
-              firstDeltaAt = Date.now();
-              logQwenTiming(requestId, "first_delta", {
-                attempt: attempt + 1,
-                ttft_ms: elapsedMs(startedAt),
-                completion_to_first_delta_ms: elapsedMs(completionStartedAt),
-              });
-            }
-            parser.onText(textDelta);
-          },
-          beforeRetry: async ({ attempt: emptyAttempt, error }) => {
-            if (typeof createChat !== "function") throw error;
-            logQwenTiming(requestId, "empty_stream_retry", {
-              attempt: emptyAttempt,
+    accountRotation: for (let accountAttempt = 0; accountAttempt < 3; accountAttempt += 1) {
+      // 2026-09-30 «depth 47+ пустые стримы»: после пустого стрима повторяем
+      // с forceContextFile — история уезжает в context-файл, Qwen получает
+      // компактный инлайн-запрос. Плавающий лимит ловим по факту ошибки.
+      let forceContextFile = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          if (!activeChatId) {
+            if (typeof createChat !== "function") throw new Error("Qwen stream requires chatId or createChat callback");
+            const createStartedAt = Date.now();
+            logQwenTiming(requestId, "create_chat_start", { account: currentAccountId || "default", attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
+            activeChatId = await createChat(activeClient);
+            logQwenTiming(requestId, "create_chat_done", {
+              attempt: attempt + 1,
+              create_chat_ms: elapsedMs(createStartedAt),
               total_ms: elapsedMs(startedAt),
             });
-            activeChatId = await createChat(activeClient);
-          },
-        });
-        logQwenTiming(requestId, "completion_done", {
-          attempt: attempt + 1,
-          completion_ms: elapsedMs(completionStartedAt),
-          total_ms: elapsedMs(startedAt),
-          first_delta_ms: firstDeltaAt ? firstDeltaAt - startedAt : null,
-        });
-        lastError = null;
-        break;
-      } catch (error) {
-        lastError = error;
-        if (error?.code === "EMPTY_UPSTREAM_STREAM") throw error;
-        if (sawDelta || attempt >= 1 || typeof refreshClient !== "function") throw error;
-        logQwenTiming(requestId, "retry_before_first_delta", {
-          attempt: attempt + 1,
-          total_ms: elapsedMs(startedAt),
-          error: error.message,
-        });
-        activeClient = await refreshClient(error);
-        activeChatId = null;
-      }
-    }
+          }
 
-    if (lastError) throw lastError;
+          const completionStartedAt = Date.now();
+          logQwenTiming(requestId, "completion_start", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
+          fabricationGate = makeToolFabricationGate();
+          await runWithEmptyStreamRetry({
+            requireDelta: true,
+            operation: ({ onDelta }) => activeClient.complete({
+              chatId: activeChatId,
+              prompt: prompt + counterNudge,
+              thinking,
+              search,
+              model,
+              forceContextFile,
+              onText: onDelta,
+              // Thinking-дельты (phase:"think") → parser.onThinking →
+              // SSE reasoning_content. Фабрикация-гейт и фильтры <think>
+              // тут не нужны: это отдельный канал, черновики JSON из
+              // reasoning не попадают в content/toolsBuffer.
+              onThinking: (t) => parser.onThinking(t),
+            }),
+            onDelta: (textDelta) => {
+              if (!sawDelta) {
+                sawDelta = true;
+                firstDeltaAt = Date.now();
+                logQwenTiming(requestId, "first_delta", {
+                  attempt: attempt + 1,
+                  ttft_ms: elapsedMs(startedAt),
+                  completion_to_first_delta_ms: elapsedMs(completionStartedAt),
+                });
+              }
+              // Дельты идут в thinkFilter → chipFilter → fabricationGate →
+              // parser (гейт видит текст ПОСЛЕ чипостриги — инцидент 29.10).
+              // При детекте fabrication гейт молчит: клиент не видит прозу,
+              // ход ретраится после завершения upstream.
+              if (fabricationGate && !fabricationGate.fabricated()) {
+                thinkFilter.push(textDelta);
+                if (fabricationGate.fabricated()) {
+                  logQwenTiming(requestId, "fabrication_detected", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
+                }
+              }
+            },
+            beforeRetry: async ({ attempt: emptyAttempt, error }) => {
+              if (typeof createChat !== "function") throw error;
+              logQwenTiming(requestId, "empty_stream_retry", {
+                attempt: emptyAttempt,
+                total_ms: elapsedMs(startedAt),
+              });
+              // Пустой стрим на большом промпте — переносим историю в файл.
+              forceContextFile = true;
+              activeChatId = await createChat(activeClient);
+            },
+          });
+          logQwenTiming(requestId, "completion_done", {
+            attempt: attempt + 1,
+            completion_ms: elapsedMs(completionStartedAt),
+            total_ms: elapsedMs(startedAt),
+            first_delta_ms: firstDeltaAt ? firstDeltaAt - startedAt : null,
+          });
+          // Ход закончился: отпускаем остаток буфера гейта (короткие ответы
+          // < окна детекции целиком сидят в буфере). При детекте flush = "".
+          // Гейт-остаток — уже чипо- и think-очищенный текст, идёт прямо
+          // в парсер (повторная фильтрация исказила бы текст).
+          const gateTail = fabricationGate ? fabricationGate.flush() : "";
+          if (gateTail) {
+            clientSawText = true;
+            parser.onText(gateTail);
+          }
+          // Квота аккаунта в стриме (инцидент 2026-10-12): не «фабрикация»,
+          // не ретрай с наддогом — ретраить тот же аккаунт бессмысленно
+          // (лимит аккаунтный). Разрываем ход синтетической rate-limit
+          // ошибкой → account-ротация (markRateLimited 24h → след. пул).
+          if (fabricationGate?.kind() === "quota") {
+            const quotaError = quotaLimitErrorFromText(fabricationGate.detectedText()) || new Error("Qwen rate limit (daily limit в контенте ответа)");
+            quotaError.code = "QWEN_RATE_LIMIT";
+            logQwenTiming(requestId, "quota_limit_detected", { attempt: attempt + 1, total_ms: elapsedMs(startedAt) });
+            throw quotaError;
+          }
+          // Фабрикация «инструменты недоступны»: ход дропнут гейтом (клиент
+          // не видел прозу), upstream завершён. Ретраим в новом чате с
+          // контр-наддогом — до FABRICATION_MAX_RETRIES раз, потом сдаёмся
+          // и пропускаем ответ как есть (последняя попытка без гейта).
+          if (fabricationGate?.fabricated() && fabricationRetries < FABRICATION_MAX_RETRIES) {
+            fabricationRetries += 1;
+            // Наддог зависит от причины: fabrication — «не выдумывай отказ»,
+            // storm — «бэкенд отвергает нативные вызовы; тулы живут
+            // в markdown-блоке ответа, не в thinking» (07.11, субагент 29-52:
+            // 15 чипов → ложный «Задача выполнена»).
+            counterNudge = fabricationGate.kind() === "storm"
+              ? `\n\n---\n[SYSTEM]: Your previous turn tried to call tools NATIVELY and the backend rejected every attempt («Tool X does not exists» x${fabricationGate.detectedText().match(/(\d+)/)?.[1] ?? "4+"}). Native tool calls DO NOT work here. To call a tool, output a \`\`\`tool_calls\`\`\` markdown block (JSON array) as your ENTIRE visible reply. Never call tools during thinking. If the task is complete, output the final report — but NEVER claim work was done unless the tool calls actually succeeded in this conversation.`
+              : `\n\n---\n[SYSTEM]: Your previous reply claimed tools are unavailable. That was FALSE — tools are live. Do NOT write any explanation about tools. Reply ONLY with the \`\`\`tool_calls\`\`\` block (JSON array) for the next action, or the final answer if the task is complete.`;
+            logQwenTiming(requestId, "fabrication_retry", { attempt: fabricationRetries, total_ms: elapsedMs(startedAt) });
+            activeChatId = null; // новый чат — старое дерево с фабрикацией не переиспользуем
+            forceContextFile = false;
+            continue; // снова в attempt-цикл (attempt < 3)
+          }
+          // Последняя попытка или лимит ретраев: если опять фабрикация —
+          // пропускаем ответ прозой как есть (гейт уже отдал пустоту,
+          // нужно отдать хоть что-то — флешнем буфер как текст).
+          if (fabricationGate?.fabricated()) {
+            // Гейт молчал весь ход; клиент ничего не получил.
+            // Отдаём честную ошибку-заглушку вместо зависания.
+            thinkFilter.push("[Инструменты доступны, но модель повторно ответила прозой о недоступности инструментов. Повторите запрос.]");
+            fabricationGate = null; // заглушка пошла — больше не фильтруем
+          }
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          // Пустой стрим: attempt 0-1 → повтор с forceContextFile (история в
+          // файл-вложение), attempt 2 — окончательный throw наружу.
+          if (error?.code === "EMPTY_UPSTREAM_STREAM" && attempt < 2) {
+            forceContextFile = true;
+            activeChatId = null;
+            continue;
+          }
+          if (error?.code === "EMPTY_UPSTREAM_STREAM") throw error;
+          // Baxia punish (антибот-капча): кулдаун активен, слепой retry
+          // с пересозданием чата только сильнее разгоняет скоринг.
+          if (error?.code === "QWEN_ANTIBOT_PUNISH") throw error;
+          // Квота аккаунта (daily limit в контенте): silent-refresh бессмысленен
+          // (лимит аккаунтный, не auth) — выходим из attempt-цикла с lastError,
+          // чтобы сработала account-ротация (throw улетел бы мимо неё клиенту).
+          if (error?.code === "QWEN_RATE_LIMIT") break;
+          if (clientSawText || attempt >= 1 || typeof refreshClient !== "function") throw error;
+          logQwenTiming(requestId, "retry_before_first_delta", {
+            attempt: attempt + 1,
+            total_ms: elapsedMs(startedAt),
+            error: error.message,
+          });
+          // Silent refresh сам упал (прокси не выдал JWT и т.п.) — НЕ рвём
+          // поток: выходим на account-ротацию, она переключит аккаунт.
+          // Инцидент 02.10: throw отсюда улетал мимо ротации прямиком клиенту.
+          try {
+            activeClient = await refreshClient(error);
+          } catch (refreshError) {
+            console.warn(`[API][qwen-account] stream: silent refresh failed (${refreshError.message}) — пробуем ротацию`);
+            lastError = error;
+            break;
+          }
+          activeChatId = null;
+        }
+      }
+      if (!lastError) break accountRotation;
+
+      // --- account-ротация (паритет с не-стрим путём) ---
+      // Ротируем только если клиент ещё не видел текст (clientSawText=false):
+      // после первого видимого delta перескакивать поздно и видно клиенту.
+      // Гейт фабрикации мог проглотить весь ход — тогда ротация безопасна.
+      if (currentAccountId && currentAccountId !== "default" && !clientSawText) {
+        markQwenAccountOnUpstreamError(currentAccountId, lastError);
+        if (lastError?.code === "QWEN_ANTIBOT_PUNISH") {
+          punishErrorsInARow += 1;
+          if (punishErrorsInARow >= 2) {
+            const poolMs = startQwenPoolPunishCooldown();
+            console.warn(`[API][qwen-account] stream: Baxia punish на ${punishErrorsInARow} аккаунтах подряд — вероятен IP-level бан, пулевый кулдаун ${Math.round(poolMs / 1000)}s`);
+            lastError.cooldownMs = poolMs;
+            throw lastError;
+          }
+        } else {
+          punishErrorsInARow = 0;
+        }
+        const accountSwitchEligible = isAccountSwitchEligibleError(lastError);
+        if (!accountSwitchEligible || accountAttempt >= 2) throw lastError;
+        const next = await nextPoolAccountExcluding(triedAccountIds);
+        if (!next) {
+          // Последний шанс стрим-пути (инцидент 03.10: ручное окно логина
+          // открылось посреди прод-запроса): автологин умершего аккаунта с
+          // паролем из logins.txt, headless. Успех → остаёмся на нём.
+          const relogged = await tryQwenAutoLogin(currentAccountId, {
+            reason: `stream rotation exhausted (${lastError.message.slice(0, 60)})`,
+          });
+          if (relogged) {
+            triedAccountIds.add(currentAccountId);
+            qwenClients.delete(currentAccountId);
+            console.log(`[API][qwen-account] stream: ${currentAccountId}: автологин прошёл, продолжаем на нём`);
+            continue accountRotation;
+          }
+          throw lastError;
+        }
+        triedAccountIds.add(currentAccountId);
+        console.log(`[API][qwen-account] stream: ${currentAccountId} failed (${lastError.message.slice(0, 80)}), switching to ${next.id}`);
+        qwenClients.delete(currentAccountId);
+        // Тестируемость: инъекция фабрики клиентов (в проде — реальная).
+        activeClient = typeof getClientForAccount === "function"
+          ? await getClientForAccount(next.id)
+          : await getQwenClientForAccount(next.id);
+        currentAccountId = next.id;
+        activeChatId = null;
+        continue accountRotation;
+      }
+      throw lastError;
+    }
     clearInterval(heartbeat);
     if (res.destroyed || res.writableEnded) return;
-    parser.onEnd();
+    thinkFilter.flush();
+    chipFilter.flush();
+    await parser.onEnd();
     writeSseRaw(res, "data: [DONE]\n\n");
     if (!res.destroyed && !res.writableEnded) res.end();
     logQwenTiming(requestId, "stream_done", { total_ms: elapsedMs(startedAt) });
@@ -1001,6 +1532,7 @@ export async function handleQwenStream(client, chatId, prompt, modelName, model,
       error: e.message,
     });
     console.error("[API] Qwen stream error:", e.message);
+    markQwenAccountOnUpstreamError(accountId, e);
     sendStreamError(res, modelName, e.message);
   }
 }
@@ -1031,7 +1563,7 @@ async function handleChatGPTStream(client, prompt, modelName, model, res, { tool
       model,
       onText: (textDelta) => parser.onText(textDelta),
     });
-    parser.onEnd();
+    await parser.onEnd();
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (e) {
@@ -1039,7 +1571,6 @@ async function handleChatGPTStream(client, prompt, modelName, model, res, { tool
     sendStreamError(res, modelName, e.message);
   }
 }
-
 // Обработка streaming-запроса к DeepSeek.
 async function handleDeepSeekStream(client, sessionId, prompt, modelName, model, res, {
   thinking = false,
@@ -1075,7 +1606,7 @@ async function handleDeepSeekStream(client, sessionId, prompt, modelName, model,
         activeSessionId = await client.createSession();
       },
     });
-    parser.onEnd();
+    await parser.onEnd();
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (e) {
@@ -1092,7 +1623,7 @@ function toOpenAIResponse(model, text, tools = []) {
   let content = text;
   let finish_reason = "stop";
 
-  const parsed = parseModelToolCalls(text);
+  const parsed = parseModelToolCallsSafe(text);
   const normalized = normalizeToolCallsForSchemas(parsed.calls, tools);
   if (normalized.calls.length) {
     content = parsed.content;
@@ -1129,7 +1660,7 @@ function toOpenAIResponse(model, text, tools = []) {
 }
 
 export function toAnthropicMessageResponse(model, text) {
-  const parsed = parseModelToolCalls(text);
+  const parsed = parseModelToolCallsSafe(text);
   const content = [];
   if (parsed.content) {
     content.push({ type: "text", text: parsed.content });
@@ -1261,13 +1792,194 @@ async function readJson(req) {
   return JSON.parse(raw);
 }
 
-function requestThinkingEnabled(body, mapping = null) {
+// Fast-суффикс имени модели («qwen3.8-max-fast», «qwen3.7-plus:fast»):
+// то же апстрим-ядро, но thinking выключен — зеркалит «Быстрый» режим web-
+// морды chat.qwen.ai (feature_config.thinking_enabled=false из капчи F12).
+export function stripFastModelSuffix(name) {
+  const base = String(name || "");
+  const match = base.match(/^(.+?)(?:-fast|:fast)$/i);
+  return match ? { base: match[1], fast: true } : { base, fast: false };
+}
+
+// Компактный повторитель тулов для хвоста промпта.
+// Два триггера (2026-10-02/03 TG-инциденты «Hermes не может подгрузить скиллы»):
+//   1. depth: messageCount > QWEN_TOOL_REFRESHER_DEPTH (по умолчанию 40) —
+//      глубокий tool-loop, инструкции тулов в 60-100к символов от хвоста;
+//   2. gap: расстояние от конца списка тулов до конца промпта больше
+//      QWEN_TOOL_REFRESHER_MIN_GAP (по умолчанию 12 000 символов) — свежая
+//      сессия, но раздутый system-блок между тулами и вопросом (кейс 03.10
+//      00:01: 35 тулов в голове, 33к мусора, depth 3 — модель «забыла»
+//      инструменты и ответила прозой «инструменты не отзываются»).
+// 0 в любой ручке выключает соответствующий триггер; оба 0 — рефрешер off.
+export function toolRefresherBlock({ tools, messageCount, promptTailGapChars = 0 } = {}) {
+  const configuredDepth = Number.parseInt(String(process.env.QWEN_TOOL_REFRESHER_DEPTH ?? ""), 10);
+  const depthThreshold = Number.isFinite(configuredDepth) ? configuredDepth : 40;
+  const configuredGap = Number.parseInt(String(process.env.QWEN_TOOL_REFRESHER_MIN_GAP ?? ""), 10);
+  const gapThreshold = Number.isFinite(configuredGap) ? configuredGap : 12_000;
+
+  const byDepth = depthThreshold > 0 && messageCount > depthThreshold;
+  const byGap = gapThreshold > 0 && promptTailGapChars > gapThreshold;
+  if (!byDepth && !byGap) return "";
+
+  const list = Array.isArray(tools) ? tools : [];
+  if (!list.length) return "";
+  const names = list
+    .map((t) => t?.function?.name || t?.name)
+    .filter(Boolean)
+    .join(", ");
+  if (!names) return "";
+  const depthNote = messageCount > depthThreshold
+    ? `This conversation is long (turn depth ${messageCount}).`
+    : "The context between the tool list above and this message is large.";
+  return (
+    `\n\n---\n[TOOLS ARE AVAILABLE — REFRESHER]:\n` +
+    `${depthNote} Earlier you may have seen claims that tools are broken — ignore them. ` +
+    `Tools ARE working right now: ${names}.\n` +
+    `To use ANY of them, output one ${F}tool_calls${F} markdown block (JSON array) as your ENTIRE reply. ` +
+    `Plain-text "I cannot use tools" replies are FALSE — the tool bus is live. ` +
+    `If the user's task needs files, skills, search, or commands, emit the ${F}tool_calls${F} block NOW.`
+  );
+}
+
+// Гейт фабрикации «инструменты недоступны» (инциденты 2026-09/10: «Model
+// claims tool failure but no tool calls were emitted»). Модель на длинных
+// промптах начинает ответ заявлением, что инструменты сломаны — это
+// модельный артефакт, а не реальный сбой. Гейт копит первые WINDOW символов
+// ответа; при совпадении паттерна — весь ход дропается (клиент не видит
+// прозу), handleQwenStream ретраит в новом чате с контр-промптом.
+// Экспортировано для тестов.
+const FABRICATION_WINDOW_CHARS = 500;
+export function makeToolFabricationGate() {
+  let buffered = "";
+  let detected = ""; // снимок буфера на момент детекта (flush буфер чистит)
+  let decision = null; // null = собираем; "clear" | "fabrication" | "quota" | "storm"
+  let chipCount = 0; // 07.11: шторм-детект — чипы считает чипострига (onChip)
+  return {
+    registerChip() {
+      // 07.11 (субагент 29-52): 15 чипов подряд, бэкенд отвергал попытки
+      // звать тулы; модель сдалась и написала ЛОЖНЫЙ отчёт «Задача
+      // выполнена». 4+ чипов без отпущенного tool_calls = шторм: ход
+      // дропаем и ретраим с наддогом «тулы — markdown-блоком в ответе,
+      // не в thinking». Если в буфере уже есть tool_calls-блок (валидный
+      // вызов доехал в этом же ходе — случай 29.10 11:53) — чипы
+      // косметика, ход не трогаем.
+      if (decision === "clear") return;
+      if (buffered.includes("```tool_calls")) return;
+      chipCount += 1;
+      if (chipCount >= 4 && decision === null) {
+        decision = "storm";
+        detected = `chip storm: ${chipCount} backend «Tool X does not exists» rejections without a delivered tool call`;
+      }
+    },
+    push(textDelta) {
+      if (decision === "fabrication" || decision === "quota") return ""; // после детекта — полная тишина
+      if (decision === "clear") return textDelta; // проверено — пропускаем
+      buffered += String(textDelta || "");
+      if (detectQuotaLimitText(buffered)) {
+        decision = "quota";
+        detected = buffered;
+        return "";
+      }
+      if (detectToolFabrication(buffered)) {
+        decision = "fabrication";
+        detected = buffered;
+        return "";
+      }
+      if (buffered.length >= FABRICATION_WINDOW_CHARS) {
+        decision = "clear";
+        const out = buffered;
+        buffered = ""; // отдан клиенту — не дублировать во flush
+        return out;
+      }
+      return "";
+    },
+    flush() {
+      // Страховка: шторм прилип, но в буфере доехал валидный tool_calls —
+      // ход жив, отпускаем (ложный шторм хуже пропущенного).
+      if (decision === "storm" && buffered.includes("```tool_calls")) {
+        decision = "clear";
+      }
+      if (decision === "fabrication" || decision === "quota" || decision === "storm") return "";
+      const out = buffered;
+      buffered = "";
+      return out;
+    },
+    fabricated() {
+      return decision === "fabrication" || decision === "quota" || decision === "storm";
+    },
+    // Почему ход дропнут: "quota" — лимит аккаунта (лечится ротацией),
+    // "fabrication" — модельный артефакт (лечится ретраем с наддогом),
+    // "storm" — чип-шторм бэкенда (ретраем с наддогом про markdown-тулы).
+    // null — ход не дропнут (в т.ч. "clear": окно прошло, текст чист).
+    kind() {
+      return decision === "quota" || decision === "fabrication" || decision === "storm" ? decision : null;
+    },
+    // Текст, на котором сработал детект (для диагностики/синтетической ошибки).
+    detectedText() {
+      return detected;
+    },
+  };
+}
+
+// Квота/лимит аккаунта в НАЧАЛЕ ответа. Инцидент 2026-10-12 (телеметрия
+// run-...T14-40-43-957Z): Qwen отдаёт daily limit HTTP 200 обычной
+// SSE-дельтой (phase=answer, status=finished) — это не error-событие,
+// единственный маркер — сам текст. Живые формулировки RU/EN/CN.
+const QUOTA_LIMIT_PATTERN = /Вы\s+достигли\s+(дневного\s+)?лимита|достигли\s+лимита|daily\s+(free\s+)?limit|reached\s+(the\s+)?daily\s+limit|free\s+tier\s+(limit|exhausted)|guest\s+chat\s+limit|out[_\s]of[_\s]limit|您已达到每日限制|已达到免费额度|免费试用已用完|今日用量已达上限/i;
+
+function detectQuotaLimitText(text) {
+  return QUOTA_LIMIT_PATTERN.test(String(text || "").slice(0, FABRICATION_WINDOW_CHARS));
+}
+
+// Не-стрим путь (субагенты Hermes): текст ответа → синтетическая
+// rate-limit ошибка для account-ротации (markRateLimited → следующий пул).
+export function quotaLimitErrorFromText(text) {
+  if (!detectQuotaLimitText(text)) return null;
+  const err = new Error(`Qwen rate limit (daily limit в контенте ответа): ${String(text).slice(0, 160)}`);
+  err.code = "QWEN_RATE_LIMIT";
+  return err;
+}
+
+// Паттерны по живым формулировкам инцидентов (детектор onEnd уже ловит
+// те же слова, но ПОСЛЕ того, как проза ушла клиенту — здесь ловим ДО).
+// Квота-паттерны вынесены в QUOTA_LIMIT_PATTERN: у них другое лечение.
+// «не отвечает» добавлен 29.10 (утечка 11:55: «система временно не
+// отвечает на запросы» — попытка 2 прошла гейт в TG).
+function detectToolFabrication(text) {
+  const head = String(text || "").slice(0, FABRICATION_WINDOW_CHARS);
+  return /\bdoes not exists?\b|инструмент[а-яё]*[^\n.]{0,80}(недоступн|сломан|не\s*работа|не\s+существ|не\s+отвеча)|tool\s+execution\s+backend[^\n.]{0,80}недоступн|tools?\s+(are\s+)?(broken|unavailable|failing|not\s+responding)|не\s+могу\s+(вызв?ать|использовать)\s+инструмент|(система|сервис)[^\n.]{0,40}не\s+отвеча[^\n.]{0,40}(инструмент|запрос)/i.test(head);
+}
+
+export function requestThinkingEnabled(body, mapping = null) {
+  // Явное понижение из OpenAI-совместимого reasoning_effort (Hermes
+  // agent.reasoning_effort) имеет приоритет над флагом модели.
+  const effort = String(body?.reasoning_effort ?? body?.reasoning?.effort ?? "").toLowerCase();
+  if (effort === "none" || effort === "minimal" || effort === "low") return false;
   return Boolean(
     body?.thinking === true ||
     body?.reasoning === true ||
     body?.reasoning?.effort ||
     mapping?.reasoning === true
   );
+}
+
+// Адаптивное мышление: «Авто»-режим Qwen пере-думает на глубоких tool-циклах
+// (инциденты 2026-09). История порога: 20 → 200 (25.10, вместе с эмуляцией
+// reasoning_content) → снят полностью (29.10, просьба пользователя: с
+// thinking-каналом долгие размышления видны и полезны, гасить их по счётчику
+// сообщений больше не нужно). QWEN_ADAPTIVE_THINKING_DEPTH=N возвращает
+// пороговое поведение, QWEN_ADAPTIVE_THINKING=off — форсирует thinking.
+export function resolveAdaptiveThinking({ thinking, toolCount, messageCount, env = process.env } = {}) {
+  if (!thinking) return false;
+  if (String(env.QWEN_ADAPTIVE_THINKING || "").trim().toLowerCase() === "off") return true;
+  if (!toolCount) return true;
+  const configured = Number.parseInt(env.QWEN_ADAPTIVE_THINKING_DEPTH || "", 10);
+  if (!(configured > 0)) return true; // лимит снят: thinking на любой глубине
+  if (messageCount > configured) {
+    console.log(`[API] qwen adaptive thinking: tool loop depth ${messageCount} > ${configured} — thinking off for this turn`);
+    return false;
+  }
+  return true;
 }
 
 export function requestSearchEnabled(body) {
@@ -1285,14 +1997,22 @@ function hasNativeWebSearchTool(tools) {
   return Array.isArray(tools) && tools.some(isNativeWebSearchTool);
 }
 
+// Нативный (провайдерский) web-search определяется ТОЛЬКО по hosted-формату
+// тулзы: OpenAI Responses/Chat Compat ({ type: "web_search_20250305" }) или
+// Anthropic ({ type: "web_search_20250305", name: "web_search" }).
+//
+// Function-тул с именем web_search (Hermes Gateway и подобные клиенты
+// шлюют его как { type: "function", function: { name: "web_search" } }) —
+// это КЛИЕНТСКИЙ тул: модель должна вызывать его через ```tool_calls,
+// а Hermes исполняет и возвращает результат. Матчить его как нативный
+// нельзя: это включает auto_search у Qwen + врущий промпт-префикс
+// "Web search is enabled" — модель доверяет, зовёт свой внутренний
+// поиск, которого нет в зарегистрированных тулзах, и каскадит
+// "Tool web search does not exist" (issue: thinking-дампы 2026-08).
 function isNativeWebSearchTool(tool) {
   const type = String(tool?.type || tool?.function?.type || "").toLowerCase();
-  const name = String(tool?.name || tool?.function?.name || "").toLowerCase();
-  return type.includes("web_search") ||
-    type.includes("web-search") ||
-    name === "web_search" ||
-    name === "web_search_preview" ||
-    name.includes("web_search");
+  if (!type) return false;
+  return type.includes("web_search") || type.includes("web-search");
 }
 
 export function toolsForModelPrompt(tools) {
@@ -1369,6 +2089,20 @@ export class StreamParser {
     this.rawText = "";
   }
 
+  // Thinking-канал (Qwen phase:"think" → OpenAI reasoning_content): Hermes
+  // рендерит эти дельты как Reasoning-блок, как с нативными reasoning-
+  // провайдерами (GLM через z.ai). Текст идёт ОТДЕЛЬНЫМ delta-полем и не
+  // попадает в content/toolsBuffer — черновики tool-call JSON внутри
+  // reasoning не могут стать ложными вызовами.
+  onThinking(textDelta) {
+    if (!textDelta) return;
+    if (this.first) {
+      this.sendChunk({ role: "assistant" }, true);
+      this.first = false;
+    }
+    this.sendChunk({ reasoning_content: textDelta });
+  }
+
   onText(textDelta) {
     this.rawText += textDelta;
     if (this.isBareTools) {
@@ -1430,7 +2164,7 @@ export class StreamParser {
     }
   }
 
-  onEnd() {
+  async onEnd() {
     if (this.ended) return;
     this.ended = true;
     let finishReason = "stop";
@@ -1480,7 +2214,10 @@ export class StreamParser {
       let jsonStr = this.toolsBuffer;
       
       const firstBracket = jsonStr.indexOf("[");
-      let lastBracket = jsonStr.indexOf("```");
+      // Закрывающий fence — ПОСЛЕДНИЙ ``` с пробельным хвостом: внутри
+      // content бывают вложенные markdown-фенсы (инцидент 2026-10-23),
+      // первый-match рвал JSON посередине и терял хвостовые ключи (path).
+      let lastBracket = closingFenceIndex(jsonStr);
       if (lastBracket !== -1) {
         jsonStr = jsonStr.slice(0, lastBracket);
         lastBracket = jsonStr.lastIndexOf("]");
@@ -1500,103 +2237,89 @@ export class StreamParser {
            else jsonStr = jsonStr + "}]";
         }
       }
-      
-      // Some models (DeepSeek Reasoner) drop random text inside the markdown block
-      // like "[ASSIGNMENT]" or just plain text at the end.
-      // Another common mistake: multiple JSON blocks concatenated like:
-      // [ ... ] \n\n [ ... ] 
-      // If we sliced from first [ to last ], we might get: [ ... ] \n\n [ ... ]
-      // Which is invalid JSON.
-      // We will try to parse it, and if it fails, try some aggressive cleanup.
-      try {
-        // Try strict parsing first, then fallback to safe newline escaping
-        // strictJson removes unescaped newlines safely using negative lookbehind so we don't break already escaped ones
-        // Replace newlines ONLY inside double quotes
-        let strictJson = jsonStr.replace(/"(?:[^"\\]|\\.)*"/g, match => match.replace(/\n/g, "\\n").replace(/\r/g, ""));
-        // Strict JSON might fail if the model put text inside the array before the last bracket
-        // Let's remove any text between } and ] or } and { that is not a comma
-        strictJson = strictJson.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '');
-        strictJson = strictJson.replace(/<environment_details>[\s\S]*/, '');
-        strictJson = strictJson.replace(/}\s*[^,\]\{\[\}"]+\s*\]$/, '}]');
-        strictJson = strictJson.replace(/}\s*[^,\]\{\[\}"]+\s*{/g, '}, {');
-        
-        let calls = JSON.parse(strictJson);
-        if (!Array.isArray(calls)) calls = [calls];
-        
-        console.log(`[API] Parsed streaming tool calls: ${calls.length}`);
-        
-        const sent = this.sendToolCalls(calls);
-        if (sent > 0) finishReason = "tool_calls";
-        else this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
-      } catch (e) {
+
+      // Общая ладдер-лапка ремонтов из tool-calls.mjs: та же серия попыток,
+      // что и в non-stream дорожке (parseModelToolCalls), — дропнутые
+      // закрывающие кавычки, неэкранированные внутренние кавычки, пропавший
+      // ключ "arguments", обрезанный блок, мусор Reasoner'а.
+      const parsed = repairToolCallJson(jsonStr);
+      let calls = parsed ? (Array.isArray(parsed) ? parsed : [parsed]).flat(Infinity) : [];
+
+      // GUARD (инцидент 2026-10-23): output-лимит Qwen (~1k токенов на
+      // длинном контексте) обрывает блок посреди content; ремонт JSON
+      // «спасает» вызов БЕЗ хвостовых required-полей (path шёл после
+      // content) → Hermes отвечает missing required field → модель
+      // повторяет тот же oversized-вызов → вечный цикл guardrail.
+      // Такой калеченный вызов НЕ отправляем — возвращаем модели явную
+      // инструкцию дробить полезную нагрузку.
+      // toolsBuffer хранит блок БЕЗ заголовка ```tool_calls (парсер его
+      // срезает). Закрывающий fence = ПОСЛЕДНИЙ ``` с пробельным хвостом
+      // (внутренние markdown-фенсы в content не считаются).
+      const fenceClosed = closingFenceIndex(String(this.toolsBuffer || "")) !== -1;
+      if (!fenceClosed && calls.length) {
+        const check = normalizeToolCallsForSchemas(calls, this.tools);
+        if (check.errors.length) {
+          const missingList = check.errors
+            .map((e) => `${e.name}: ${e.missing.join(", ")}`)
+            .join("; ");
+          console.warn(`[API] Tool call truncated by output token limit (missing: ${missingList}) — refusing crippled call, asking model to split`);
+          compatLogger.warn("api.tool_call.truncated_guard", { missing: missingList });
+          this.sendChunk({
+            content: `\n[Tool call truncated by the output token limit — required fields were cut off (${missingList}). The call was NOT executed. Re-emit the tool call with a SMALLER payload: put short fields like path FIRST in the arguments object, and split large content into multiple sequential calls (write the first part, then append/patch the rest). Never repeat the identical oversized call.]`,
+          });
+          this.sendTerminalChunk("stop");
+          return;
+        }
+      }
+
+      let sent = calls.length ? this.sendToolCalls(calls) : 0;
+      if (sent > 0) {
+        console.log(`[API] Parsed streaming tool calls: ${sent}`);
+        finishReason = "tool_calls";
+      } else {
+        // Опциональный LLM-фолбэк (OpenRouter free-модели, включается через
+        // OPENROUTER_API_KEY): детерминированные ремонты не спасли блок
+        // (null) или дали пустой/безымянный результат — просим внешнюю
+        // модель починить JSON с фидбеком по итерациям.
+        let llmCalls = null;
         try {
-          let fixedJson = jsonStr.trim();
-          
-          // Let's first check if there are multiple top-level arrays.
-          // E.g. [ { "name": "read" } ] [ { "name": "grep" } ]
-          // A simple way is to wrap everything in [] and replace ][ with ],[
-          // Then flatten.
-          fixedJson = fixedJson.replace(/\]\s*\[/g, '],[');
-          fixedJson = fixedJson.replace(/\][^\[]*\[/g, '],['); // remove any text between arrays
-          
-          if (fixedJson.includes('],[')) {
-            if (!fixedJson.startsWith('[[')) fixedJson = '[' + fixedJson;
-            if (!fixedJson.endsWith(']]')) fixedJson = fixedJson + ']';
-          }
-
-          if (fixedJson.startsWith('[\n') || fixedJson.startsWith('[')) {
-             // Let's do a simple regex check if it's missing {
-          fixedJson = fixedJson.replace(/\[\s*"name"/g, '[{"name"');
-          // fixedJson = fixedJson.replace(/}\s*\]/g, '}]'); // removing this to avoid closing array issues
-          fixedJson = fixedJson.replace(/\[\n\s*"name"/g, '[\n  {"name"');
-          }
-          // Another reasoner mistake: multiple objects without comma
-          // e.g. [ { "name": "grep" ... } { "name": "read" ... } ]
-          fixedJson = fixedJson.replace(/}\s*{/g, '}, {');
-          // Also another mistake: [ "name": "read", "arguments": { ... } ] (missing { })
-          // If we see [ "name" we can replace it with [ {"name"
-          fixedJson = fixedJson.replace(/\[\s*"name"/g, '[ {"name"');
-          // If it ends with string or number and then ], it needs closing brace
-          fixedJson = fixedJson.replace(/(["\da-zA-Z])\s*\]$/, '$1}]');
-
-          // DeepSeek Reasoner might insert literal text inside the array, like:
-          // [ { ... } Now let me look at the dependencies... ]
-          // This completely breaks JSON. Let's try to remove any text between } and ]
-          // Also it inserts things like <environment_details>...
-          fixedJson = fixedJson.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '');
-          // Or sometimes just the opening tag with no closing...
-          fixedJson = fixedJson.replace(/<environment_details>[\s\S]*/, '');
-          fixedJson = fixedJson.replace(/}\s*[^,\]\{\[\}"]+\s*\]$/, '}]');
-          fixedJson = fixedJson.replace(/}\s*[^,\]\{\[\}"]+\s*{/g, '}, {');
-
-          // Reasoner may put literal unescaped newlines in content which causes JSON.parse to fail.
-          // We can replace them with \n using a safe function
-          // NOTE: We should NOT replace newlines that are already escaped, e.g. \\n.
-          // Wait, if it's literal \n inside string, replacing with \\n will make JSON parse it as \n.
-          // If the model truncated and just put `}]` at the end without closing the string, fix it:
-          fixedJson = fixedJson.replace(/([^"])\}\]$/, '$1"}}]');
-
-          fixedJson = fixedJson.replace(/"(?:[^"\\]|\\.)*"/g, match => match.replace(/\n/g, "\\n").replace(/\r/g, "")); // escape literal newlines in strings
-
-          // One more bug with DeepSeek Reasoner: it might use double arrays like [[{...}]] due to our wrapping above.
-          // JSON.parse will handle it, and flat(Infinity) will flatten it.
-          
-          let calls = JSON.parse(fixedJson);
-          if (!Array.isArray(calls)) calls = [calls];
-          // Flatten if we wrapped it
-          calls = calls.flat(Infinity);
-          
-          console.log(`[API] Parsed streaming tool calls (after brace fix): ${calls.length}`);
-          
-          const sent = this.sendToolCalls(calls);
-          if (sent > 0) finishReason = "tool_calls";
-          else this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
-        } catch (e2) {
-          console.error("[API] Error parsing tool calls from streaming response:", e2.message);
-          fs.writeFileSync("/tmp/failed_json.txt", jsonStr); console.error("[API] Problematic JSON string was:\n", JSON.stringify(jsonStr));
+          llmCalls = await repairToolCallJsonWithLlm(jsonStr, { tools: this.tools });
+        } catch { /* фолбэк не должен ронять ответ */ }
+        if (llmCalls && llmCalls.length) {
+          console.log(`[API] Parsed streaming tool calls: ${llmCalls.length} (LLM fallback)`);
+          sent = this.sendToolCalls(llmCalls);
+        }
+        if (sent > 0) {
+          finishReason = "tool_calls";
+        } else if (parsed) {
+          console.error("[API] Tool call block parsed to an empty call list");
+          this.sendChunk({ content: "[Error] Upstream model returned an empty tool call. Retry the request." });
+        } else {
+          console.error("[API] Error parsing tool calls from streaming response");
+          // Дамп сломанного JSON для диагностики: os.tmpdir() кроссплатформенен
+          // (жёсткий /tmp не существует на Windows и ронял стрим-закрытие).
+          try {
+            fs.writeFileSync(path.join(os.tmpdir(), "failed_json.txt"), jsonStr);
+          } catch { /* диагностика не должна ломать ответ */ }
+          console.error("[API] Problematic JSON string was:\n", JSON.stringify(jsonStr));
           // Fallback: send as normal text so the UI doesn't hang completely
           this.sendChunk({ content: "\n[Error parsing tool call JSON from model]\n" + jsonStr });
         }
+      }
+    }
+    // Детектор фабрикации: ход с запрошенными инструментами выдал прозу с
+    // заявлением о «сломанных инструментах» и НОЛЬ вызовов. По факту всех
+    // инцидентов 2026-09 это модельный артефакт («режим эссе» с выдуманным
+    // оправданием), а не реальный сбой — логируем для мгновенной диагностики.
+    if (!this.isTools && !this.isXmlTools && !this.isBareTools && this.tools.length > 0) {
+      const text = String(this.rawText || "");
+      // Широкий паттерн по живым формулировкам инцидентов (2026-09-15):
+      // «инструменты не существуют», «сервис… инструментов полностью недоступен»,
+      // «does not exists», «tools are broken».
+      if (/\bdoes not exists?\b|инструмент[а-яё]*[^\n.]{0,60}(недоступн|сломан|не\s+работа|не\s+существ)|tool\s+execution\s+backend[^\n.]{0,60}недоступн|tools?\s+(are\s+)?(broken|unavailable|failing)/i.test(text)) {
+        const message = "[API] Model claims tool failure but no tool calls were emitted this turn (fabrication signature; executor logs will confirm)";
+        console.warn(message);
+        compatLogger.warn("api.tool_failure_claim_without_calls", { chars: text.length });
       }
     }
     this.sendTerminalChunk(finishReason);
@@ -1621,9 +2344,11 @@ export class StreamParser {
       compatLogger.warn("api.tool_call.validation", { errors: normalized.errors });
     }
     let sent = 0;
+    const deliveredNames = [];
     normalized.calls.forEach((call, index) => {
       const name = call.name || call.tool;
       if (!name) return;
+      deliveredNames.push(name);
       this.sendChunk({
         tool_calls: [{
           index,
@@ -1637,6 +2362,12 @@ export class StreamParser {
       });
       sent += 1;
     });
+    // Структурное событие доставки: доказывает в файловом логе, что вызовы
+    // реально ушли клиенту (диагностика «блокер-репортов» про несуществующие
+    // инструменты — консольные логи теряются при перезапуске/пайпах).
+    if (sent > 0) {
+      compatLogger.info("api.tool_calls.delivered", { count: sent, names: deliveredNames.join(",") });
+    }
     return sent;
   }
 

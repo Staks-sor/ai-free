@@ -57,6 +57,7 @@
     "api": "node ./bin/deepseek.mjs --api",
     "login": "node ./bin/deepseek.mjs --login",
     "login-qwen": "node ./bin/deepseek.mjs --login-qwen",
+    "health-qwen": "node ./bin/deepseek.mjs --health-qwen",
     "import-qwen": "node ./bin/deepseek.mjs --import-qwen",
     "login-chatgpt": "node ./bin/deepseek.mjs --login-chatgpt",
     "import-chatgpt": "node ./bin/deepseek.mjs --import-chatgpt",

@@ -4,6 +4,10 @@ export async function runWithEmptyStreamRetry({
   beforeRetry = null,
   maxAttempts = 2,
   requireDelta = false,
+  // Экспоненциальный backoff между ретраями пустого стрима: base, 2*base…
+  // capped. По умолчанию base=1000ms, cap=30s. Тесты инжектят base=1.
+  backoffBaseMs = 1000,
+  backoffCapMs = 30_000,
 }) {
   let emitted = false;
   const emit = (delta) => {
@@ -20,6 +24,11 @@ export async function runWithEmptyStreamRetry({
       return result;
     } catch (error) {
       if (emitted || error?.code !== "EMPTY_UPSTREAM_STREAM" || attempt >= maxAttempts) throw error;
+      // Пауза перед повторной попыткой: на деградированных днях Qwen может
+      // «остыть» за пару секунд; мгновенный повтор только разгоняет
+      // риск-скоринг Baxia.
+      const delayMs = Math.min(backoffBaseMs * 2 ** (attempt - 1), backoffCapMs);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
       await beforeRetry?.({ attempt, error });
     }
   }

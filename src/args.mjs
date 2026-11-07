@@ -56,6 +56,7 @@ export function parseArgs(argv) {
     else if (arg === "--login") args.login = true;
     else if (arg === "--save-creds") args.saveCreds = true;
     else if (arg === "--login-qwen") args.loginQwen = true;
+    else if (arg === "--health-qwen") args.healthQwen = true;
     else if (arg === "--import-qwen") args.importQwenFile = argv[++i];
     else if (arg === "--login-chatgpt") args.loginChatGPT = true;
     else if (arg === "--import-chatgpt") args.importChatGPTFile = argv[++i];
@@ -114,6 +115,7 @@ Options:
   --auth-file FILE    Saved auth file, default ~/.deepseek-cli/auth.json
   --login             Open a remembered browser profile and save cookies/token
   --login-qwen        Same but for chat.qwen.ai (separate profile, separate auth)
+  --health-qwen       Check all Qwen accounts health (no menu, exit code = alive count)
   --import-qwen FILE  Import Qwen cookies from a Chrome JSON export (bypasses anti-bot)
   --login-chatgpt     Same but for chatgpt.com (separate profile, separate auth)
   --import-chatgpt FILE Import ChatGPT session from a JSON export (containing accessToken/sessionToken)

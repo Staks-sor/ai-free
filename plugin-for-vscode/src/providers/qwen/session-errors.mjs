@@ -74,6 +74,7 @@ export function isQwenSessionExpiredText(text = "") {
   const source = String(text || "");
   const blob = source.toLowerCase();
   if (!blob) return false;
+  // Login-page HTML is authoritative regardless of length.
   if (/<!doctype html|<html[\s>]/i.test(blob) && /login|sign.?in|auth/i.test(blob)) return true;
   const looksLikeAssistantProse = source.length > 300 || /\n/.test(source.slice(0, 300));
   if (!looksLikeAssistantProse && /unauthorized|not logged|login required|token expired|session expired|invalid token/i.test(blob)) {

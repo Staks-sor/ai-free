@@ -80,6 +80,18 @@ describe("architecture invariants", () => {
     assert.equal(uiModelCatalog().providers.qwen.models.some((model) => model.id === "qwen3.8-max-preview"), false);
   });
 
+  it("exposes a Fast variant of the Qwen flagship with thinking off", () => {
+    // «Быстрый» режим web-морды: то же ядро, feature_config.thinking_enabled=false.
+    // Агентные tool-задачи Hermes уходят на него, чтобы не жечь выходной
+    // бюджет на thinking-фазы (инциденты «режима эссе» 2026-09).
+    const fast = OPENAI_COMPAT_MODELS.find((model) => model.name === "qwen3.8-max-fast");
+    assert.ok(fast, "expected qwen3.8-max-fast in the compat mapping");
+    assert.equal(fast.provider, "qwen");
+    assert.equal(fast.model, "qwen3.8-max");
+    assert.equal(fast.reasoning, false);
+    assert.ok(modelsList().data.some((model) => model.id === "qwen3.8-max-fast"));
+  });
+
   it("replaces stale Qwen fallback models with the live API catalog", () => {
     const liveQwen = [{ id: "qwen4-preview", label: "Qwen4 Preview" }];
     const ids = modelsList({ qwen: { models: liveQwen } }).data

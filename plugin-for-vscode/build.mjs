@@ -21,6 +21,8 @@ const requiredPaths = [
   "src/window-app/ui-html.mjs",
   "api/models.mjs",
   "api/openai-handler.mjs",
+  "api/tool-calls.mjs",
+  "api/tool-call-llm-repair.mjs",
   "packages/core/src/index.mjs",
 ];
 

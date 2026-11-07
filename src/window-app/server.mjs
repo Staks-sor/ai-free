@@ -99,6 +99,38 @@ export function isChatGPTLoginRecoveryRequired(error) {
     || /сессия истекла|session expired|not logged in|HTTP 401|unauthorized|вход не завершён|поле ввода|composer|cloudflare|проверку/i.test(message);
 }
 
+// Бинд сервера на loopback с ретраями по EADDRINUSE: рестарт сразу после
+// Ctrl+C гонится с graceful-shutdown предыдущего инстанса, который держит
+// порт ещё ~2 секунды. Другие ошибки (EACCES/EINVAL) не ретраятся.
+export async function listenLoopbackWithRetry(server, port, {
+  retries = 20,
+  delayMs = 500,
+  onRetry,
+} = {}) {
+  let lastError = null;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (error) => {
+          server.removeListener("error", onError);
+          reject(error);
+        };
+        server.once("error", onError);
+        server.listen(port, "127.0.0.1", () => {
+          server.removeListener("error", onError);
+          resolve();
+        });
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== "EADDRINUSE" || attempt >= retries) throw error;
+      if (onRetry) onRetry(attempt + 1);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 export async function runWindowApp({
   client,
   workspaceRoot,
@@ -2310,9 +2342,11 @@ export async function runWindowApp({
     socket.destroy();
   });
 
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
+  // Рестарт-гонка: предыдущий инстанс при graceful-shutdown закрывает HTTP-
+  // сервер последним (~2 с после банера остановки). Вместо мгновенного
+  // EADDRINUSE ждём освобождение порта.
+  await listenLoopbackWithRetry(server, port, {
+    onRetry: (attempt) => logConsole(`[server] порт ${port} ещё занят предыдущим инстансом (попытка ${attempt})…`),
   });
 
   const url = `http://127.0.0.1:${port}`;

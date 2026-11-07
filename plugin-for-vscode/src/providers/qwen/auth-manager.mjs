@@ -52,6 +52,16 @@ export class QwenAuthManager {
       );
     }
 
+    // Инцидент 03.10 00:0x: сервер в --no-window открыл РУЧНОЕ окно логина
+    // посреди прод-запроса, когда пул умер. Если автологин включён — ручное
+    // окно не открываем никогда: ошибка уйдёт наверх, ротация/автологин
+    // хендлера подхватит (logins.txt, headless).
+    if (process.env.QWEN_AUTOLOGIN !== "0" && process.env.QWEN_AUTOLOGIN_NO_WINDOW !== "0") {
+      throw new Error(
+        "Qwen session invalid; автологин включён — ручное окно не открываю (ротация сделает это сама, headless)",
+      );
+    }
+
     this._consecutiveFailures += 1;
     if (this._consecutiveFailures > 3) {
       throw new Error("Too many failed Qwen re-login attempts. Aborting to avoid loop.");
