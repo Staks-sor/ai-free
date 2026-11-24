@@ -12,7 +12,8 @@ permissions:
 jobs:
   test:
     name: Tests and architecture checks
-    runs-on: ubuntu-latest
+    # Playwright 1.60 supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
