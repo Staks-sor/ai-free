@@ -41,16 +41,17 @@ describe("computer service", () => {
 
   it("normalizes aliases and returns explicit logical and pixel screenshot geometry", async () => {
     let message;
+    const display = { platform: "linux", env: { DISPLAY: ":0" } };
     const result = await executeComputerTool(
       { tool: "computer_key", key: "cmd+space" },
-      { workerFactory: () => ({ run: async (value) => { message = value; return { ok: true, key: value.key }; } }) },
+      { ...display, workerFactory: () => ({ run: async (value) => { message = value; return { ok: true, key: value.key }; } }) },
     );
     assert.deepEqual(message.key, { key: "space", modifiers: ["command"] });
     assert.deepEqual(result, { ok: true, key: { key: "space", modifiers: ["command"] } });
 
     const screenshot = await executeComputerTool(
       { tool: "computer_snapshot" },
-      { workerFactory: fakeWorker({ ok: true, screenshot: { base64: "AA==", width: 3840, height: 2160, logicalWidth: 1920, logicalHeight: 1080 } }) },
+      { ...display, workerFactory: fakeWorker({ ok: true, screenshot: { base64: "AA==", width: 3840, height: 2160, logicalWidth: 1920, logicalHeight: 1080 } }) },
     );
     assert.deepEqual(screenshot.screenshot, { mime: "image/png", base64: "AA==", width: 3840, height: 2160, logicalWidth: 1920, logicalHeight: 1080 });
   });

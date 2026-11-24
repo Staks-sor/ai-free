@@ -29,6 +29,9 @@ describe("duplicate module inventory", () => {
     const identicalPaths = inventory.identical.map((item) => item.desktopPath);
     assert.ok(identicalPaths.includes("src/state/window-state.mjs"));
     assert.ok(identicalPaths.includes("src/window-app/web-browser.mjs"));
+    for (const name of ["index", "roles", "team-manager", "team-runner"]) {
+      assert.ok(identicalPaths.includes(`src/agent-team/${name}.mjs`), "Agent team modules ship in both runtimes");
+    }
     for (const item of inventory.platformSpecific) {
       assert.ok(item.reason && item.reason.length > 10, "Platform difference must have documented reason");
     }

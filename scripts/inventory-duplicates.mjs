@@ -10,12 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const KNOWN_PLATFORM_SPECIFIC = new Map();
 
 // Модули, присутствующие только в Desktop-версии
-export const KNOWN_DESKTOP_ONLY = new Set([
-  "src/agent-team/index.mjs",
-  "src/agent-team/roles.mjs",
-  "src/agent-team/team-manager.mjs",
-  "src/agent-team/team-runner.mjs",
-]);
+export const KNOWN_DESKTOP_ONLY = new Set();
 
 // Модули, присутствующие только в VS Code расширении
 export const KNOWN_VSCODE_ONLY = new Set([
@@ -26,8 +21,8 @@ function hashContent(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
-function listTrackedFiles(baseDir) {
-  const output = execFileSync("git", ["ls-files", "-z", "--", baseDir], {
+function listRuntimeFiles(baseDir) {
+  const output = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", baseDir], {
     cwd: root,
     encoding: "utf8",
   });
@@ -43,7 +38,7 @@ function scanFiles(baseDir) {
   const absBase = path.join(root, baseDir);
   if (!fs.existsSync(absBase)) return result;
 
-  for (const rel of listTrackedFiles(baseDir)) {
+  for (const rel of listRuntimeFiles(baseDir)) {
     const fullPath = path.join(absBase, rel);
     if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) continue;
     const content = fs.readFileSync(fullPath);
