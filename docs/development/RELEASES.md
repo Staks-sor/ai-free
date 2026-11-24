@@ -12,7 +12,7 @@
 
 Локально 1754/1754 тестов, 193 набора, 16 порогов покрытия, проверка инвариантов, VS Code package и Gradle test/buildPlugin прошли. Desktop ZIP проверен на macOS с чистым и существующим хранилищем. Все архивы совпадают с 298 общими runtime-файлами, плагины содержат по шесть нативных сборок. Реальные ответы AI и запуск приложений на Windows/Linux в этом релизе не проверялись.
 
-Marketplace ждут доступа к кабинетам издателя. VS Code `developers-daily-life.ai-free-vscode`, JetBrains `ru.stas-sor.ai-free` (33364). ID и версии проверены в архивах. CI закреплён на Ubuntu 24.04. Исправлены зависимость теста от реального X11 и устаревший список различий Desktop/VS Code. Два набора проверок прошли 12/12.
+Marketplace ждут доступа к кабинетам издателя. VS Code `developers-daily-life.ai-free-vscode`, JetBrains `ru.stas-sor.ai-free` (33364). ID и версии проверены в архивах. CI исправлен: Ubuntu 24.04 для Playwright, независимый от X11 тест и актуальная проверка зеркала. На коммите `e67c553` [все четыре работы CI прошли](https://github.com/Staks-sor/ai-free/actions/runs/45499723932).
 
 ## 0.5.64
 
