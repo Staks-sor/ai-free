@@ -6,7 +6,6 @@
 // с предварительной очисткой cookies сессии.
 
 import fs from "node:fs";
-import { DEFAULT_BROWSER_PROFILE } from "../config.mjs";
 import {
   clearProfileSession,
   loginAndSaveAuth,
@@ -14,8 +13,9 @@ import {
 } from "../browser/login.mjs";
 
 export class AuthManager {
-  constructor({ authFile, debug = false, autoVisible = true }) {
+  constructor({ authFile, debug = false, autoVisible = true, browserOptions = {} }) {
     this.authFile = authFile;
+    this.browserOptions = browserOptions;
     this.debug = debug;
     this.autoVisible = autoVisible;
     this._inFlight = null;
@@ -36,7 +36,7 @@ export class AuthManager {
     if (!forceVisible && fs.existsSync(this.authFile)) {
       try {
         if (this.debug) console.error("[auth] trying silent (headless) refresh from saved profile...");
-        const auth = await refreshAuthFromProfile(this.authFile);
+        const auth = await refreshAuthFromProfile(this.authFile, this.browserOptions);
         this._consecutiveFailures = 0;
         console.log("🔄 Auth refreshed silently from saved profile.");
         return auth;
@@ -56,12 +56,12 @@ export class AuthManager {
 
     console.log("\n🔒 DeepSeek session expired. Clearing stale session and opening login window...");
     try {
-      await clearProfileSession(DEFAULT_BROWSER_PROFILE);
+      await clearProfileSession(this.browserOptions);
     } catch (error) {
       if (this.debug) console.error(`[auth] could not clear profile session (continuing): ${error.message}`);
     }
 
-    const auth = await loginAndSaveAuth(this.authFile);
+    const auth = await loginAndSaveAuth(this.authFile, this.browserOptions);
     this._consecutiveFailures = 0;
     console.log("✅ Re-login completed. Resuming...");
     return auth;

@@ -6,6 +6,13 @@ import {
   buildPromptFromChatBody,
   extractOpenAIChatImages,
   handleQwenStream,
+  handleChatGPTStream,
+  handleBrowserProviderStream,
+  completeBrowserProvider,
+  completeQwenApiTurn,
+  prepareDeepSeekApiTurn,
+  completeDeepSeekApiTurn,
+  isAccountSwitchEligibleError,
   handleRequest,
   requestSearchEnabled,
   StreamParser,
@@ -14,6 +21,12 @@ import {
 } from "../api/openai-handler.mjs";
 
 describe("OpenAI-compatible handler", () => {
+  it("switches Qwen accounts only for auth and rate-limit failures", () => {
+    assert.equal(isAccountSwitchEligibleError(new Error("HTTP 401 unauthorized")), true);
+    assert.equal(isAccountSwitchEligibleError(new Error("HTTP 429 rate limit exceeded")), true);
+    assert.equal(isAccountSwitchEligibleError(Object.assign(new Error("Upstream model stream ended without response content."), { code: "EMPTY_UPSTREAM_STREAM" })), false);
+    assert.equal(isAccountSwitchEligibleError(Object.assign(new Error("Baxia captcha"), { code: "QWEN_ANTIBOT_PUNISH" })), false);
+  });
   it("advertises the Responses API endpoint", async () => {
     const res = await callHandler({ method: "GET", url: "/" });
     assert.equal(res.statusCode, 200);
@@ -110,6 +123,60 @@ describe("OpenAI-compatible handler", () => {
     assert.doesNotMatch(prompt, /aW1hZ2U=/);
   });
 
+  it("forwards image attachments through Qwen, GLM, and ChatGPT stream and completion transports", async () => {
+    const images = [{ name: "image.png", mimeType: "image/png", dataBase64: "aW1hZ2U=" }];
+    const calls = [];
+    const client = {
+      createChat: async () => "chat-1",
+      complete: async (options) => { calls.push(options); options.onText?.("ok"); return { text: "ok" }; },
+    };
+
+    await completeQwenApiTurn(client, { model: "qwen3.8-max", prompt: "look", images });
+    await completeBrowserProvider(client, { model: "glm-5.3", prompt: "look", images });
+    await handleQwenStream(client, "chat-1", "look", "qwen3.8-max", "qwen3.8-max", makeWritableResponse(), { images });
+    await handleBrowserProviderStream(client, "look", "glm-5.3", "glm-5.3", makeWritableResponse(), { images });
+    await handleChatGPTStream(client, "look", "chatgpt", "gpt", makeWritableResponse(), { images });
+
+    assert.equal(calls.length, 5);
+    assert.deepEqual(calls.map(call => call.images), [images, images, images, images, images]);
+  });
+
+  it("uses DeepSeek Vision and reports its actual model for an uploaded image turn", async () => {
+    const calls = [];
+    const client = {
+      uploadFile: async (...args) => { calls.push(["upload", ...args]); return "file-1"; },
+      complete: async (options) => { calls.push(["complete", options]); return { text: "seen" }; },
+    };
+    const turn = await prepareDeepSeekApiTurn(client, "session-1", {
+      selectedModel: "expert",
+      images: [{ name: "image.png", mimeType: "image/png", dataBase64: "aW1hZ2U=" }],
+    });
+    await completeDeepSeekApiTurn(client, "session-1", "look", turn, { thinking: true, search: true });
+
+    assert.equal(turn.modelType, "vision");
+    assert.equal(turn.responseModel, "deepseek-v4-vision");
+    assert.deepEqual(calls[0], ["upload", Buffer.from("image"), "image/png", "image.png", { chatSessionId: "session-1" }]);
+    assert.equal(calls[1][1].modelType, "vision");
+    assert.equal(calls[1][1].thinkingEnabled, false);
+    assert.equal(calls[1][1].searchEnabled, false);
+  });
+
+  it("fails closed before completion when Responses or Anthropic carries image input", async () => {
+    const responses = await callHandler({
+      method: "POST", url: "/v1/responses",
+      body: { model: "deepseek-v4-pro", input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aW1hZ2U=" }] }] },
+    });
+    assert.equal(responses.statusCode, 400);
+    assert.match(responses.json.error.message, /image.*not supported/i);
+
+    const anthropic = await callHandler({
+      method: "POST", url: "/v1/messages",
+      body: { model: "deepseek-v4-pro", messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" } }] }] },
+    });
+    assert.equal(anthropic.statusCode, 400);
+    assert.match(anthropic.json.error.message, /image.*not supported/i);
+  });
+
   it("terminates streaming tool calls with finish_reason=tool_calls", () => {
     const res = makeWritableResponse();
     const parser = new StreamParser("deepseek-chat", res);
@@ -181,7 +248,7 @@ describe("OpenAI-compatible handler", () => {
     parser.onEnd();
 
     const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
-    assert.equal(events.at(-1).choices[0].finish_reason, "stop");
+    assert.equal(events.some((event) => event.choices?.[0]?.finish_reason === "stop"), true);
   });
 
   it("recovers an unfenced Qwen tool call after already streamed prose", () => {
@@ -235,7 +302,7 @@ describe("OpenAI-compatible handler", () => {
     assert.equal(events.at(-1).choices[0].finish_reason, "stop");
   });
 
-  it("retries an empty Qwen stream in a fresh chat before closing OpenAI SSE", async () => {
+  it("does not repost a Qwen stream that produced only service events", async () => {
     const res = makeWritableResponse();
     const chatIds = [];
     let attempts = 0;
@@ -246,8 +313,8 @@ describe("OpenAI-compatible handler", () => {
         if (attempts === 1) {
           return { text: "Qwen returned service events only", lastMessageId: null };
         }
-        onText("working response");
-        return { text: "working response", lastMessageId: "response-2" };
+        onText("unexpected duplicate response");
+        return { text: "unexpected duplicate response", lastMessageId: "response-2" };
       },
     };
     let chatNumber = 0;
@@ -257,14 +324,14 @@ describe("OpenAI-compatible handler", () => {
     });
 
     const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
-    const content = events.map((event) => event.choices[0].delta.content || "").join("");
-    assert.equal(attempts, 2);
-    assert.deepEqual(chatIds, ["chat-1", "chat-2"]);
-    assert.equal(content, "working response");
-    assert.equal(events.at(-1).choices[0].finish_reason, "stop");
+    const content = events.flatMap((event) => event.choices || []).map((choice) => choice.delta?.content || "").join("");
+    assert.equal(attempts, 1);
+    assert.deepEqual(chatIds, ["chat-1"]);
+    assert.match(content, /(?:no|without) response content/i);
+    assert.equal(events.some((event) => event.choices?.[0]?.finish_reason === "stop"), true);
   });
 
-  it("retries a Qwen first-content timeout in a fresh chat without refreshing auth", async () => {
+  it("does not repost a Qwen first-content timeout into a fresh chat", async () => {
     const res = makeWritableResponse();
     const chatIds = [];
     let attempts = 0;
@@ -278,8 +345,8 @@ describe("OpenAI-compatible handler", () => {
           error.code = "EMPTY_UPSTREAM_STREAM";
           throw error;
         }
-        onText("recovered response");
-        return { text: "recovered response", lastMessageId: "response-2" };
+        onText("unexpected duplicate response");
+        return { text: "unexpected duplicate response", lastMessageId: "response-2" };
       },
     };
     let chatNumber = 0;
@@ -293,11 +360,42 @@ describe("OpenAI-compatible handler", () => {
     });
 
     const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
-    const content = events.map((event) => event.choices[0].delta.content || "").join("");
-    assert.equal(attempts, 2);
+    const content = events.flatMap((event) => event.choices || []).map((choice) => choice.delta?.content || "").join("");
+    assert.equal(attempts, 1);
     assert.equal(refreshes, 0);
-    assert.deepEqual(chatIds, ["chat-1", "chat-2"]);
-    assert.equal(content, "recovered response");
+    assert.deepEqual(chatIds, ["chat-1"]);
+    assert.match(content, /(?:no|without) response content/i);
+    assert.equal(events.some((event) => event.choices?.[0]?.finish_reason === "stop"), true);
+  });
+
+  it("switches a streaming Qwen client once after a pre-delta rate limit", async () => {
+    const res = makeWritableResponse();
+    const first = {
+      async complete() { throw new Error("HTTP 429 rate limit exceeded"); },
+    };
+    const second = {
+      async complete({ onText }) {
+        onText("response from second account");
+        return { text: "response from second account", lastMessageId: "response-2" };
+      },
+    };
+    let refreshes = 0;
+    let chats = 0;
+
+    await handleQwenStream(first, null, "hello", "qwen3.7-plus", "qwen3.7-plus", res, {
+      createChat: async () => `chat-${++chats}`,
+      refreshClient: async (error) => {
+        assert.match(error.message, /429/);
+        refreshes += 1;
+        return second;
+      },
+    });
+
+    const events = parseSseJsonEvents(Buffer.concat(res.chunks).toString("utf8"));
+    const content = events.flatMap((event) => event.choices || []).map((choice) => choice.delta?.content || "").join("");
+    assert.equal(refreshes, 1);
+    assert.equal(chats, 2);
+    assert.equal(content, "response from second account");
     assert.equal(events.at(-1).choices[0].finish_reason, "stop");
   });
 

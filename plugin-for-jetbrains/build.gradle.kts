@@ -1,5 +1,6 @@
 import org.jetbrains.intellij.platform.gradle.tasks.PrepareSandboxTask
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.jvm.tasks.Jar
 
 plugins {
     id("org.jetbrains.kotlin.jvm") version "2.2.20"
@@ -36,7 +37,7 @@ kotlin {
 intellijPlatform {
     pluginConfiguration {
         id = "ru.stas-sor.ai-free"
-        name = "AI Free Chat & Agent"
+        name = "SYNVOX"
         version = project.version.toString()
         ideaVersion {
             sinceBuild = providers.gradleProperty("pluginSinceBuild")
@@ -46,10 +47,14 @@ intellijPlatform {
             url = "https://github.com/Staks-sor/ai-free"
         }
         description = """
-            AI Free inside PyCharm: DeepSeek, Qwen and ChatGPT chats,
-            coding agents, project tools, memory, voice input and local APIs.
+            SYNVOX brings local AI chat and coding agents to PyCharm. Use DeepSeek, Qwen,
+            ChatGPT, Google AI Mode, and GLM with project tools, memory, voice input, and
+            local OpenAI- and Anthropic-compatible APIs.
+            SYNVOX is free for personal use. No SYNVOX activation, subscription or trial.
+            Connect your AI accounts in Settings → Accounts. Provider policies and limits apply.
+            Documentation and terms: https://synvox.pro/
         """.trimIndent()
-        changeNotes = "Recovered unfenced Qwen tool calls for OpenAI-compatible agents, extended slow-stream timeouts, fixed false Qwen session expiry, and moved shared pure modules into packages/core."
+        changeNotes = "SYNVOX 0.5.65 is free for personal use without activation, a subscription or trial. Adds in-app announcements. Local chats, settings and provider accounts stay available on update. AI providers retain their own sign-in and usage limits."
     }
     pluginVerification {
         ides {
@@ -72,8 +77,19 @@ val syncAiFreeRuntime by tasks.registering(Sync::class) {
         exclude("plugin-for-vscode/**")
         exclude("plugin-for-jetbrains/**")
         exclude("test/**")
+        exclude("api/README.md")
+        exclude(".env", ".env.*", "**/.env", "**/.env.*", "**/.npmrc")
+        exclude { it.file.extension == "pem" && it.file.name != "merchant-public.pem" }
+        exclude("**/*.key", "**/*.p12", "**/*.pfx")
+        exclude("**/credentials.json", "**/cookies.json")
+        exclude("**/.git/**", "**/.github/**", "**/.idea/**", "**/.vscode/**")
+        exclude("**/.playwright-cli/**", "**/coverage/**", "output/**")
         exclude("node_modules/.cache/**")
+        exclude("node_modules/.package-lock.json")
         exclude("node_modules/fsevents/**")
+        exclude("node_modules/**/.git/**", "node_modules/**/.github/**")
+        exclude("node_modules/**/test/**", "node_modules/**/tests/**", "node_modules/**/__tests__/**", "node_modules/**/coverage/**")
+        exclude("node_modules/**/*.map")
         exclude("**/.DS_Store")
     }
     into(layout.buildDirectory.dir("ai-free-runtime"))
@@ -88,4 +104,8 @@ tasks.withType<PrepareSandboxTask>().configureEach {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.withType<Jar>().configureEach {
+    manifest.attributes["Implementation-Version"] = project.version.toString()
 }

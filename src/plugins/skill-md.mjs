@@ -30,14 +30,22 @@ function parseAllowedTools(meta = {}) {
   return [];
 }
 
-export function loadSkillMdFile(skillMdPath, { fallbackId = "", pluginId = null } = {}) {
-  const raw = fs.readFileSync(skillMdPath, "utf8");
+export function loadSkillMdFile(skillMdPath, { fallbackId = "", pluginId = null, metadataOnly = false } = {}) {
+  let raw;
+  if (metadataOnly) {
+    const fd = fs.openSync(skillMdPath, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(fs.fstatSync(fd).size, 8192));
+      const read = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      raw = buffer.subarray(0, read).toString("utf8");
+    } finally { fs.closeSync(fd); }
+  } else raw = fs.readFileSync(skillMdPath, "utf8");
   const { meta, content } = parseFrontmatter(raw);
   const skillName = slugify(meta.name || fallbackId || skillMdPath.split("/").slice(-2, -1)[0]);
   const id = pluginId ? `${pluginId}:${skillName}` : skillName;
-  const prompt = String(content || "").trim();
+  const prompt = metadataOnly ? "" : String(content || "").trim();
 
-  if (!prompt && !meta.description) {
+  if (!metadataOnly && !prompt && !meta.description) {
     throw new Error(`SKILL.md is empty: ${skillMdPath}`);
   }
 
@@ -48,7 +56,7 @@ export function loadSkillMdFile(skillMdPath, { fallbackId = "", pluginId = null 
     name: meta.name || skillName,
     description: meta.description || "",
     version: meta.version || "0.0.0",
-    prompt: prompt || String(meta.description || "").trim(),
+    prompt: metadataOnly ? "" : prompt || String(meta.description || "").trim(),
     commands: parseAllowedTools(meta),
     permissions: [],
     source: skillMdPath,

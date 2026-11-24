@@ -9,6 +9,7 @@ export function buildQwenCompletionPayload({
   model,
   thinking = false,
   search = false,
+  files = null,
 } = {}) {
   const fid = randomUUID();
   const assistantFid = randomUUID();
@@ -19,21 +20,26 @@ export function buildQwenCompletionPayload({
     stream: true,
     version: "2.1",
     incremental_output: true,
+    chatId,
+    parentId: parentId ?? "",
     chat_id: chatId,
     chat_mode: "normal",
     model,
     parent_id: parentId,
     messages: [
       {
+        id: null,
         fid,
         parentId,
+        parent_id: parentId,
         childrenIds: [assistantFid],
         role: "user",
         content: String(prompt || ""),
         user_action: "chat",
-        files: [],
+        files: Array.isArray(files) && files.length ? files : [],
         timestamp,
         models: [model],
+        model: "",
         chat_type: "t2t",
         feature_config: {
           thinking_enabled: enableThinking,

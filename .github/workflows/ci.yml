@@ -22,7 +22,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -35,12 +35,37 @@ jobs:
         working-directory: plugin-for-vscode
         run: npm ci --ignore-scripts
 
+      - name: Install Chromium for payment callback regression tests
+        run: npx playwright install --with-deps chromium
+
       - name: Check versions, catalogs, EconomyOS, and artifacts
         run: npm run check:ci
 
       - name: Run tests
-        run: npm test
+        run: npm run test:coverage
 
       - name: Check VS Code extension build
         working-directory: plugin-for-vscode
         run: npm run build
+
+  platform-runtime:
+    name: Native runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Linux X11 runtime libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxtst6 libxrandr2 libxi6 xvfb
+      - name: Install dependencies with native addon scripts
+        run: npm ci
+      - name: Load native desktop and browser runtimes
+        run: node scripts/verify-platform-runtime.mjs

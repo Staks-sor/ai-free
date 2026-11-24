@@ -1,3 +1,4 @@
+import { measureProviderExchange } from "../../diagnostics/runtime-metrics.mjs";
 // HTTP-клиент chat.qwen.ai.
 // API: POST /api/v2/chat/completions?chat_id=<id> со стримингом SSE.
 // Auth — через cookies (JWT в куке `token`).
@@ -10,7 +11,9 @@
 // формат SSE-событий) могут потребовать корректировки после первой попытки.
 
 import { randomUUID } from "node:crypto";
+import { qwenQuotaError } from "./account-session.mjs";
 import fs from "node:fs";
+import { setTimeout as abortableDelay } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import { QWEN_BASE_URL, QWEN_DEFAULT_MODEL } from "./config.mjs";
@@ -29,13 +32,23 @@ import {
 } from "./session-errors.mjs";
 import { getQwenBrowserProxy, resetQwenBrowserProxy } from "./browser-proxy.mjs";
 import { buildQwenCompletionPayload } from "./completion-payload.mjs";
+import { resolveQwenContextFileConfig, splitPromptForFileUpload, uploadQwenContextFile } from "./context-file.mjs";
+import { harvestQwenChatMessage, harvestTransportFailedCompletion, harvestQwenCheckpoint } from "./harvest.mjs";
+import { waitForQwenCompletionSlot, waitForQwenDispatchSlot, createQwenPunishError, qwenAntibotCooldownRemainingMs, startQwenPunishCooldown, registerQwenCompletionSuccess, registerQwenRetryAfter } from "./request-pacing.mjs";
 import { createFileLogger } from "../../logging/logger.mjs";
 
 const providerLogger = createFileLogger({ component: "provider.qwen" });
 
 export function isQwenTransientBrowserTransportError(error) {
   const message = String(error?.message || error || "");
-  return /Execution context was destroyed|most likely because of a navigation|Target closed|Page closed|Context closed|Timeout .* exceeded|qwen_page_evaluate_timeout|net::ERR_ABORTED|Failed to fetch|request is finished/i.test(message);
+  return error?.code === "QWEN_BROWSER_TRANSPORT_FAILURE"
+    || /Execution context was destroyed|most likely because of a navigation|Target closed|Page closed|Context closed|Timeout .* exceeded|qwen_page_evaluate_timeout|qwen_response_headers_timeout|net::ERR_ABORTED|NS_BINDING_ABORTED|NS_ERROR_NET_TIMEOUT|Failed to fetch|request is finished/i.test(message);
+}
+
+export function qwenBrowserFetchError(result) {
+  if (Number(result?.status) !== 0) return null;
+  const detail = String(result?.text || "").match(/__fetch_error__:\s*([^\n]+)/)?.[1] || "запрос прерван до HTTP-ответа";
+  return Object.assign(new Error(`Qwen не вернул ответ на запрос: ${detail}`), { code: "QWEN_BROWSER_TRANSPORT_FAILURE" });
 }
 
 export function throwIfQwenFirstContentTimeout(result) {
@@ -46,21 +59,40 @@ export function throwIfQwenFirstContentTimeout(result) {
   throw error;
 }
 
+// Детект: стрим умер по first-content timeout (сервер принял POST, но не
+// отдал ни чанка за firstContentMs). Именно этот кейс kilocode видит как
+// EMPTY_UPSTREAM_STREAM после серии успешных tool calls.
+export function isQwenFirstContentTimeoutResult(result) {
+  return Number(result?.status) === 0
+    && /qwen_stream_first_content_timeout/i.test(String(result?.text || ""));
+}
+
+function throwIfQwenRateLimited(status, text, retryAfter, accountId) {
+  if (Number(status) !== 429) return;
+  const retryAfterMs = registerQwenRetryAfter(retryAfter, Date.now(), accountId);
+  const error = qwenQuotaError(status, text) || new Error('Qwen ограничил частоту запросов.');
+  Object.assign(error, { code: error.code || 'QWEN_RATE_LIMIT', status: 429, retryAfterMs, delivery: 'rejected' });
+  throw error;
+}
+
 function throwIfQwenAuthFailure(status, text, context) {
-  try {
-    throwIfQwenSessionExpiredFromHttp(status, text, context);
-  } catch (error) {
-    if (error?.isQwenSessionExpired) throw error;
-  }
+  const quota = qwenQuotaError(status, text);
+  if (quota) throw quota;
+  throwIfQwenSessionExpiredFromHttp(status, text, context);
   const snippet = String(text || "").slice(0, 800);
   const err = new Error(`Qwen ${context} failed: HTTP ${status}: ${snippet}`);
-  if (status === 401 || status === 403 || isQwenAuthError(err)) {
+  if (status === 401 || isQwenAuthError(err)) {
     err.isAuthError = true;
   }
   throw err;
 }
 
-function finalizeQwenCompletionResult(parsed, rawText, context) {
+function finalizeQwenCompletionResult(parsed, rawText, context, accountId, requestStartedAt) {
+  // Inspect structured provider events, not generated assistant text.
+  for (const line of String(rawText || '').split('\n')) {
+    const quota = qwenQuotaError(200, line.replace(/^data:\s*/, ''));
+    if (quota) throw quota;
+  }
   if (parsed?.error) {
     const errText = String(parsed.error);
     if (isQwenSessionExpiredText(errText)) {
@@ -70,11 +102,8 @@ function finalizeQwenCompletionResult(parsed, rawText, context) {
         context,
       });
     }
-    return {
-      text: errText,
-      lastMessageId: parsed.lastMessageId ?? null,
-      thinkingText: parsed.thinkingText || "",
-    };
+    throw Object.assign(new Error(errText), { code: 'QWEN_UPSTREAM_ERROR', delivery: 'rejected',
+      upstreamCode: parsed.upstreamError?.code || extractCodeFromCompletionText(errText) });
   }
 
   if (!parsed?.text && !parsed?.thinkingText) {
@@ -96,6 +125,7 @@ function finalizeQwenCompletionResult(parsed, rawText, context) {
   }
 
   throwIfQwenSessionExpiredFromAssistantText(parsed.text, context);
+  if (accountId !== undefined && !parsed.truncated && parsed.text) registerQwenCompletionSuccess(Date.now(), accountId, requestStartedAt);
   return parsed;
 }
 
@@ -139,10 +169,12 @@ const QWEN_DEBUG_DIR = path.join(os.tmpdir(), "qwen-debug");
 const ENV_DEFAULT_MODEL = process.env.QWEN_MODEL || QWEN_DEFAULT_MODEL;
 
 export class QwenChatClient {
-  constructor({ token, cookieHeader, debug = false }) {
+  constructor({ token, cookieHeader, accountId = 'default', debug = false }) {
     this.token = token;
     this.cookieHeader = cookieHeader;
+    this.accountId = accountId;
     this.debug = debug;
+    this.supportsImageAttachments = QWEN_TRANSPORT === "browser";
   }
 
   setAuth({ token, cookieHeader }) {
@@ -160,6 +192,27 @@ export class QwenChatClient {
   //   1. POST /chats/new {title, models, chat_mode, chat_type, timestamp_ms, project_id:""}
   //   2. Сервер возвращает { success, data: { id, title, ... } }
   //   3. Возвращаем data.id
+  async recoverCheckpoint(chatId, checkpoint) {
+    const proxy = await getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug });
+    const turn = checkpoint.qwenTurn;
+    if (turn?.chatId && turn.chatId !== chatId) return null;
+    const split = !turn && typeof proxy.submitNativeTurn !== 'function'
+      && splitPromptForFileUpload(checkpoint.prompt, resolveQwenContextFileConfig());
+    const savedTurn = turn ? { ...checkpoint, ...turn } : { ...checkpoint, prompt: split?.inline || checkpoint.prompt };
+    if (typeof proxy.pendingCompletionRequests === "function") {
+      savedTurn.originalTransportClosed = (await proxy.pendingCompletionRequests()) === 0;
+    }
+    return harvestQwenCheckpoint({ chatId, checkpoint: savedTurn,
+      fetcher: async ({ chatId, limit }) => {
+        const result = await proxy.proxyApiGet({ path: `/api/v2/chats/${chatId}?direction=up&limit=${limit}` });
+        if (result?.ok === false || result?.json?.success === false) {
+          throwIfQwenAuthFailure(result.status, JSON.stringify(result.json || {}), 'history');
+        }
+        return result;
+      },
+    });
+  }
+
   async createChat({ title = "Новый чат", model = ENV_DEFAULT_MODEL } = {}) {
     if (QWEN_TRANSPORT !== "browser") {
       // В direct-режиме fallback на клиентский UUID (всё равно direct не работает из-за анти-бота).
@@ -168,7 +221,7 @@ export class QwenChatClient {
       return fallbackId;
     }
 
-    const proxy = await getQwenBrowserProxy({ debug: this.debug });
+    const proxy = await getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug });
     const url = `${QWEN_BASE_URL}/api/v2/chats/new`;
     const body = JSON.stringify({
       title,
@@ -198,11 +251,8 @@ export class QwenChatClient {
     } catch {
       const looksLikeHtml = /<!doctype html|<html[\s>]/i.test(result.text || "");
       if (looksLikeHtml || /text\/html/i.test(result.contentType || "")) {
-        throw new Error(
-          "Qwen createChat returned HTML instead of JSON. " +
-          "Обычно это значит, что chat.qwen.ai отдал login/anti-bot страницу вместо API. " +
-          "Открой Qwen login заново и повтори запрос.",
-        );
+        throwIfQwenSessionExpiredFromHttp(result.status, result.text, "createChat");
+        throw Object.assign(new Error('Qwen createChat returned HTML instead of JSON. Причина не подтверждена.'), { code: 'QWEN_UNEXPECTED_RESPONSE' });
       }
       throw new Error(`Qwen createChat: non-JSON response: ${result.text.slice(0, 500)}`);
     }
@@ -237,6 +287,7 @@ export class QwenChatClient {
   async complete({
     chatId,
     prompt,
+    images = [],
     parentId = null,
     thinking = true,
     search = true,
@@ -250,7 +301,9 @@ export class QwenChatClient {
     // Интерактивный чат по умолчанию НЕ включает авто-режим (одно восстановление
     // + читаемое сообщение пользователю), чтобы не висеть долго в UI.
     autoRetry = false,
+    signal = null,
   }) {
+    signal?.throwIfAborted();
     const startedAt = Date.now();
     providerLogger.info("provider.qwen.request", {
       operation: "completion",
@@ -263,8 +316,8 @@ export class QwenChatClient {
     });
     try {
       const result = await this.#completeWithRecovery({
-        chatId, prompt, parentId, thinking, search, onText, onThinking, model,
-        allowNewChatRecovery, autoRetry,
+        chatId, prompt, images, parentId, thinking, search, onText, onThinking, model,
+        allowNewChatRecovery, autoRetry, signal,
       });
       providerLogger.info("provider.qwen.success", {
         operation: "completion",
@@ -297,6 +350,7 @@ export class QwenChatClient {
   async #completeWithRecovery({
     chatId,
     prompt,
+    images = [],
     parentId,
     thinking,
     search,
@@ -305,26 +359,34 @@ export class QwenChatClient {
     model,
     allowNewChatRecovery,
     autoRetry,
+    signal,
   }) {
+    let nativeBootstrap = null;
     const round = await this.#completionRound({
       chatId,
       prompt,
+      images,
       parentId,
       thinking,
       search,
       onText,
       onThinking,
       model,
+      signal,
+      onNativeBootstrap: info => { nativeBootstrap = info; },
     });
 
     // Успех — отдаём как есть. Оба состояния ниже означают, что сохранённая
     // серверная ветка Qwen больше не пригодна и запрос надо перенести в свежий чат.
     const invalidParentStuck = Boolean(round.invalidParentStuck);
-    if (!round.chatInProgressStuck && !invalidParentStuck) return round.result;
+    const transportStuck = Boolean(round.transportStuck);
+    if (!round.chatInProgressStuck && !invalidParentStuck && !transportStuck) {
+      return nativeBootstrap ? { ...round.result, recoveredChatId: nativeBootstrap.chatId } : round.result;
+    }
 
     // allowNewChatRecovery относится к занятости чата. Потерянный parent_id всегда
     // восстанавливаем автоматически: повтор с тем же parent_id заведомо не поможет.
-    if (!allowNewChatRecovery && !invalidParentStuck) {
+    if (!allowNewChatRecovery && !invalidParentStuck && !transportStuck) {
       return {
         text: formatQwenChatInProgressUserMessage(),
         lastMessageId: null,
@@ -340,6 +402,7 @@ export class QwenChatClient {
       : 1;
 
     for (let attempt = 1; attempt <= maxFreshAttempts; attempt += 1) {
+      signal?.throwIfAborted();
       // Пауза перед созданием нового чата: в авто-режиме растёт экспоненциально,
       // чтобы дать серверу Qwen время освободить зависший turn. В интерактивном
       // режиме (попытка №1) паузы нет — мы уже подождали в мягких повторах.
@@ -355,7 +418,7 @@ export class QwenChatClient {
           waitMs: delay,
         });
         if (this.debug) console.log(`[qwen] auto-retry: waiting ${Math.round(delay / 1000)}s before attempt ${attempt}/${maxFreshAttempts}…`);
-        await waitForQwenChat(delay);
+        await waitForQwenChat(delay, signal);
       }
 
       try {
@@ -368,14 +431,16 @@ export class QwenChatClient {
         const recovered = await this.#completionRound({
           chatId: freshChatId,
           prompt,
+          images,
           parentId: null,
           thinking,
           search,
           onText,
           onThinking,
           model,
+          signal,
         });
-        if (!recovered.chatInProgressStuck && !recovered.invalidParentStuck) {
+        if (!recovered.chatInProgressStuck && !recovered.invalidParentStuck && !recovered.transportStuck) {
           return {
             ...recovered.result,
             recoveredChatId: freshChatId,
@@ -385,6 +450,7 @@ export class QwenChatClient {
         // В авто-режиме — продолжаем цикл к следующей попытке. В интерактивном
         // (attempt=1, maxFreshAttempts=1) — выходим и отдаём сообщение ниже.
       } catch (recoveryError) {
+        signal?.throwIfAborted();
         if (this.debug) console.log(`[qwen] new-chat recovery failed (attempt ${attempt}/${maxFreshAttempts}): ${recoveryError?.message || recoveryError}`);
         // Ошибка создания чата — в авто-режим продолжаем цикл, иначе падаем ниже.
       }
@@ -395,6 +461,7 @@ export class QwenChatClient {
     if (autoRetry && this.debug) {
       console.log(`[qwen] auto-retry exhausted after ${maxFreshAttempts} attempts — giving up.`);
     }
+    if (transportStuck) throw round.transportError;
     return {
       text: invalidParentStuck
         ? formatQwenInvalidParentUserMessage()
@@ -413,20 +480,66 @@ export class QwenChatClient {
   async #completionRound({
     chatId,
     prompt,
+    images = [],
     parentId,
     thinking,
     search,
     onText,
     onThinking,
     model,
+    signal,
+    onNativeBootstrap,
   }) {
+    signal?.throwIfAborted();
+    let completionStartedAt;
+    // Большой промпт → файл-вложение context.txt (аналог вставки большого
+    // текста в поле ввода веб-интерфейса). Punish может возникать и независимо
+    // от размера промпта, поэтому его отдельно обрабатываем как ограничение.
+    let promptToUse = String(prompt || "");
+    let contextFiles = null;
+    const browserProxy = QWEN_TRANSPORT === "browser" ? await getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug }) : null;
+    const nativeComposer = typeof browserProxy?.submitNativeTurn === "function";
+    if (images.length && !nativeComposer) throw Object.assign(new Error("Qwen image input requires the native browser composer."), { code: "QWEN_IMAGE_TRANSPORT_UNAVAILABLE", delivery: "not_sent" });
+    let expectedImageFileIds;
+    if (nativeComposer) parentId = await resolveQwenNativeParent(browserProxy, chatId, parentId);
+    const originalChatId = chatId;
+    let nativeBootstrap = null;
+    const acceptNativeBootstrap = info => {
+      if (nativeComposer && parentId == null && info?.previousChatId === originalChatId
+        && typeof info.chatId === 'string' && info.chatId.trim() && info.chatId !== originalChatId) {
+        nativeBootstrap = info;
+        chatId = info.chatId;
+        onNativeBootstrap?.(info);
+      }
+    };
+    const contextFileConfig = resolveQwenContextFileConfig();
+    const split = !nativeComposer && splitPromptForFileUpload(promptToUse, contextFileConfig);
+    if (split) {
+      const proxy = await getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug });
+      providerLogger.info("provider.qwen.context_file", {
+        operation: "upload",
+        fileChars: split.fileChars,
+        inlineChars: split.inlineChars,
+      });
+      const attachment = await uploadQwenContextFile({
+        proxyApiPost: (path, apiBody) => proxy.proxyApiPost({ path, body: apiBody, chatId }),
+        content: split.fileText,
+      });
+      promptToUse = split.inline;
+      contextFiles = [attachment];
+      if (this.debug) {
+        console.log(`[qwen] context moved to file: ${split.fileChars} chars → ${attachment.name} (${attachment.id}); inline left: ${split.inlineChars}`);
+      }
+    }
+
     const body = buildQwenCompletionPayload({
       chatId,
-      prompt,
+      prompt: promptToUse,
       parentId,
       model,
       thinking,
       search,
+      files: contextFiles,
     });
 
     const headers = {
@@ -453,24 +566,114 @@ export class QwenChatClient {
 
     if (QWEN_TRANSPORT === "browser") {
       let chatInProgressSeen = false;
+      let roundStreamParser = null; // парсер текущей попытки — виден в catch
+      let postedOnce = false; // completion-POST уже отправлялся в этом чате
+      let requestStartedSeconds = null;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          const proxy = await getQwenBrowserProxy({ debug: this.debug });
-          const useLiveStream = typeof onText === "function" || typeof onThinking === "function";
-          const streamParser = useLiveStream
-            ? createQwenIncrementalParser({ onText, onThinking })
-            : null;
-          const result = useLiveStream
-            ? await proxy.proxyFetchStream({
-              url,
-              body: bodyStr,
-              chatId,
-              onRawChunk: (chunk) => streamParser.push(chunk),
-              maxAttempts: 1,
-            })
-            : await proxy.proxyFetch({ url, body: bodyStr, chatId });
+          roundStreamParser = null;
+          const proxy = await getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug });
+          // Pacing: минимальный интервал между POST /completions, чтобы не
+          // разгонять риск-скоринг Baxia. Также кидает QWEN_ANTIBOT_PUNISH,
+          // если активен кулдаун после детектированной punish-страницы.
+          const pacingWaitMs = await waitForQwenCompletionSlot({ accountId: this.accountId, signal, deferDispatch: true });
+          if (pacingWaitMs > 0 && this.debug) {
+            console.log(`[qwen] pacing: waited ${pacingWaitMs}ms before completion`);
+          }
+          requestStartedSeconds = Math.floor(Date.now() / 1000);
+          completionStartedAt = Date.now();
+          const { result, parser: streamParser } = await fetchQwenCompletionWithMetrics(proxy,
+            { url, body: bodyStr, chatId, maxAttempts: 1,
+              nativeTurn: nativeComposer ? { prompt: promptToUse, images, parentId, model, thinking, search, signal,
+                allowNativeRootChat: parentId == null } : null,
+              beforeSend: async () => {
+              await waitForQwenDispatchSlot({ accountId: this.accountId, signal });
+              requestStartedSeconds = Math.floor(Date.now() / 1000);
+              completionStartedAt = Date.now();
+              postedOnce = true;
+            } },
+            { onText, onThinking, attempt: attempt + 1, onParser: parser => { roundStreamParser = parser; } });
+          acceptNativeBootstrap(result.nativeBootstrap);
+          expectedImageFileIds = result.qwenImageFileIds;
 
+          throwIfQwenRateLimited(result.status, result.text, result.retryAfter, this.accountId);
+
+          // First-content timeout (2026-08-24, kilocode): сервер принял POST,
+          // но молчит дольше firstContentMs. Генерация на сервере часто жива —
+          // сначала harvest истории, ошибка только если и там пусто.
+          if (isQwenFirstContentTimeoutResult(result)) {
+            const harvested = images.length ? { recovered: await this.recoverCheckpoint(chatId, {
+              prompt: promptToUse, parentMessageId: parentId,
+              qwenTurn: { chatId, prompt: promptToUse, parentMessageId: parentId, imageCount: images.length, expectedImageFileIds },
+            }) } : await harvestAfterFirstContentTimeout({
+              result,
+              chatId,
+              onText,
+              getProxy: () => getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug }),
+              sinceTimestamp: requestStartedSeconds,
+              debug: this.debug,
+            });
+            if (harvested.recovered) {
+              return {
+                result: finalizeQwenCompletionResult(harvested.recovered, "", "completion (browser, first-content harvest)", this.accountId, completionStartedAt),
+                chatInProgressStuck: false,
+              };
+            }
+          }
           throwIfQwenFirstContentTimeout(result);
+          // Прокси пометил ответ как Baxia punish (антибот-капча) —
+          // кулдаун уже включён в прокси, наверх уходит понятная ошибка.
+          if (result.punish) {
+            throw createQwenPunishError(qwenAntibotCooldownRemainingMs(Date.now(), this.accountId), result.status > 0 ? "rejected" : "unknown");
+          }
+          const fetchError = qwenBrowserFetchError(result);
+          if (fetchError) throw fetchError;
+
+          // Стрим оборвался без терминального маркера (текст шёл, потом
+          // тишина/abort). Порядок восстановления (см. HAR 2026-08-21):
+          //   1. RESUME: пустой POST ?response_id=... — сервер продолжает
+          //      тот же SSE-ответ, sibling-ветки не плодятся.
+          //   2. HARVEST: GET истории чата — сервер часто уже сохранил
+          //      готовый ответ; забираем его без единого ретрая.
+          // Слепой re-POST полного body ЗАПРЕЩЁН: он создавал "2/2", "3/4"
+          // ретраи в веб-морде и дублированный текст у пользователя.
+          let parsed;
+          if (result.recoveredNativeAnswer) {
+            const saved = result.recoveredNativeAnswer;
+            const prefix = streamParser?.snapshot?.() || '';
+            if (prefix && !saved.text.startsWith(prefix)) throw Object.assign(new Error('Qwen: поток не совпадает с сохранённым ответом.'),
+              { code: 'QWEN_BROWSER_TRANSPORT_FAILURE', delivery: 'unknown' });
+            const tail = saved.text.slice(prefix.length);
+            if (tail) onText?.(tail);
+            parsed = { ...saved, thinkingText: '', harvested: true, streamFinished: true, contentReceived: true };
+          } else {
+            parsed = streamParser
+              ? streamParser.finish(result.text)
+              : parseQwenResponseText(result.text, result.contentType, onText);
+          }
+
+          if (parsed?.punish) {
+            const { backoffMs } = startQwenPunishCooldown(Date.now(), this.accountId);
+            throw createQwenPunishError(backoffMs, "rejected");
+          }
+
+          if (nativeComposer && parsed?.truncated) {
+            const recovered = await this.recoverCheckpoint(chatId, { prompt: promptToUse, parentMessageId: parentId,
+              qwenTurn: { chatId, prompt: promptToUse, parentMessageId: parentId, ...(images.length ? { imageCount: images.length, expectedImageFileIds } : {}) } });
+            if (!recovered?.text) throw Object.assign(new Error('Qwen: штатный поток прервался; проверяю сохранённый ответ.'),
+              { code: 'QWEN_BROWSER_TRANSPORT_FAILURE', delivery: 'unknown' });
+            parsed = recovered;
+          } else if (streamParser && parsed?.truncated && parsed?.responseId) {
+            const recoveredStream = await this.#recoverTruncatedStream({
+              chatId,
+              truncated: parsed,
+              streamParser,
+              onText,
+              onThinking,
+            });
+            if (recoveredStream) parsed = recoveredStream;
+          }
+
           providerLogger.info("provider.qwen.response", {
             operation: "completion",
             transport: "browser",
@@ -478,6 +681,9 @@ export class QwenChatClient {
             statusCode: result.status,
             contentType: result.contentType,
             responseBytes: result.text?.length || 0,
+            streamTruncated: Boolean(parsed?.truncated),
+            streamResumed: Boolean(parsed?.resumed),
+            harvested: Boolean(parsed?.harvested),
           });
 
           if (this.debug) {
@@ -485,25 +691,28 @@ export class QwenChatClient {
               fs.mkdirSync(QWEN_DEBUG_DIR, { recursive: true });
               fs.writeFileSync(
                 path.join(QWEN_DEBUG_DIR, "last-response.txt"),
-                `# transport=browser, stream=${useLiveStream}, status=${result.status}, content-type=${result.contentType}, bytes=${result.text?.length || 0}\n\n${result.text || ""}`,
+                `# transport=browser, stream=${Boolean(streamParser)}, status=${result.status}, content-type=${result.contentType}, bytes=${result.text?.length || 0}\n\n${result.text || ""}`,
               );
               console.log(`[qwen] dumped response → ${path.join(QWEN_DEBUG_DIR, "last-response.txt")}`);
             } catch {}
           }
 
-          if (!result.ok) {
+          // result.ok=false (status 0 / HTTP-ошибка): бросаем ТОЛЬКО если
+          // recovery (resume/harvest) не собрал текст. Если обрыв стрима
+          // был восстановлен — работаем с parsed дальше как с успехом.
+          if (!result.ok && !parsed?.text && !parsed?.thinkingText) {
             throwIfQwenAuthFailure(result.status, result.text, "completion (browser)");
           }
 
-          const parsed = useLiveStream
-            ? streamParser.finish(result.text)
-            : parseQwenResponseText(result.text, result.contentType, onText);
-
           if (isQwenInvalidParentError(parsed, result.text)) {
+            if (nativeComposer) throw Object.assign(new Error('Qwen: сохранённая ветка больше не доступна. Проверьте чат перед продолжением.'),
+              { code: 'HARNESS_REVIEW_REQUIRED', delivery: 'rejected' });
             return { result: null, chatInProgressStuck: false, invalidParentStuck: true };
           }
 
           if (isQwenChatInProgressError(parsed, result.text)) {
+            if (nativeComposer) throw Object.assign(new Error('Qwen: в этом чате ещё выполняется предыдущий ответ. Задача сохранена.'),
+              { code: 'QWEN_NATIVE_CHAT_IN_PROGRESS', delivery: 'rejected' });
             chatInProgressSeen = true;
             if (attempt < 2) {
               const waitMs = 1_500 * (attempt + 1);
@@ -513,33 +722,79 @@ export class QwenChatClient {
                 waitMs,
               });
               if (this.debug) console.log(`[qwen] chat is still finalizing; retrying same turn in ${waitMs}ms…`);
-              await waitForQwenChat(waitMs);
+              await waitForQwenChat(waitMs, signal);
               continue;
             }
             // Все 3 попытки в тот же чат ушли в «in progress».
             return { result: null, chatInProgressStuck: true };
           }
 
-          if (attempt < 2 && isQwenRecoverableStreamError(parsed, result.text)) {
-            if (this.debug) console.log("[qwen] recoverable stream error, resetting browser proxy…");
-            await resetQwenBrowserProxy();
-            continue;
-          }
-
-          return { result: finalizeQwenCompletionResult(parsed, result.text, "completion (browser)"), chatInProgressStuck: false };
+          return { result: finalizeQwenCompletionResult(parsed, result.text, "completion (browser)", this.accountId, completionStartedAt), chatInProgressStuck: false };
         } catch (error) {
+          acceptNativeBootstrap(error.qwenNativeBootstrap);
+          if (nativeBootstrap) error.qwenNativeBootstrap = nativeBootstrap;
+          error.qwenTurn = { chatId, prompt: promptToUse, parentMessageId: parentId, requestStartedAt: requestStartedSeconds ? requestStartedSeconds * 1000 : Date.now(),
+            ...(images.length ? { imageCount: images.length, expectedImageFileIds: error.qwenImageFileIds || expectedImageFileIds } : {}) };
           providerLogger.error("provider.qwen.error", error, {
             operation: "completion_round",
             transport: "browser",
             attempt: attempt + 1,
           });
+          // Punish/кулдаун не ретраим на месте — ошибка уходит наверх,
+          // агентный слой получит понятный код и сообщение о капче.
+          if (error?.code === "QWEN_ANTIBOT_PUNISH") {
+            if (postedOnce && error.delivery === "unknown") {
+              const recovered = await this.recoverCheckpoint(chatId, { prompt: promptToUse, parentMessageId: parentId, qwenTurn: error.qwenTurn }).catch(() => null);
+              if (recovered) return { result: finalizeQwenCompletionResult(recovered, "", "completion (challenge history)", this.accountId, completionStartedAt), chatInProgressStuck: false };
+            }
+            throw error;
+          }
+          // Native UI errors never fall back to another completion POST or a
+          // different chat. The harness recovers this exact turn through GET.
+          if (nativeComposer) throw error;
+          // 2026-08-21: слепой re-POST того же body ЗАПРЕЩЁН, если POST уже
+          // отправлялся. Сервер мог его получить (AbortError до первого
+          // чанка — POST доставлен, генерация идёт): повтор создал бы
+          // sibling-ветку под тем же юзер-месседжем (полевой инцидент:
+          // «1/2» под запросом, дубль текста). Сначала harvest истории.
+          // Let the harness wait and resume the checkpoint; keep the signed-in
+          // browser. Pre-dispatch navigation failure needs neither harvest nor reset.
+          if (error.delivery === "not_sent" && isQwenTransientBrowserTransportError(error)) throw error;
+          if (postedOnce && isQwenTransientBrowserTransportError(error)) {
+            const streamedText = roundStreamParser ? (roundStreamParser.snapshot?.() ?? "") : "";
+            providerLogger.warn("provider.qwen.stream_resume", {
+              operation: "transport_failure_harvest",
+              chatId,
+              attempt: attempt + 1,
+              streamedChars: streamedText.length,
+            });
+            let harvestOutcome = null;
+            const recovered = await harvestTransportFailedCompletion({
+              chatId,
+              streamedText,
+              onText,
+              sinceTimestamp: requestStartedSeconds,
+              onOutcome: outcome => { harvestOutcome = outcome; },
+              getProxy: () => getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug }),
+              debug: this.debug,
+            });
+            if (recovered) {
+              return { result: finalizeQwenCompletionResult(recovered, "", "completion (browser, transport-harvest)", this.accountId, completionStartedAt), chatInProgressStuck: false };
+            }
+            if (harvestOutcome?.reason === "post_not_delivered") {
+              return { result: null, chatInProgressStuck: false, transportStuck: true, transportError: error };
+            }
+            // Пустая история не доказывает, что POST не дошёл до Qwen.
+            // После тайм-аута повтор может создать второй ответ на тот же запрос.
+            throw error;
+          }
           if (attempt >= 2 || !isQwenTransientBrowserTransportError(error)) {
             // Транспортная/авторизационная ошибка не считается «in progress».
             if (chatInProgressSeen) return { result: null, chatInProgressStuck: true };
             throw error;
           }
           if (this.debug) console.log(`[qwen] transient browser transport error, resetting proxy and retrying: ${error.message}`);
-          await resetQwenBrowserProxy();
+          await resetQwenBrowserProxy(this.accountId);
           continue;
         }
       }
@@ -547,35 +802,63 @@ export class QwenChatClient {
       return { result: null, chatInProgressStuck: chatInProgressSeen };
     }
 
+    await waitForQwenCompletionSlot({ accountId: this.accountId, signal });
+
+    completionStartedAt = Date.now();
+
     // FALLBACK: прямой fetch с bx-ua из .env (обычно ломается на Bad_Request).
-    const res = await fetch(url, { method: "POST", headers, body: bodyStr });
+    return measureProviderExchange("qwen", async probe => {
+      const res = await fetch(url, { method: "POST", headers, body: bodyStr, signal });
+      probe.headers();
 
-    if (!res.ok) {
-      const text = await res.text();
-      throwIfQwenAuthFailure(res.status, text, "completion");
-    }
+      if (!res.ok) {
+        const text = await res.text();
+        throwIfQwenRateLimited(res.status, text, res.headers.get("retry-after"), this.accountId);
+        throwIfQwenAuthFailure(res.status, text, "completion");
+      }
 
-    const contentType = String(res.headers.get("content-type") || "");
-    console.log(`[qwen] response content-type: ${contentType}`);
+      const contentType = String(res.headers.get("content-type") || "");
+      console.log(`[qwen] response content-type: ${contentType}`);
 
-    // Единый парсинг через parseQwenResponseText: он корректно обрабатывает
-    // и одиночный JSON-ошибку (success:false + data.code/details), и SSE-стрим,
-    // и применяет formatQwenStreamError (в т.ч. читаемое сообщение для
-    // «chat is in progress!»).
-    const directText = await res.text();
-    const parsed = parseQwenResponseText(directText, contentType, onText);
+      // Единый парсинг через parseQwenResponseText: он корректно обрабатывает
+      // и одиночный JSON-ошибку (success:false + data.code/details), и SSE-стрим,
+      // и применяет formatQwenStreamError (в т.ч. читаемое сообщение для
+      // «chat is in progress!»).
+      const directText = await res.text();
+      const parsed = parseQwenResponseText(directText, contentType, onText);
+      if (parsed?.punish) {
+        const { backoffMs } = startQwenPunishCooldown(Date.now(), this.accountId);
+        throw createQwenPunishError(backoffMs, "rejected");
+      }
 
-    // Восстановление «chat is in progress!» работает и для direct-транспорта,
-    // чтобы не зависеть от того, какой transport сейчас активен.
-    if (isQwenInvalidParentError(parsed, directText)) {
-      return { result: null, chatInProgressStuck: false, invalidParentStuck: true };
-    }
-    if (isQwenChatInProgressError(parsed, directText)) {
-      return { result: null, chatInProgressStuck: true, invalidParentStuck: false };
-    }
+      // Восстановление «chat is in progress!» работает и для direct-транспорта,
+      // чтобы не зависеть от того, какой transport сейчас активен.
+      if (isQwenInvalidParentError(parsed, directText)) {
+        return { result: null, chatInProgressStuck: false, invalidParentStuck: true };
+      }
+      if (isQwenChatInProgressError(parsed, directText)) {
+        return { result: null, chatInProgressStuck: true, invalidParentStuck: false };
+      }
 
-    const directFinalized = finalizeQwenCompletionResult(parsed, directText, "completion (direct)");
-    return { result: directFinalized, chatInProgressStuck: false };
+      const directFinalized = finalizeQwenCompletionResult(parsed, directText, "completion (direct)", this.accountId, completionStartedAt);
+      return { result: directFinalized, chatInProgressStuck: false };
+    }, { http: true });
+  }
+
+  // Восстановление оборванного SSE-стрима: сначала resume-POST по
+  // response_id (сервер продолжает тот же ответ), затем harvest из
+  // истории чата (сервер уже сохранил готовый ответ).
+  // Возвращает новый parsed-результат или null (восстановить не удалось —
+  // вызывающий код работает с частичным текстом как раньше).
+  async #recoverTruncatedStream({ chatId, truncated, onText, onThinking }) {
+    return recoverTruncatedQwenStream({
+      chatId,
+      truncated,
+      onText,
+      onThinking,
+      getProxy: () => getQwenBrowserProxy({ accountId: this.accountId, debug: this.debug }),
+      debug: this.debug,
+    });
   }
 }
 
@@ -603,6 +886,13 @@ function formatQwenInvalidParentUserMessage() {
 // SSE-событие с полем error (квота, rate limit и т.д.) — не содержит текста ответа.
 export function formatQwenStreamError(parsed) {
   if (!parsed || typeof parsed !== "object") return null;
+  if (isQwenPunishStub(parsed)) {
+    return (
+      "Qwen отклонил запрос проверкой безопасности (RGV587). " +
+      "Это не доказывает, что сообщение слишком длинное. " +
+      "Если показана капча, пройдите её вручную; при временном ограничении подождите и повторите запрос позже."
+    );
+  }
   const err = parsed.error;
   if (err && typeof err === "object") {
     const code = String(err.code || err.type || "error");
@@ -618,6 +908,11 @@ export function formatQwenStreamError(parsed) {
     return formatQwenUserFacingError(code, details);
   }
   return null;
+}
+
+function isQwenPunishStub(parsed) {
+  return Array.isArray(parsed?.ret)
+    && parsed.ret.some((value) => /RGV587|FAIL_SYS_USER_VALIDATE/i.test(String(value)));
 }
 
 export function formatQwenUserFacingError(code, details) {
@@ -714,17 +1009,33 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
   let thinkingBuf = "";
   let lastMessageId = null;
   let error = null;
+  let upstreamError = null;
+  let punish = false;
+  // Жизненный цикл стрима: нужен, чтобы отличить честное окончание
+  // ([DONE] / delta.status=finished / finish_reason) от обрыва посреди
+  // генерации — обрыв восстанавливается resume-POST по response_id.
+  let streamFinished = false;
+  let streamResponseId = "";
   const responseSelector = createQwenResponseSelector();
 
   function consumeEvent(raw) {
     const ev = parseSseEvent(raw);
-    if (!ev.data || ev.data === "[DONE]") return;
+    if (!ev.data) return;
+    if (ev.data === "[DONE]") {
+      streamFinished = true;
+      return;
+    }
     let parsed;
     try { parsed = JSON.parse(ev.data); } catch { return; }
+    const rid = qwenStreamResponseIdOf(parsed);
+    if (rid) streamResponseId = rid;
+    if (qwenStreamHasTerminalMarker(parsed)) streamFinished = true;
     if (!responseSelector.accept(parsed)) return;
+    if (isQwenPunishStub(parsed)) punish = true;
     const errMsg = formatQwenStreamError(parsed);
     if (errMsg) {
       error = errMsg;
+      upstreamError = extractQwenErrorFields(parsed);
       return;
     }
     const found = extractTextRecursively(parsed);
@@ -753,18 +1064,263 @@ export function createQwenIncrementalParser({ onText = null, onThinking = null }
       }
       return fullText.length > textLengthBefore || thinkingBuf.length > thinkingLengthBefore;
     },
+    // Мгновенный снимок видимого текста (для transport-harvest: хвост =
+    // harvested минус уже отправленные дельты).
+    snapshot() {
+      return fullText;
+    },
     finish(rawFallback = "") {
       if (buffer.trim()) consumeEvent(buffer);
+      // Обрыв посреди генерации: контент шёл, но терминального маркера не
+      // было. Отдаём частичный текст + флаги, чтобы вызывающий слой мог
+      // переподключиться по response_id (см. createQwenStreamContinuation).
+      const truncated = !streamFinished && (fullText.length > 0 || thinkingBuf.length > 0);
       if (error) {
-        return { text: error, lastMessageId, thinkingText: thinkingBuf, error };
+        return { text: error, lastMessageId, thinkingText: thinkingBuf, error, upstreamError, punish, streamFinished, truncated, responseId: streamResponseId, contentReceived: false };
       }
       if (!fullText && !thinkingBuf) {
         const fallback = emptyQwenParseFallback(rawFallback, rawFallback, 0);
-        return { ...fallback, error: null };
+        // contentReceived=false: это диагностическое сообщение, а НЕ реальный
+        // контент стрима. Resume-конвейер не должен принимать его за успех.
+        return { ...fallback, error: null, punish, streamFinished, truncated: false, responseId: streamResponseId, contentReceived: false };
       }
-      return { text: fullText, lastMessageId, thinkingText: thinkingBuf, error: null };
+      return { text: fullText, lastMessageId, thinkingText: thinkingBuf, error: null, punish, streamFinished, truncated, responseId: streamResponseId, contentReceived: true };
     },
   };
+}
+
+// response_id текущей генерации: приходит и в response.created, и в каждом
+// content-чанке. Нужен для resume-POST (?response_id=...) и для harvest.
+export function qwenStreamResponseIdOf(parsed) {
+  const created = parsed?.["response.created"];
+  if (created && typeof created === "object" && created.response_id != null) {
+    return String(created.response_id);
+  }
+  if (parsed?.response_id != null) return String(parsed.response_id);
+  return "";
+}
+
+// Терминальные маркеры SSE-стрима Qwen (любой из них = генерация завершена):
+//   • choices[0].finish_reason (OpenAI-совместимый маркер)
+//   • choices[0].delta.status === "finished" (собственный формат Qwen v2)
+// [DONE] обрабатывается отдельно в consumeEvent.
+export function qwenStreamHasTerminalMarker(parsed) {
+  const choice = Array.isArray(parsed?.choices) ? parsed.choices[0] : null;
+  if (!choice) return false;
+  if (choice.finish_reason) return true;
+  const status = choice?.delta?.status;
+  return status === "finished" || status === "completed";
+}
+
+// Состояние сессии продолжения оборванного стрима. Морда шлёт ПУСТОЙ POST
+// /api/v2/chat/completions?chat_id=<id>&response_id=<rid> и сервер продолжает
+// тот же SSE-ответ — без создания sibling-ветки в дереве сообщений (слепой
+// re-POST полного body порождает "2/2", "3/4" ретраи в веб-интерфейсе).
+export function createQwenStreamContinuation({ chatId, responseId } = {}) {
+  const rid = String(responseId || "");
+  const maxResumes = Math.max(0, Number(process.env.QWEN_RESUME_MAX_ATTEMPTS ?? 2));
+  let resumesUsed = 0;
+
+  return {
+    resumeUrl() {
+      return `${QWEN_BASE_URL}/api/v2/chat/completions?chat_id=${encodeURIComponent(String(chatId || ""))}&response_id=${encodeURIComponent(rid)}`;
+    },
+    // Морда шлёт пустое тело; заголовки (bx-*, source: web, x-request-id)
+    // проставляет browser-proxy как для обычного completion-запроса.
+    resumeBody() {
+      return "{}";
+    },
+    shouldResume({ truncated, streamFinished: finished } = {}) {
+      if (!rid) return false;
+      if (finished) return false;
+      if (!truncated) return false;
+      return resumesUsed < maxResumes;
+    },
+    markResumeAttempt() {
+      resumesUsed += 1;
+    },
+    remainingResumes() {
+      return Math.max(0, maxResumes - resumesUsed);
+    },
+    retryDelayMs() {
+      return Number(process.env.QWEN_RESUME_RETRY_DELAY_MS || 1500);
+    },
+    get responseId() {
+      return rid;
+    },
+  };
+}
+
+// Полный конвейер восстановления оборванного стрима. Прокси и паузы
+// инжектируются (getProxy / retryDelayMs) — тестируется без браузера.
+export async function recoverTruncatedQwenStream({
+  chatId,
+  truncated,
+  onText = null,
+  onThinking = null,
+  getProxy,
+  debug = false,
+}) {
+  const continuation = createQwenStreamContinuation({
+    chatId,
+    responseId: truncated?.responseId,
+  });
+
+  // --- Этап 1: RESUME (пустой POST ?response_id=...) ---
+  while (continuation.shouldResume({ truncated: true, streamFinished: false })) {
+    continuation.markResumeAttempt();
+    try {
+      const proxy = await getProxy();
+      if (debug) console.log(`[qwen] stream truncated mid-generation; resuming response_id=${truncated.responseId} (remaining ${continuation.remainingResumes()})…`);
+      providerLogger.warn("provider.qwen.stream_resume", {
+        operation: "resume",
+        chatId,
+        responseId: truncated.responseId,
+        remaining: continuation.remainingResumes(),
+      });
+      const resumeParser = createQwenIncrementalParser({ onText, onThinking });
+      const resumeResult = await proxy.proxyFetchStream({
+        url: continuation.resumeUrl(),
+        body: continuation.resumeBody(),
+        chatId,
+        onRawChunk: (chunk) => resumeParser.push(chunk),
+        maxAttempts: 1,
+      });
+      const resumeParsed = resumeParser.finish(resumeResult.text || "");
+      const resumeGotContent = Boolean(resumeParsed.contentReceived);
+      if (resumeParsed.streamFinished || (resumeGotContent && !resumeParsed.truncated)) {
+        // Сервер продолжил стрим: склеиваем хвост с уже полученным текстом.
+        // Дельту уже отдал в onText сам resumeParser (живой стрим наверх).
+        // Диагностический текст от emptyQwenParseFallback (contentReceived=false)
+        // успехом НЕ считается — идём к harvest.
+        return {
+          ...(resumeGotContent ? resumeParsed : {}),
+          text: resumeGotContent ? truncated.text + (resumeParsed.text || "") : truncated.text,
+          thinkingText: (truncated.thinkingText || "") + (resumeGotContent ? resumeParsed.thinkingText || "" : ""),
+          resumed: true,
+          truncated: false,
+          streamFinished: resumeParsed.streamFinished || resumeGotContent,
+          responseId: truncated.responseId,
+        };
+      }
+      if (debug) console.log(`[qwen] resume attempt returned no continuation (${resumeResult.status}, bytes=${resumeResult.text?.length || 0})`);
+    } catch (error) {
+      providerLogger.warn("provider.qwen.stream_resume", {
+        operation: "resume_error",
+        chatId,
+        responseId: truncated.responseId,
+        error: error?.message || String(error),
+      });
+    }
+    await waitForQwenChat(continuation.retryDelayMs());
+  }
+
+  // --- Этап 2: HARVEST (GET истории чата) ---
+  try {
+    const proxy = await getProxy();
+    if (debug) console.log(`[qwen] resume exhausted; harvesting saved response ${truncated.responseId} from chat history…`);
+    providerLogger.warn("provider.qwen.stream_resume", { operation: "harvest", chatId, responseId: truncated.responseId });
+    const harvested = await harvestQwenChatMessage({
+      chatId,
+      responseId: truncated.responseId,
+      fetcher: async ({ cursor }) => proxy.proxyApiGet({
+        path: cursor
+          ? `/api/v2/chats/${encodeURIComponent(chatId)}?cursor=${encodeURIComponent(cursor)}&direction=down&limit=10`
+          : `/api/v2/chats/${encodeURIComponent(chatId)}?direction=up&limit=10`,
+      }),
+    });
+    if (harvested.found && harvested.text) {
+      // В streaming-режиме дельты уже ушли только до места обрыва —
+      // до streamed-текста. Чтобы клиент получил хвост, вычисляем суффикс
+      // сохранённого ответа и отдаём его через onText. Если сервер
+      // переписал начало (общий префикс короткий) — не стримим ничего:
+      // дублировать весь текст хуже, чем оставить честный обрыв.
+      streamHarvestTail({
+        harvestedText: harvested.text,
+        streamedText: String(truncated.text || ""),
+        onText,
+      });
+      return {
+        text: harvested.text,
+        lastMessageId: harvested.messageId,
+        thinkingText: truncated.thinkingText || "",
+        error: null,
+        streamFinished: true,
+        truncated: false,
+        responseId: truncated.responseId,
+        harvested: true,
+      };
+    }
+    if (debug) console.log(`[qwen] harvest not found (${harvested.reason})`);
+  } catch (error) {
+    providerLogger.warn("provider.qwen.stream_resume", {
+      operation: "harvest_error",
+      chatId,
+      responseId: truncated.responseId,
+      error: error?.message || String(error),
+    });
+  }
+
+  return null;
+}
+
+// Отдаёт через onText недостающий хвост harvest-текста (то, что сервер
+// сгенерировал ПОСЛЕ обрыва стрима). Если streamed-текст не является
+// префиксом сохранённого (сервер переписал начало) — хвост не стримим:
+// дублирование хуже честного обрыва.
+export function streamHarvestTail({ harvestedText, streamedText, onText }) {
+  if (typeof onText !== "function") return;
+  const saved = String(harvestedText || "");
+  const streamed = String(streamedText || "");
+  if (!saved) return;
+  if (streamed && saved.startsWith(streamed)) {
+    const tail = saved.slice(streamed.length);
+    if (tail) onText(tail);
+    return;
+  }
+  // Нет общего префикса (или streamed пуст и это не-стрим вызов) —
+  // отдаём сохранённый текст целиком, только если наверх ничего не ушло.
+  if (!streamed) {
+    onText(saved);
+  }
+}
+
+// First-content timeout (2026-08-24, kilocode over npm run api): сервер
+// принял completion-POST, но не выдал ни чанка за firstContentMs (240s на
+// деградированных днях). При этом генерация на сервере ЧАСТО ПРОДОЛЖАЕТСЯ —
+// инцидент 2026-08-21 доказал, что ответ сохраняется в истории чата.
+// Вместо мгновенного EMPTY_UPSTREAM_STREAM — пробуем harvest истории;
+// если сервер так и не родил контент, ошибка уходит наверх как раньше.
+export async function harvestAfterFirstContentTimeout({
+  result,
+  chatId,
+  onText = null,
+  sinceTimestamp = null,
+  getProxy,
+  pollMs,
+  timeoutMs,
+  debug = false,
+}) {
+  if (!isQwenFirstContentTimeoutResult(result)) {
+    return { applicable: false };
+  }
+  const recovered = await harvestTransportFailedCompletion({
+    chatId,
+    streamedText: "",
+    onText,
+    sinceTimestamp,
+    getProxy,
+    pollMs,
+    timeoutMs,
+    debug,
+  });
+  if (!recovered) return { applicable: true, recovered: null };
+  providerLogger.warn("provider.qwen.stream_resume", {
+    operation: "first_content_timeout_harvest",
+    chatId,
+    chars: recovered.text?.length || 0,
+  });
+  return { applicable: true, recovered };
 }
 
 function findQwenErrorInSseText(text) {
@@ -821,7 +1377,8 @@ export function parseQwenResponseText(text, contentType, onText) {
       const json = JSON.parse(text);
       const errMsg = formatQwenStreamError(json);
       if (errMsg) {
-        return { text: errMsg, lastMessageId: null, thinkingText: "" };
+        return { text: errMsg, lastMessageId: null, thinkingText: "", error: errMsg,
+          upstreamError: extractQwenErrorFields(json), punish: isQwenPunishStub(json) };
       }
       const found = extractTextRecursively(json);
       if (found.text) {
@@ -852,7 +1409,8 @@ export function parseQwenResponseText(text, contentType, onText) {
     if (!responseSelector.accept(parsed)) continue;
     const errMsg = formatQwenStreamError(parsed);
     if (errMsg) {
-      return { text: errMsg, lastMessageId, thinkingText: "" };
+      return { text: errMsg, lastMessageId, thinkingText: "", error: errMsg,
+        upstreamError: extractQwenErrorFields(parsed), punish: isQwenPunishStub(parsed) };
     }
     const found = extractTextRecursively(parsed);
     if (found.text) {
@@ -1053,6 +1611,59 @@ export function isQwenChatInProgressError(parsed, rawText = "") {
   return /chat\s+is\s+(?:still\s+)?in\s+progress|chat_in_progress/.test(blob);
 }
 
-function waitForQwenChat(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function waitForQwenChat(ms, signal) {
+  return abortableDelay(ms, undefined, { signal: signal || undefined });
+}
+
+// An omitted parent follows the saved native chat, as a normal web reply does.
+// Explicit checkpoint branches always remain pinned; never guess from a list.
+export async function resolveQwenNativeParent(proxy, chatId, parentId) {
+  if (parentId != null && parentId !== '') return parentId;
+  const unavailable = () => Object.assign(new Error('Qwen: не удалось подтвердить завершённую ветку чата. Запрос не отправлен; задача сохранена.'),
+    { code: 'QWEN_NATIVE_UI_UNAVAILABLE', delivery: 'not_sent' });
+  if (await proxy.pendingCompletionRequests() !== 0) throw unavailable();
+  const response = await proxy.proxyApiGet({ path: `/api/v2/chats/${encodeURIComponent(chatId)}?direction=up&limit=100`, chatId });
+  if (await proxy.pendingCompletionRequests() !== 0) throw unavailable();
+  if (response?.ok === false || response?.json?.success === false) {
+    try { throwIfQwenSessionExpiredFromHttp(response.status, JSON.stringify(response.json || {}), 'Qwen history'); }
+    catch (error) { error.delivery = 'not_sent'; throw error; }
+  }
+  const chat = response?.json?.data?.chat;
+  const history = chat?.history;
+  const nodes = history?.messages;
+  if (response?.ok !== true || response.json?.success !== true || !nodes || typeof nodes !== 'object' || Array.isArray(nodes)
+    || history.pagination?.has_more_newer !== false || history.pagination?.newest_id !== history.currentId) throw unavailable();
+  if (!history.currentId && Object.keys(nodes).length === 0 && Array.isArray(chat.messages) && chat.messages.length === 0) return null;
+  const current = nodes[history.currentId];
+  if (!current || current.id !== history.currentId || current.role !== 'assistant' || current.done !== true
+    || !Array.isArray(current.childrenIds) || current.childrenIds.length !== 0) throw unavailable();
+  return current.id;
+}
+
+// A completion exchange is measured without changing buffered/streaming mode.
+export function fetchQwenCompletionWithMetrics(proxy, request, { onText = null, onThinking = null,
+  attempt = 1, onParser = () => {} } = {}) {
+  const native = Boolean(request.nativeTurn) && typeof proxy.submitNativeTurn === "function";
+  const live = native || typeof proxy.proxyFetchStream === "function";
+  return measureProviderExchange("qwen", async probe => {
+    const parser = live ? createQwenIncrementalParser({ onText: probe.text, onThinking: probe.thinking }) : null;
+    onParser(parser);
+    const completion = { ...request, maxAttempts: 1 };
+    let result;
+    try {
+      result = native
+      ? await proxy.submitNativeTurn({ ...request.nativeTurn, chatId: request.chatId, beforeSend: request.beforeSend,
+        onRawChunk: chunk => parser.push(chunk) })
+      : live
+      ? await proxy.proxyFetchStream({ ...completion, onRawChunk: chunk => parser.push(chunk) })
+      : await proxy.proxyFetch(completion);
+    } catch (error) {
+      if (isQwenTransientBrowserTransportError(error)) {
+        error.code ||= "QWEN_BROWSER_TRANSPORT_FAILURE";
+        error.delivery ||= "unknown";
+      }
+      throw error;
+    }
+    return { result, parser };
+  }, { onText, onThinking, attempt, observeText: live });
 }

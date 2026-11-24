@@ -1,16 +1,16 @@
-// Login flow для chat.qwen.ai через Playwright.
+// Login flow для chat.qwen.ai через Camoufox.
 //
-// АЛЬТЕРНАТИВА: если Playwright блокируется антиботом Alibaba (а это бывает),
+// АЛЬТЕРНАТИВА: если браузер блокируется антиботом Alibaba,
 // используй importQwenFromJson(path) — он принимает JSON-файл cookies, экспортированный
 // расширением Chrome (типа "Cookie Editor" или "EditThisCookie"), и сохраняет
 // их в qwen-auth.json без Playwright.
 //
 // Алгоритм:
-// 1. Поднимаем persistent Chromium с СОБСТВЕННЫМ профилем (QWEN_BROWSER_PROFILE) —
+// 1. Поднимаем Camoufox с отдельным состоянием аккаунта (QWEN_BROWSER_PROFILE) —
 //    чтобы Google-сессии Qwen не смешивались с DeepSeek.
 // 2. Открываем chat.qwen.ai.
 // 3. Юзер логинится сам (Google OAuth / email-пароль).
-// 4. Ждём, пока в cookies появится `token` (JWT). Это и есть финальный сигнал логина.
+// 4. Ждём свежий `token` (JWT) в Qwen localStorage или cookies.
 // 5. Сохраняем cookies + token в qwen-auth.json.
 //
 // В отличие от DeepSeek у нас здесь НЕТ:
@@ -19,7 +19,7 @@
 // - Сложного авто-заполнения формы (не делаем до сбора фидбэка)
 
 import fs from "node:fs";
-import { launchPersistentDeepSeekContext } from "../../browser/launch.mjs";
+import { launchQwenCamoufoxSession } from "./camoufox-session.mjs";
 import {
   QWEN_AUTH_FILE,
   QWEN_BASE_URL,
@@ -29,6 +29,7 @@ import {
 } from "./config.mjs";
 import {
   applyQwenCookiesToContext,
+  seedQwenPageToken,
   qwenCookieHeaderFromArray,
   readQwenAuth,
   writeQwenAuth,
@@ -123,80 +124,51 @@ export async function importQwenFromJson(jsonPath, authFile = QWEN_AUTH_FILE) {
 }
 
 // Главный entry-point для `npm run login-qwen` и in-app re-login.
-export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession = false } = {}) {
-  const profileDir = QWEN_BROWSER_PROFILE;
-  const previousToken = clearSession ? (readQwenAuth(authFile)?.token || "") : "";
-  const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
-  const chromium = await getChatGPTChromium();
-  // Переиспользуем launch-функцию от DeepSeek — она запускает реальный Chrome.
-  const context = await launchPersistentDeepSeekContext(chromium, profileDir, false);
-
-  // Стелс-меры против антибота Alibaba. Маскируем самые палевные follow-up
-  // признаки автоматизации — navigator.webdriver, plugins, permissions API.
-  // Делаем ДО первой навигации, чтобы их JS никогда не увидел "true" значения.
-  await context.addInitScript(() => {
-    // 1. Главный палевный флаг — webdriver. Скрываем через property descriptor.
-    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-
-    // 2. У автоматизированных браузеров navigator.plugins обычно пустой массив.
-    // Подделываем "нормальный" список с одним PDF Viewer.
-    Object.defineProperty(navigator, "plugins", {
-      get: () => [
-        { name: "PDF Viewer", filename: "internal-pdf-viewer", description: "" },
-        { name: "Chrome PDF Viewer", filename: "internal-pdf-viewer", description: "" },
-      ],
-    });
-
-    // 3. languages — Playwright-Chromium иногда выставляет в один элемент. Делаем "ru-RU,ru,en".
-    Object.defineProperty(navigator, "languages", { get: () => ["ru-RU", "ru", "en"] });
-
-    // 4. window.chrome — в обычном Chrome есть, антибот может проверять.
-    if (!window.chrome) {
-      window.chrome = { runtime: {} };
-    }
-  });
-
-  const page = context.pages()[0] || (await context.newPage());
-
-  if (clearSession) {
-    console.log("🔒 Сбрасываю старую сессию Qwen в профиле — нужен новый вход.");
-    await context.clearCookies();
-    await page.evaluate(() => {
-      try { localStorage.removeItem("token"); } catch {}
-    });
-  }
-
-  await page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded" });
-
-  console.log("🔓 Qwen login window открыто (chat.qwen.ai).");
-  console.log("   • Залогинься любым способом (Google OAuth, email/пароль).");
-  console.log("   • НИЧЕГО нажимать в терминале не нужно.");
-  if (clearSession) {
-    console.log("   • Окно не закроется, пока не завершишь вход заново (старый токен сброшен).");
-  } else {
-    console.log("   • Окно закроется автоматически, когда появится JWT-токен.");
-  }
-
+// options.profileDir — каталог состояния аккаунта (мультиаккаунт);
+// без него используется дефолтный QWEN_BROWSER_PROFILE.
+export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession = false, profileDir = null, onProgress } = {}) {
+  const effectiveProfileDir = profileDir || QWEN_BROWSER_PROFILE;
+  const previousToken = readQwenAuth(authFile)?.token || "";
+  const session = await launchQwenCamoufoxSession(effectiveProfileDir, false);
+  const context = session.context;
+  const page = session.page;
   let captured;
+
   try {
-    captured = await waitForQwenToken(context, { previousToken });
-  } catch (error) {
-    await context.close().catch(() => {});
-    throw error;
+    if (clearSession) {
+      console.log("🔒 Сбрасываю старую сессию Qwen в профиле — нужен новый вход.");
+      await clearQwenSessionCookies(context);
+      await page.evaluate(() => {
+        try { localStorage.removeItem("token"); } catch {}
+      });
+    }
+
+    await page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded" });
+    await page.bringToFront();
+
+    console.log("🔓 Qwen login window открыто (chat.qwen.ai).");
+    console.log("   • Залогинься любым способом (Google OAuth, email/пароль).");
+    console.log("   • НИЧЕГО нажимать в терминале не нужно.");
+    if (clearSession) {
+      console.log("   • Окно не закроется, пока не завершишь вход заново (старый токен сброшен).");
+    } else {
+      console.log("   • Окно закроется автоматически, когда появится JWT-токен.");
+    }
+
+    captured = await waitForQwenToken(context, { page, previousToken: clearSession ? previousToken : "" });
+    await alignQwenAuthInContext(context, captured);
+
+    writeQwenAuth(authFile, {
+      cookies: captured.cookies,
+      token: captured.token,
+      userId: captured.userId,
+      profileDir: effectiveProfileDir,
+    });
+
+    onProgress?.({ phase: 'closing', message: 'Данные входа Qwen сохранены. Завершаем закрытие браузера…' });
+  } finally {
+    await session.close();
   }
-
-  await page.evaluate((token) => {
-    try { localStorage.setItem("token", token); } catch {}
-  }, captured.token);
-
-  writeQwenAuth(authFile, {
-    cookies: captured.cookies,
-    token: captured.token,
-    userId: captured.userId,
-    profileDir,
-  });
-  await context.close();
-
   console.log("✅ Qwen login successful.");
   console.log(`💾 Saved auth to ${authFile}`);
   return {
@@ -208,11 +180,68 @@ export async function loginQwenAndSave(authFile = QWEN_AUTH_FILE, { clearSession
   };
 }
 
-// Ждём, пока в cookies появится валидный JWT в `token`.
+export async function clearQwenSessionCookies(context) {
+  await context.clearCookies({ domain: /(^|\.)qwen\.ai$/ });
+}
+
+function isUnexpiredQwenJwt(token) {
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) return false;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+    return !Number.isFinite(payload.exp) || payload.exp * 1000 > Date.now() + 30_000;
+  } catch {
+    return true; // Leave provider validation to Qwen for nonstandard JWT payloads.
+  }
+}
+
+async function qwenTokenCandidates(context, page, cookies) {
+  const tokens = [];
+  const pages = [...new Set([page, ...(context.pages?.() || [])].filter(Boolean))];
+  for (const candidate of pages) {
+    let url;
+    try { url = candidate.url?.(); } catch { continue; }
+    if (url) {
+      try {
+        const hostname = new URL(url).hostname;
+        if (hostname !== 'qwen.ai' && !hostname.endsWith('.qwen.ai')) continue;
+      } catch { continue; }
+    }
+    const token = await candidate.evaluate(() => localStorage.getItem('token') || '').catch(() => '');
+    if (token) tokens.push(token);
+  }
+  const cookieToken = cookies.find(cookie => cookie.name === QWEN_TOKEN_COOKIE_NAME)?.value;
+  if (cookieToken) tokens.push(cookieToken);
+  return [...new Set(tokens)];
+}
+
+function cookiesWithQwenToken(cookies, token) {
+  const saved = cookies.map(cookie => cookie.name === QWEN_TOKEN_COOKIE_NAME ? { ...cookie, value: token } : cookie);
+  if (!saved.some(cookie => cookie.name === QWEN_TOKEN_COOKIE_NAME)) {
+    saved.push({ name: QWEN_TOKEN_COOKIE_NAME, value: token, domain: '.qwen.ai', path: '/', secure: true, httpOnly: false, sameSite: 'Lax', expires: -1 });
+  }
+  return saved;
+}
+
+export async function alignQwenAuthInContext(context, { token, cookies }) {
+  await applyQwenCookiesToContext(context, cookiesWithQwenToken(cookies, token));
+  let synced = false;
+  for (const page of context.pages()) {
+    let hostname;
+    try { hostname = new URL(page.url()).hostname; } catch { continue; }
+    if (hostname !== 'qwen.ai' && !hostname.endsWith('.qwen.ai')) continue;
+    try {
+      await page.evaluate(value => localStorage.setItem('token', value), token);
+      synced = true;
+    } catch { /* A Qwen tab may navigate while OAuth completes. */ }
+  }
+  if (!synced) throw new Error('Qwen login token was not saved in the browser profile.');
+}
+
+// Ждём валидный JWT в `token` текущей Qwen-вкладки или cookies.
 // previousToken — при re-login не принимаем тот же JWT, что был до сброса сессии.
-async function waitForQwenToken(
+export async function waitForQwenToken(
   context,
-  { timeoutMs = 5 * 60 * 1000, intervalMs = 1000, previousToken = "" } = {},
+  { page = null, timeoutMs = 5 * 60 * 1000, intervalMs = 1000, previousToken = "" } = {},
 ) {
   const startedAt = Date.now();
   let lastSeen = "";
@@ -225,43 +254,38 @@ async function waitForQwenToken(
       throw new Error("Qwen login window was closed before authentication completed.");
     }
 
-    const tokenCookie = cookies.find((c) => c.name === QWEN_TOKEN_COOKIE_NAME);
-    const allRequired = QWEN_REQUIRED_COOKIES.every((n) => cookies.some((c) => c.name === n));
-    const token = tokenCookie?.value || "";
-    const looksLikeJwt = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
-
-    if (allRequired && looksLikeJwt) {
-      if (previousToken && token === previousToken) {
-        if (!staleTokenLogged) {
-          staleTokenLogged = true;
-          console.log("[qwen-login] Старый JWT ещё в профиле — заверши вход заново в окне браузера…");
-        }
-      } else {
+    const candidates = await qwenTokenCandidates(context, page, cookies);
+    for (const token of candidates) {
+      const hasRequiredAuth = QWEN_REQUIRED_COOKIES.every((name) => name === QWEN_TOKEN_COOKIE_NAME
+        ? Boolean(token) : cookies.some((cookie) => cookie.name === name));
+      if (hasRequiredAuth && isUnexpiredQwenJwt(token) && token !== previousToken) {
         const userId = cookies.find((c) => c.name === "cnaui")?.value
           || cookies.find((c) => c.name === "aui")?.value
           || "";
-        return { cookies, token, userId };
+        return { cookies: cookiesWithQwenToken(cookies, token), token, userId };
       }
-    }
-
-    if (token && token !== lastSeen) {
-      lastSeen = token;
-      console.log(`[qwen-login] token cookie found (${token.length} chars) — checking format...`);
+      if (previousToken && token === previousToken && !staleTokenLogged) {
+        staleTokenLogged = true;
+        console.log("[qwen-login] Старый JWT ещё в профиле — заверши вход заново в окне браузера…");
+      }
+      if (token && token !== lastSeen) {
+        lastSeen = token;
+        console.log(`[qwen-login] token found (${token.length} chars) — checking format...`);
+      }
     }
 
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   throw new Error(
-    `Qwen login timeout (${Math.round(timeoutMs / 1000)}s). Не дождались валидного JWT в куках. Попробуй снова.`,
+    `Qwen login timeout (${Math.round(timeoutMs / 1000)}s). Не дождались валидного JWT в браузерной сессии. Попробуй снова.`,
   );
 }
 
 // Считать JWT и куки из уже открытого контекста (после goto на chat.qwen.ai).
-async function captureQwenAuthFromContext(context, authFile, profileDir) {
+async function captureQwenAuthFromContext(context, page, authFile, profileDir) {
   const cookies = await context.cookies(QWEN_BASE_URL);
-  const tokenCookie = cookies.find((c) => c.name === QWEN_TOKEN_COOKIE_NAME);
-  const token = tokenCookie?.value || "";
-  const looksLikeJwt = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
+  const token = (await qwenTokenCandidates(context, page, cookies)).find(isUnexpiredQwenJwt) || '';
+  const looksLikeJwt = Boolean(token);
 
   if (!looksLikeJwt) {
     throw new Error(
@@ -274,17 +298,19 @@ async function captureQwenAuthFromContext(context, authFile, profileDir) {
     cookies.find((c) => c.name === "aui")?.value ||
     "";
 
-  writeQwenAuth(authFile, { cookies, token, userId, profileDir });
+  const alignedCookies = cookiesWithQwenToken(cookies, token);
+  await alignQwenAuthInContext(context, { token, cookies: alignedCookies });
+  writeQwenAuth(authFile, { cookies: alignedCookies, token, userId, profileDir });
   return {
     token,
     userId,
-    cookieHeader: qwenCookieHeaderFromArray(cookies),
-    cookies,
+    cookieHeader: qwenCookieHeaderFromArray(alignedCookies),
+    cookies: alignedCookies,
     source: authFile,
   };
 }
 
-// Тихий refresh: headless Chromium с тем же профилем, что при login-qwen.
+// Тихий refresh: Camoufox с тем же состоянием аккаунта, что при login-qwen.
 // Если Google-сессия в профиле жива — обновляем auth.json без окна.
 export async function refreshQwenAuthFromProfile(authFile = QWEN_AUTH_FILE) {
   if (!fs.existsSync(authFile)) {
@@ -299,30 +325,38 @@ export async function refreshQwenAuthFromProfile(authFile = QWEN_AUTH_FILE) {
     // используем дефолтный профиль
   }
 
-  const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
-  const chromium = await getChatGPTChromium();
-  const context = await launchPersistentDeepSeekContext(chromium, profileDir, true);
+  const session = await launchQwenCamoufoxSession(profileDir, true);
+  const context = session.context;
   try {
-    const page = context.pages()[0] || (await context.newPage());
+    const saved = readQwenAuth(authFile);
+    if (saved?.cookies?.length) await applyQwenCookiesToContext(context, saved.cookies, { preserveSession: true });
+    if (saved?.token) await context.addInitScript(seedQwenPageToken, saved.token);
+    const page = session.page;
     await page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.waitForTimeout(2000);
-    return await captureQwenAuthFromContext(context, authFile, profileDir);
+    await waitForQwenToken(context, { page, previousToken: saved?.token || "", timeoutMs: 20_000, intervalMs: 500 });
+    return await captureQwenAuthFromContext(context, page, authFile, profileDir);
+  } catch (error) {
+    if (/NS_ERROR_NET|NS_BINDING_ABORTED|net::ERR|page\.goto:[\s\S]*Timeout/i.test(String(error?.message || error))) {
+      throw Object.assign(new Error('Qwen недоступен по сети: не удалось обновить сохранённую сессию. Повторите запрос после восстановления соединения.'), {
+        code: 'QWEN_SESSION_REFRESH_UNAVAILABLE', delivery: 'not_sent', cause: error,
+      });
+    }
+    throw error;
   } finally {
-    await context.close().catch(() => {});
+    await session.close().catch(() => {});
   }
 }
 
-// Записать импортированные/обновлённые куки в persistent-профиль для browser-proxy.
+// Записать импортированные/обновлённые куки в состояние Camoufox для browser-proxy.
 export async function syncQwenCookiesToProfile(cookies, profileDir = QWEN_BROWSER_PROFILE) {
-  const { getChatGPTChromium } = await import("../chatgpt/engine.mjs");
-  const chromium = await getChatGPTChromium();
-  const context = await launchPersistentDeepSeekContext(chromium, profileDir, true);
+  const session = await launchQwenCamoufoxSession(profileDir, true);
+  const context = session.context;
   try {
     await applyQwenCookiesToContext(context, cookies);
-    const page = context.pages()[0] || (await context.newPage());
+    const page = session.page;
     await page.goto(QWEN_BASE_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForTimeout(1500);
   } finally {
-    await context.close().catch(() => {});
+    await session.close().catch(() => {});
   }
 }

@@ -1,8 +1,17 @@
 import { QWEN_AUTH_FILE, QWEN_BASE_URL } from "./config.mjs";
 import { readQwenAuth } from "./auth-files.mjs";
+import { loadAccounts } from "./account-store.mjs";
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
 let cache = null;
+
+export function selectQwenCatalogCookie(accounts, legacyAuth) {
+  const ready = (Array.isArray(accounts) ? accounts : []).filter((account) =>
+    account?.cookieHeader && account.disabled !== true && account.invalid !== true
+    && account.limited !== true && (!account.resetAt || new Date(account.resetAt).getTime() <= Date.now()));
+  return (ready.find((account) => account.primary) || ready[0])?.cookieHeader
+    || legacyAuth?.cookieHeader || null;
+}
 
 function normalizeLabel(name, id) {
   return String(name || id || "").replace(/-/g, " ").replace(/\bqwen/i, "Qwen").trim();
@@ -20,7 +29,6 @@ export function normalizeQwenWebModels(rawModels) {
         model?.id
         && /^qwen[a-z0-9._-]+$/i.test(String(model.id))
         && info.is_active === true
-        && info.is_visitor_active === true
         && chatTypes.includes("t2t")
         && modality.includes("text")
       );
@@ -34,15 +42,17 @@ export function normalizeQwenWebModels(rawModels) {
         sub: String(meta.short_description || meta.description || "Qwen Web model").slice(0, 160),
         reasoning: capabilities.thinking === true,
         vision: capabilities.vision === true,
-        search: capabilities.search === true,
+        search: capabilities.search === true || meta.auto_search === true,
         live: true,
       };
     });
 }
 
 export async function fetchQwenWebModels({ timeoutMs = 8000 } = {}) {
-  const auth = readQwenAuth(QWEN_AUTH_FILE);
-  if (!auth?.cookieHeader) return [];
+  let accounts = [];
+  try { accounts = loadAccounts(); } catch { /* Use legacy auth if the account store is unavailable. */ }
+  const cookieHeader = selectQwenCatalogCookie(accounts, readQwenAuth(QWEN_AUTH_FILE));
+  if (!cookieHeader) return [];
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -50,7 +60,7 @@ export async function fetchQwenWebModels({ timeoutMs = 8000 } = {}) {
       headers: {
         Accept: "application/json, text/plain, */*",
         source: "web",
-        Cookie: auth.cookieHeader,
+        Cookie: cookieHeader,
       },
       signal: controller.signal,
     });
@@ -75,10 +85,15 @@ export async function getQwenLiveModels({ force = false, ttlMs = DEFAULT_TTL_MS 
   return cache?.models || [];
 }
 
+export function selectQwenDefaultModel(models) {
+  return ["qwen3.8-max", "qwen3.7-plus"].find((id) => models.some((model) => model.id === id))
+    || models[0]?.id || null;
+}
+
 export async function getQwenLiveCatalogOverride(options = {}) {
   const models = await getQwenLiveModels(options);
   if (!models.length) return null;
-  const defaultModel = models.find((model) => model.id === "qwen3.7-plus")?.id || models[0].id;
+  const defaultModel = selectQwenDefaultModel(models);
   return {
     defaultModel,
     modes: [
@@ -96,4 +111,8 @@ export async function getQwenLiveCatalogOverride(options = {}) {
 export function qwenLiveModelSupportsSearch(catalog, modelId) {
   const model = catalog?.models?.find((item) => item.id === modelId);
   return model ? model.search === true : true;
+}
+
+export function qwenLiveModelSupportsThinking(catalog, modelId) {
+  return catalog?.models?.find((item) => item.id === modelId)?.reasoning === true;
 }

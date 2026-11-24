@@ -8,6 +8,18 @@ import {
   persistChatImages,
   resolveChatImage,
 } from "../src/window-app/chat-images.mjs";
+import * as chatImages from '../src/window-app/chat-images.mjs';
+
+it('a Qwen retry restores only images belonging to the same saved conversation', () => {
+  const id = randomUUID();
+  try {
+    const [saved] = persistChatImages(id, [{ name: 'image.png', mimeType: 'image/png', dataBase64: 'AQ==' }]);
+    assert.equal(typeof chatImages.restoreChatImages, 'function');
+    assert.deepEqual(chatImages.restoreChatImages(id, [saved.url]).map(image => image.dataBase64), ['AQ==']);
+    assert.throws(() => chatImages.restoreChatImages('another-chat', [saved.url]), /saved chat image/);
+    assert.throws(() => chatImages.restoreChatImages(id, ['/etc/passwd']), /saved chat image/);
+  } finally { deleteConversationImages(id); }
+});
 
 describe("persistent chat images", () => {
   it("stores an image outside state.json and resolves its local chat URL", () => {

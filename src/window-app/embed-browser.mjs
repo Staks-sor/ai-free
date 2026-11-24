@@ -1,8 +1,7 @@
 // Общий браузер приложения: Web (для DeepSeek/Qwen) + ChatGPT (закреплён) + файлы workspace.
 
-export function renderEmbedBrowserHtml({ root = "", defaultTab = "chatgpt" } = {}) {
-  const safeRoot = JSON.stringify(String(root || ""));
-  const safeDefault = JSON.stringify(defaultTab === "files" ? "files" : (defaultTab === "web" ? "web" : "chatgpt"));
+export function renderEmbedBrowserHtml({ defaultTab = "chatgpt" } = {}) {
+  const safeDefault = JSON.stringify(defaultTab === "web" ? "web" : "chatgpt");
   return `<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -39,7 +38,6 @@ export function renderEmbedBrowserHtml({ root = "", defaultTab = "chatgpt" } = {
   <header class="browserBar">
     <button type="button" class="tab pinned" id="tabChatgpt" data-tab="chatgpt">ChatGPT</button>
     <button type="button" class="tab" id="tabWeb" data-tab="web">🌐 Web</button>
-    <button type="button" class="tab" id="tabFiles" data-tab="files">📁 Файлы</button>
     <span class="tabSpacer"></span>
     <button type="button" class="iconBtn" id="reloadBtn" title="Reload">↻</button>
   </header>
@@ -47,37 +45,32 @@ export function renderEmbedBrowserHtml({ root = "", defaultTab = "chatgpt" } = {
     <iframe id="browserFrame" title="Browser"></iframe>
   </div>
   <script>
-    let workspaceRoot = ${safeRoot};
     const WEB_LIVE = "/embed/web-live";
     const CHATGPT_LIVE = "/embed/chatgpt-live";
     const frame = document.getElementById("browserFrame");
     const tabWeb = document.getElementById("tabWeb");
     const tabChatgpt = document.getElementById("tabChatgpt");
-    const tabFiles = document.getElementById("tabFiles");
     let currentTab = ${safeDefault};
     let userPickedTab = false;
 
     function tabSrc(tab) {
       if (tab === "web") return WEB_LIVE;
       if (tab === "chatgpt") return CHATGPT_LIVE;
-      const root = workspaceRoot || "/";
-      return "/embed/workspace?root=" + encodeURIComponent(root);
+      return CHATGPT_LIVE;
     }
 
     function setTab(tab, { forceReload = false } = {}) {
-      if (!["web", "chatgpt", "files"].includes(tab)) tab = "chatgpt";
+      if (!["web", "chatgpt"].includes(tab)) tab = "chatgpt";
       const nextSrc = tabSrc(tab);
       const sameTab = tab === currentTab;
       if (sameTab && !forceReload && frame.src && frame.src.includes(nextSrc.split("?")[0])) {
         tabWeb.classList.toggle("active", tab === "web");
         tabChatgpt.classList.toggle("active", tab === "chatgpt");
-        tabFiles.classList.toggle("active", tab === "files");
         return;
       }
       currentTab = tab;
       tabWeb.classList.toggle("active", tab === "web");
       tabChatgpt.classList.toggle("active", tab === "chatgpt");
-      tabFiles.classList.toggle("active", tab === "files");
       if (tab === "chatgpt") {
         fetch("/api/chatgpt/warm", { method: "POST" }).catch(() => {});
       }
@@ -94,16 +87,11 @@ export function renderEmbedBrowserHtml({ root = "", defaultTab = "chatgpt" } = {
 
     tabWeb.addEventListener("click", () => pickTab("web"));
     tabChatgpt.addEventListener("click", () => pickTab("chatgpt"));
-    tabFiles.addEventListener("click", () => pickTab("files"));
     document.getElementById("reloadBtn").addEventListener("click", () => setTab(currentTab, { forceReload: true }));
 
     window.addEventListener("message", (event) => {
       const data = event.data;
       if (!data || typeof data !== "object") return;
-      if (data.type === "setWorkspaceRoot") {
-        workspaceRoot = String(data.root || "");
-        if (currentTab === "files") setTab("files", { forceReload: true });
-      }
       if (data.type === "focusBrowserTab" && data.tab) {
         if (data.force || !userPickedTab) setTab(String(data.tab));
       }

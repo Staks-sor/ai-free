@@ -33,8 +33,6 @@
 
 Se o AI Free for útil, [dê uma estrela ao repositório](https://github.com/Staks-sor/ai-free). Isso ajuda outras pessoas a encontrarem o projeto.
 
-- Cartão para doações (OTP Bank): `2201 9604 2500 7505`
-
 ## ✨ Recursos
 
 - 💬 **Uma só interface:** DeepSeek, Qwen e ChatGPT na mesma janela.

@@ -25,7 +25,7 @@ export function matchSkillByTask(task, { exclude = [] } = {}) {
   }
 
   const lower = text.toLowerCase();
-  for (const skill of listInstalledSkills()) {
+  for (const skill of listInstalledSkills({ metadataOnly: true })) {
     if (blocked.has(skill.id)) continue;
     const desc = String(skill.description || "").toLowerCase();
     if (!desc || desc.length < 8) continue;

@@ -10,6 +10,7 @@ import { getStateFile } from "../state/window-state.mjs";
 import { listProviders } from "../providers/registry.mjs";
 import { probeRuntimeCommand } from "../updater.mjs";
 import { resolveLogDirectory } from "../logging/logger.mjs";
+import { runtimeMetrics } from "../diagnostics/runtime-metrics.mjs";
 
 const execFileAsync = promisify(execFile);
 export const DIAGNOSTIC_COMMANDS = ["node", "npm", "git", "python3", "python", "dotnet", "pio", "arduino-cli", "esptool.py"];
@@ -39,6 +40,13 @@ export async function collectDiagnostics({ workspaceRoot, state, runningTaskIds 
   const activeConversation = conversations.find((item) => item.id === state?.activeConversationId) || null;
   const summary = {
     generatedAt: new Date().toISOString(),
+    performance: {
+      scope: "current_backend_since_start",
+      uptimeSeconds: process.uptime(),
+      memoryBytes: process.memoryUsage(),
+      cpuMicroseconds: process.cpuUsage(),
+      metrics: runtimeMetrics.snapshot(),
+    },
     app: {
       name: "AI Free",
       version: AI_FREE_VERSION,
@@ -90,6 +98,17 @@ export function formatDiagnosticReport(data) {
   lines.push(`- Node: ${data.app.node}`);
   lines.push(`- Platform: ${data.app.platform}`);
   lines.push(`- OS release: ${data.app.release}`);
+  if (data.performance) {
+    const perf = data.performance;
+    lines.push("");
+    lines.push("Performance (current backend, since start; recent 128 samples per metric)");
+    lines.push(`- Uptime seconds: ${perf.uptimeSeconds}`);
+    lines.push(`- RSS bytes: ${perf.memoryBytes.rss}`);
+    lines.push(`- CPU microseconds: user=${perf.cpuMicroseconds.user}, system=${perf.cpuMicroseconds.system}`);
+    for (const [name, metric] of Object.entries(perf.metrics)) {
+      lines.push(`- ${name}: count=${metric.count}, samples=${metric.samples}, p50=${metric.p50}, p95=${metric.p95}, max=${metric.max}`);
+    }
+  }
   lines.push("");
   lines.push("Workspace");
   lines.push(`- Root: ${redactHome(data.workspace.root)}`);

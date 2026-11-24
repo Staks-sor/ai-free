@@ -1,0 +1,17 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { guides } from '../src/lib/content/guides.js';
+
+test('AI guides answer distinct product questions and are in the sitemap', async () => {
+  assert.equal(guides.length, 3);
+  assert.equal(new Set(guides.map((guide) => guide.title)).size, 3);
+  const sitemap = await readFile(new URL('../static/sitemap.xml', import.meta.url), 'utf8');
+  for (const guide of guides) {
+    assert.ok(guide.description.length > 60 && guide.description.length < 180);
+    assert.ok(guide.sections.length >= 3);
+    assert.ok(guide.example.length > 80);
+    assert.ok(guide.questions.length >= 2);
+    assert.ok(sitemap.includes(`https://synvox.pro/guides/${guide.slug}/`));
+  }
+});

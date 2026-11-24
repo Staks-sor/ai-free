@@ -130,12 +130,56 @@ async function maybeCaptureSessionFromBody(body, contentType) {
   } catch {}
 }
 
-function buildUpstreamCookieHeader(req) {
-  const auth = readChatGPTAuth(CHATGPT_AUTH_FILE);
-  const fromAuth = auth?.cookies || [];
-  const fromReq = parseCookieHeader(req.headers.cookie);
+function isLocalSessionCookie(name) {
+  return name === "synvox_session" || name.startsWith("synvox_session_");
+}
+
+function buildUpstreamCookieHeader(req, auth) {
+  const fromAuth = (auth?.cookies || []).filter((cookie) => !isLocalSessionCookie(String(cookie?.name || "")));
+  const fromReq = parseCookieHeader(req.headers.cookie).filter((cookie) => !isLocalSessionCookie(cookie.name));
   const merged = mergeCookieSources(fromAuth, fromReq);
   return chatGPTCookieHeaderFromArray(merged);
+}
+
+export function buildUpstreamCookieHeaderForTest(req, auth) {
+  return buildUpstreamCookieHeader(req, auth);
+}
+
+function stripLocalSessionHeaders(headers) {
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase().startsWith("x-synvox-session")) delete headers[name];
+  }
+  return headers;
+}
+
+function deleteHeader(headers, headerName) {
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() === headerName) delete headers[name];
+  }
+}
+
+export function stripLocalSessionHeadersForTest(headers) {
+  return stripLocalSessionHeaders({ ...headers });
+}
+
+function isAllowedChatGPTCDNHostname(hostname) {
+  if (typeof hostname !== "string" || hostname.trim() !== hostname) return false;
+  const host = hostname.toLowerCase();
+  if (host.length > 253) return false;
+  if (host === "files.oaiusercontent.com" || host === "ab.chatgpt.com" || host === "oaistatic.com") return true;
+  const suffix = ".oaistatic.com";
+  if (!host.endsWith(suffix)) return false;
+  const subdomain = host.slice(0, -suffix.length);
+  return subdomain.split(".").every((label) =>
+    label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
+}
+
+export function isAllowedChatGPTCDNHostnameForTest(hostname) {
+  return isAllowedChatGPTCDNHostname(hostname);
+}
+
+export function buildChatGPTCDNHeadersForTest(req, hostname, auth) {
+  return buildUpstreamHeaders(req, hostname, true, auth);
 }
 
 function rewriteLocationHeader(value, reqHost) {
@@ -145,11 +189,7 @@ function rewriteLocationHeader(value, reqHost) {
     if (u.hostname === TARGET_HOST || u.hostname === "www.chatgpt.com") {
       return `${CHATGPT_FRAME_PREFIX}${u.pathname}${u.search}${u.hash}`;
     }
-    if (
-      u.hostname.endsWith("oaistatic.com")
-      || u.hostname === "files.oaiusercontent.com"
-      || u.hostname === "ab.chatgpt.com"
-    ) {
+    if (isAllowedChatGPTCDNHostname(u.hostname)) {
       return `${CHATGPT_CDN_PREFIX}/${u.hostname}${u.pathname}${u.search}${u.hash}`;
     }
   } catch {}
@@ -198,23 +238,49 @@ function rewriteBodyBuffer(body, contentType) {
     ["http:\\/\\/chatgpt.com", frameEsc],
     ["//chatgpt.com", CHATGPT_FRAME_PREFIX],
     ["//www.chatgpt.com", CHATGPT_FRAME_PREFIX],
-    ["https://cdn.oaistatic.com", `${CHATGPT_CDN_PREFIX}/cdn.oaistatic.com`],
-    ["https:\\/\\/cdn.oaistatic.com", `${CHATGPT_CDN_PREFIX.replace(/\//g, "\\/")}\\/cdn.oaistatic.com`],
-    ["https://oaistatic.com", `${CHATGPT_CDN_PREFIX}/oaistatic.com`],
-    ["https:\\/\\/oaistatic.com", `${CHATGPT_CDN_PREFIX.replace(/\//g, "\\/")}\\/oaistatic.com`],
-    ["https://ab.chatgpt.com", `${CHATGPT_CDN_PREFIX}/ab.chatgpt.com`],
-    ["https:\\/\\/ab.chatgpt.com", `${CHATGPT_CDN_PREFIX.replace(/\//g, "\\/")}\\/ab.chatgpt.com`],
     ["https://chat.openai.com", CHATGPT_FRAME_PREFIX],
     ["https:\\/\\/chat.openai.com", frameEsc],
   ];
   for (const [from, to] of replacements) {
     text = text.split(from).join(to);
   }
+  text = text.replace(/https?:\/\/([a-z0-9.-]+)(?=[:/?#])/gi, (url, hostname) =>
+    isAllowedChatGPTCDNHostname(hostname)
+      ? `${CHATGPT_CDN_PREFIX}/${hostname.toLowerCase()}`
+      : url);
+  text = rewriteEscapedCdnUrls(text);
   return Buffer.from(text, "utf8");
+}
+
+function rewriteEscapedCdnUrls(text) {
+  const sourcePrefix = "https:\\/\\/";
+  const targetPrefix = `${CHATGPT_CDN_PREFIX.replace(/\//g, "\\/")}\\/`;
+  let cursor = 0;
+  let start;
+  while ((start = text.indexOf(sourcePrefix, cursor)) >= 0) {
+    const hostStart = start + sourcePrefix.length;
+    let hostEnd = hostStart;
+    while (hostEnd < text.length && /[a-z0-9.-]/i.test(text[hostEnd])) hostEnd += 1;
+    const hostname = text.slice(hostStart, hostEnd);
+    const boundary = text[hostEnd] === ":" || text[hostEnd] === "?" || text[hostEnd] === "#"
+      || text[hostEnd] === "/"
+      || (text[hostEnd] === "\\" && text[hostEnd + 1] === "/");
+    if (boundary && isAllowedChatGPTCDNHostname(hostname)) {
+      text = `${text.slice(0, start)}${targetPrefix}${hostname.toLowerCase()}${text.slice(hostEnd)}`;
+      cursor = start + targetPrefix.length + hostname.length;
+    } else {
+      cursor = hostEnd;
+    }
+  }
+  return text;
 }
 
 export function rewriteChatGPTFrameBodyForTest(text, contentType) {
   return rewriteBodyBuffer(Buffer.from(String(text), "utf8"), contentType);
+}
+
+export function rewriteChatGPTFrameLocationForTest(value) {
+  return rewriteLocationHeader(value, "");
 }
 
 function rewriteSetCookieForFrame(setCookieLine) {
@@ -261,6 +327,31 @@ function decompressBody(body, encoding) {
   });
 }
 
+function resolveFrameTarget(pathname) {
+  if (pathname === CHATGPT_CDN_PREFIX) return { status: 404 };
+  if (pathname.startsWith(`${CHATGPT_CDN_PREFIX}/`)) {
+    const rest = pathname.slice(CHATGPT_CDN_PREFIX.length);
+    const slash = rest.indexOf("/", 1);
+    if (!rest.startsWith("/")) return { status: 404 };
+    const hostname = slash < 0 ? rest.slice(1) : rest.slice(1, slash);
+    if (!hostname) return { status: 404 };
+    if (!isAllowedChatGPTCDNHostname(hostname)) return { status: 403 };
+    return { hostname: hostname.toLowerCase(), upstreamPath: slash < 0 ? "/" : rest.slice(slash) || "/", isCDN: true };
+  }
+  if (pathname === CHATGPT_FRAME_PREFIX || pathname.startsWith(`${CHATGPT_FRAME_PREFIX}/`)) {
+    return {
+      hostname: TARGET_HOST,
+      upstreamPath: pathname.slice(CHATGPT_FRAME_PREFIX.length) || "/",
+      isCDN: false,
+    };
+  }
+  return { status: 404 };
+}
+
+export function resolveChatGPTFrameTargetForTest(pathname) {
+  return resolveFrameTarget(pathname);
+}
+
 function compressBody(body, encoding) {
   const enc = String(encoding || "").toLowerCase();
   if (!enc || enc === "identity") return Promise.resolve(body);
@@ -275,6 +366,24 @@ function compressBody(body, encoding) {
   return new Promise((resolve, reject) => {
     fn(body, (err, out) => (err ? reject(err) : resolve(out)));
   });
+}
+
+function buildUpstreamHeaders(req, hostname, isCDN, auth) {
+  const headers = {
+    ...req.headers,
+    host: hostname,
+    origin: CHATGPT_BASE_URL,
+    referer: `${CHATGPT_BASE_URL}/`,
+  };
+  deleteHeader(headers, "cookie");
+  if (!isCDN) headers.cookie = buildUpstreamCookieHeader(req, auth);
+  deleteHeader(headers, "connection");
+  deleteHeader(headers, "content-length");
+  deleteHeader(headers, "accept-encoding");
+  headers["accept-encoding"] = "identity";
+  if (isCDN) deleteHeader(headers, "authorization");
+  if (!isCDN && auth?.userAgent) headers["user-agent"] = auth.userAgent;
+  return stripLocalSessionHeaders(headers);
 }
 
 function proxyHttpsRequest({ hostname, path, method, headers, body }) {
@@ -319,43 +428,15 @@ export async function handleChatGPTFrameProxy(req, res, url) {
     return;
   }
 
-  let hostname = TARGET_HOST;
-  let upstreamPath = url.pathname;
-
-  if (upstreamPath.startsWith(CHATGPT_CDN_PREFIX)) {
-    const rest = upstreamPath.slice(CHATGPT_CDN_PREFIX.length);
-    const slash = rest.indexOf("/", 1);
-    if (slash <= 1) {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("Not found");
-      return;
-    }
-    hostname = rest.slice(1, slash);
-    upstreamPath = rest.slice(slash) || "/";
-  } else if (upstreamPath.startsWith(CHATGPT_FRAME_PREFIX)) {
-    upstreamPath = upstreamPath.slice(CHATGPT_FRAME_PREFIX.length) || "/";
-  } else {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Not found");
+  const target = resolveFrameTarget(url.pathname);
+  if (target.status) {
+    res.writeHead(target.status, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end(target.status === 403 ? "Forbidden" : "Not found");
     return;
   }
 
-  const auth = readChatGPTAuth(CHATGPT_AUTH_FILE);
-  const upstreamHeaders = {
-    ...req.headers,
-    host: hostname,
-    cookie: buildUpstreamCookieHeader(req),
-    origin: CHATGPT_BASE_URL,
-    referer: `${CHATGPT_BASE_URL}/`,
-  };
-  delete upstreamHeaders.connection;
-  delete upstreamHeaders["content-length"];
-  delete upstreamHeaders["accept-encoding"];
-  upstreamHeaders["accept-encoding"] = "identity";
-
-  if (auth?.userAgent) {
-    upstreamHeaders["user-agent"] = auth.userAgent;
-  }
+  const auth = target.isCDN ? null : readChatGPTAuth(CHATGPT_AUTH_FILE);
+  const upstreamHeaders = buildUpstreamHeaders(req, target.hostname, target.isCDN, auth);
 
   let body = Buffer.alloc(0);
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -372,8 +453,8 @@ export async function handleChatGPTFrameProxy(req, res, url) {
   let upstream;
   try {
     upstream = await proxyHttpsRequest({
-      hostname,
-      path: upstreamPath + url.search,
+      hostname: target.hostname,
+      path: target.upstreamPath + url.search,
       method: req.method,
       headers: upstreamHeaders,
       body,
@@ -440,18 +521,11 @@ export function handleChatGPTFrameUpgrade(req, socket, head) {
   }
 
   const url = new URL(req.url || "/", "http://127.0.0.1");
-  if (!url.pathname.startsWith(CHATGPT_FRAME_PREFIX)) return false;
+  if (url.pathname !== CHATGPT_FRAME_PREFIX && !url.pathname.startsWith(`${CHATGPT_FRAME_PREFIX}/`)) return false;
 
   const upstreamPath = url.pathname.slice(CHATGPT_FRAME_PREFIX.length) || "/";
   const auth = readChatGPTAuth(CHATGPT_AUTH_FILE);
-  const headers = {
-    ...req.headers,
-    host: TARGET_HOST,
-    cookie: buildUpstreamCookieHeader(req),
-    origin: CHATGPT_BASE_URL,
-  };
-  if (auth?.userAgent) headers["user-agent"] = auth.userAgent;
-  delete headers.connection;
+  const headers = buildUpstreamHeaders(req, TARGET_HOST, false, auth);
 
   const proxyReq = https.request({
     hostname: TARGET_HOST,

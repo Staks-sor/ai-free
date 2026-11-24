@@ -16,7 +16,7 @@
 // }
 
 import fs from "node:fs";
-import path from "node:path";
+import { writeAtomicJsonSync } from "../../state/state-writer.mjs";
 import { QWEN_BASE_URL } from "./config.mjs";
 
 export function readQwenAuth(file) {
@@ -39,7 +39,6 @@ export function readQwenAuth(file) {
 }
 
 export function writeQwenAuth(file, { cookies, token, userId, profileDir }) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   const payload = {
     version: 1,
     savedAt: new Date().toISOString(),
@@ -49,8 +48,7 @@ export function writeQwenAuth(file, { cookies, token, userId, profileDir }) {
     userId,
     cookies,
   };
-  fs.writeFileSync(file, JSON.stringify(payload, null, 2), { mode: 0o600 });
-  try { fs.chmodSync(file, 0o600); } catch {}
+  writeAtomicJsonSync(file, payload);
 }
 
 // Cookie-заголовок из массива Playwright-cookies. Включает ВСЕ куки,
@@ -88,9 +86,50 @@ export function playwrightCookiesFromSaved(cookies) {
 
 // Подмешать куки из auth.json в Chromium-контекст (browser-proxy / refresh).
 // Без этого import-qwen и рассинхрон профиля с auth.json ломают «авто»-вход.
-export async function applyQwenCookiesToContext(context, cookies) {
-  const normalized = playwrightCookiesFromSaved(cookies);
+export async function applyQwenCookiesToContext(context, cookies, { preserveSession = false } = {}) {
+  let normalized = playwrightCookiesFromSaved(cookies);
+  if (preserveSession) {
+    const current = await context.cookies(QWEN_BASE_URL);
+    normalized = normalized.filter(cookie => {
+      const existing = current.find(item => item.name === cookie.name && item.domain === cookie.domain && item.path === cookie.path);
+      if (!existing) return true;
+      if (cookie.name === 'refresh_token') return false;
+      if (cookie.name === 'token') {
+        const expires = value => { try { return JSON.parse(Buffer.from(value.split('.')[1], 'base64url').toString()).exp || 0; } catch { return 0; } };
+        return expires(cookie.value) > expires(existing.value);
+      }
+      return true;
+    });
+  }
   if (!normalized.length) return 0;
   await context.addCookies(normalized);
   return normalized.length;
+}
+
+// Serialized into the Qwen page. Seed imported auth without undoing SPA renewal.
+export function seedQwenPageToken(token) {
+  try {
+    const current = localStorage.getItem('token');
+    const expires = value => {
+      try { return JSON.parse(atob(value.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp || 0; }
+      catch { return 0; }
+    };
+    let state;
+    try { state = JSON.parse(localStorage.getItem('qwen_access_token_state') || 'null'); } catch {}
+    const validState = state?.version === 1 && typeof state.stateId === 'string' && state.stateId
+      && typeof state.token === 'string' && state.token && Number.isFinite(state.expiresAt)
+      && Number.isFinite(state.updatedAt) && typeof state.sourceId === 'string';
+    const browserToken = validState && expires(state.token) > expires(current) ? state.token : current;
+    const chosen = !browserToken || expires(token) > expires(browserToken) ? token : browserToken;
+    if (chosen !== current) localStorage.setItem('token', chosen);
+    const expiresAt = expires(chosen) * 1000;
+    if (!Number.isFinite(expiresAt) || expiresAt <= 0) return;
+    localStorage.setItem('at_expire_time', String(expiresAt));
+    // Qwen's current token manager reads this state before the legacy token.
+    if (expiresAt > Date.now() && (!validState || state.token !== chosen || state.expiresAt !== expiresAt)) {
+      localStorage.setItem('qwen_access_token_state', JSON.stringify({ version: 1,
+        stateId: `synvox-${Date.now()}-${Math.random().toString(36).slice(2)}`, token: chosen,
+        expiresAt, updatedAt: Date.now(), sourceId: 'synvox' }));
+    }
+  } catch {}
 }

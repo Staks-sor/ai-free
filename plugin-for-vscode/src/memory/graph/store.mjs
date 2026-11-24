@@ -1,3 +1,4 @@
+import { fileVersion } from "../source-version.mjs";
 // Граф памяти — узлы и рёбра (SQLite + JSON fallback).
 
 import fs from "node:fs";
@@ -12,6 +13,7 @@ const GRAPH_JSON = path.join(MEMORY_BASE, "graph.json");
 let sqliteDb = null;
 let jsonGraph = null;
 let backend = null;
+let jsonVersion = "";
 
 export function closeGraphBackend() {
   if (sqliteDb) {
@@ -72,6 +74,11 @@ async function initSqliteAsync() {
 }
 
 function ensureBackend() {
+  if (backend === "json") {
+    const current = fileVersion(GRAPH_JSON);
+    if (current !== jsonVersion) jsonGraph = loadJsonGraph();
+    jsonVersion = current;
+  }
   if (backend) return backend;
   sqliteDb = initSqliteSync();
   if (sqliteDb) {
@@ -79,6 +86,7 @@ function ensureBackend() {
     return backend;
   }
   jsonGraph = loadJsonGraph();
+  jsonVersion = fileVersion(GRAPH_JSON);
   backend = "json";
   return backend;
 }
@@ -99,6 +107,7 @@ function loadJsonGraph() {
 
 function saveJsonGraph() {
   fs.writeFileSync(GRAPH_JSON, JSON.stringify(jsonGraph, null, 2));
+  jsonVersion = fileVersion(GRAPH_JSON);
 }
 
 export function upsertGraphNode({ kind, label, memoryId = null, workspace = "" }) {
@@ -227,6 +236,7 @@ export async function warmGraphBackend() {
     return backend;
   }
   jsonGraph = loadJsonGraph();
+  jsonVersion = fileVersion(GRAPH_JSON);
   backend = "json";
   return backend;
 }

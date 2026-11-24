@@ -19,6 +19,7 @@ export { SNAPSHOT_FORMAT, formatSnapshotForPrompt, formatSnapshotForToolLog };
 
 const SNAPSHOT_CACHE_DIR = path.join(os.homedir(), ".deepseek-cli", "browser-cache");
 const LAST_SCREENSHOT = path.join(SNAPSHOT_CACHE_DIR, "last-snapshot.jpg");
+export const MAX_BROWSER_SCREENSHOT_BYTES = 16_000_000;
 
 function clampInt(value, min, max, fallback) {
   const n = Math.round(Number(value));
@@ -90,6 +91,19 @@ async function saveScreenshotBuffer(buf) {
     path: LAST_SCREENSHOT,
     bytes: buf.length,
     mime: "image/jpeg",
+  };
+}
+
+export function attachBrowserScreenshot(result, buffer, screenshot, includeScreenshotBase64 = false) {
+  const next = { ...result, screenshot };
+  if (!includeScreenshotBase64) return next;
+  if (buffer.length <= MAX_BROWSER_SCREENSHOT_BYTES) {
+    next.screenshot = { ...screenshot, base64: buffer.toString('base64') };
+    return next;
+  }
+  return {
+    ...next,
+    visionUnavailable: 'Browser screenshot exceeds the 16 MB image attachment limit.',
   };
 }
 
@@ -353,10 +367,7 @@ export async function browserSnapshot({
     try {
       const { captureWebBrowserJpeg } = await import("../window-app/web-browser.mjs");
       const buf = await captureWebBrowserJpeg(page);
-      result.screenshot = await saveScreenshotBuffer(buf);
-      if (includeScreenshotBase64 && buf.length < 900_000) {
-        result.screenshot.base64 = buf.toString("base64");
-      }
+      result = attachBrowserScreenshot(result, buf, await saveScreenshotBuffer(buf), includeScreenshotBase64);
     } catch (error) {
       result.screenshotError = error.message;
     }

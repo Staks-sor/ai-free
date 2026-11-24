@@ -1,48 +1,38 @@
-<h1 align="center">AI Free</h1>
+<h1 align="center">SYNVOX · AI Free</h1>
 
 <p align="center">
-  <strong>Local AI client for DeepSeek, Qwen and ChatGPT with API, code agent, memory and skills</strong>
+  <strong>Локальный AI-клиент с чатами, агентом разработки, API, памятью и skills</strong>
 </p>
 
-AI Free turns free AI web chats into a local developer tool.
+SYNVOX объединяет **DeepSeek**, **Qwen**, **ChatGPT**, **Google AI Mode** и **GLM** в одном окне. Есть CLI, совместимые API и плагины для IDE.
 
-Use **DeepSeek**, **Qwen** and **ChatGPT** from one desktop window, CLI, compatible APIs, IDE integrations and code-agent workflows — with local memory, skills and workspace-aware chats.
+## Возможности
 
-Good for:
+- Чаты с контекстом выбранного проекта.
+- Агент разработки: чтение и изменение файлов, запуск разрешённых команд.
+- Harness: контрольные точки, восстановление задач и ограниченная очередь агентов.
+- Автоматическое продолжение после подтверждённого временного отказа: до двух повторов; кнопка «Стоп» отменяет ожидание.
+- Проверка результата через `verify_task`: неуспешные проверки мешают отметить задачу выполненной.
+- Память, граф памяти и skills с загрузкой выбранных инструкций по мере необходимости.
+- Локальные сессии провайдеров и настройки доступа к инструментам.
+- OpenAI- и Anthropic-совместимые API для подключения инструментов разработки.
 
-- developers who want a free local AI coding assistant;
-- people who use web AI chats but want API/CLI access;
-- experiments with agents, memory, skills and IDE automation.
+## Для кого
 
-## What Is AI Free?
+Для разработчиков, которые используют веб-чаты AI и хотят работать с ними в проекте, через API, CLI или IDE. Возможности и ограничения доступа зависят от провайдера и выбранной модели.
 
-**AI Free** is an open-source local AI client and developer tool for using free web AI chats as a practical coding assistant. It connects **DeepSeek**, **Qwen** and **ChatGPT** to a desktop app, command line interface, local OpenAI-compatible API, Anthropic-compatible API, VS Code plugin, memory, skills and workspace-aware code-agent workflows.
+## Проверки разработки
 
-People usually look for this project as a **free AI coding assistant**, **local AI client**, **OpenAI-compatible API for Qwen or DeepSeek**, **ChatGPT desktop client**, **Qwen VS Code extension**, **DeepSeek code agent**, **free alternative for AI developer tools**, or **local agent with memory and skills**.
+- `npm test` — полный набор тестов и проверка сборки VS Code.
+- `npm run test:coverage` — тот же набор с покрытием: каждый из шестнадцати критических модулей должен иметь минимум 80% строк, 70% ветвей и 80% функций.
+- `npm run check:ci` — согласованность версий, зеркал Desktop/VS Code, документации и отсутствие генерируемых артефактов в Git.
 
-## Popular Use Cases
+Хранилище сохраняет независимые правки разных окон в нумерованных версиях; конфликт одного чата сообщает ошибку. Обновления текста объединяются в очереди; перед запросом модели и выполнением инструмента агент ждёт сохранения checkpoint. Фоновые браузерные транспорты Qwen, GLM и Google AI используют общий пул из двух сессий и закрываются через пять минут простоя. Видимые проверки Qwen закрепляются до завершения; окно ChatGPT и окна приложения учитываются отдельно. Измерения общего CPU/RAM и живые проверки всех провайдеров остаются отдельным этапом.
 
-- Run Qwen, DeepSeek and ChatGPT from one local desktop app.
-- Use Qwen or DeepSeek through an OpenAI-compatible API endpoint.
-- Connect local AI chats to VS Code, Continue, Kilo Code and other developer tools.
-- Ask a code agent to read and edit a project folder with controlled command permissions.
-- Keep local memory, skills and reusable workflows for repeated development tasks.
-- Build agent pipelines, Telegram workflows and browser automation around free web AI providers.
-
-## ✨ Highlights
-
-- **One local app:** DeepSeek, Qwen and ChatGPT chats in one workspace.
-- **Developer interfaces:** desktop UI, CLI, OpenAI-compatible API and Anthropic-compatible API.
-- **Code agent:** `/code` mode with workspace file access and controlled command permissions.
-- **Memory and skills:** long-term memory, memory graph and reusable task workflows.
-- **Project instructions:** hierarchical `AGENTS.md` files are reloaded before every code-agent task; nested files apply to their own directory tree.
-- **IDE-friendly:** works with tools such as Continue, Kilo Code and PyCharm ACP-compatible flows.
-- **Local-first sessions:** provider browser sessions and app state are stored on your machine.
-
-## 🌍 Выберите язык / Choose your language
+## 🌍 Выберите язык
 
 <p>
-  <a href="README.md"><img src="https://img.shields.io/badge/Русский-0969da?style=for-the-badge" height="30" alt="Русский"></a>
+  <a href="docs/readme/README.ru.md"><img src="https://img.shields.io/badge/Русский-0969da?style=for-the-badge" height="30" alt="Русский"></a>
   <a href="docs/readme/README.en.md"><img src="https://img.shields.io/badge/English-1f883d?style=for-the-badge" height="30" alt="English"></a>
   <a href="docs/readme/README.es.md"><img src="https://img.shields.io/badge/Español-d29922?style=for-the-badge" height="30" alt="Español"></a>
   <a href="docs/readme/README.pt.md"><img src="https://img.shields.io/badge/Português-8250df?style=for-the-badge" height="30" alt="Português"></a>
@@ -56,17 +46,17 @@ People usually look for this project as a **free AI coding assistant**, **local 
 <p align="center">
   <img src="https://img.shields.io/github/package-json/v/Staks-sor/ai-free?style=flat-square&amp;label=version" alt="Версия">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-8250df?style=flat-square" alt="macOS, Linux, Windows">
-  <img src="https://img.shields.io/badge/Node.js-18%2B-1f883d?style=flat-square" alt="Node.js 18+">
-  <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT">
+  <img src="https://img.shields.io/badge/Node.js-22%2B-1f883d?style=flat-square" alt="Node.js 22+">
+  <img src="https://img.shields.io/badge/providers-DeepSeek%20%7C%20Qwen%20%7C%20ChatGPT%20%7C%20Google%20AI-d29922?style=flat-square" alt="DeepSeek, Qwen, ChatGPT, Google AI">
 </p>
 
-<p align="center"><strong>AI Free 0.4.25</strong></p>
+<p align="center"><strong>SYNVOX 0.5.65</strong></p>
 
 <p align="center">
   <img src="docs/assets/ai-free-agent-0.4.13.png" width="100%" alt="AI Free 0.4.25: desktop code agent with compact tool timeline">
 </p>
 
-> Локальный AI-клиент, который превращает веб-чаты DeepSeek, Qwen и ChatGPT в инструмент для разработчика: окно чатов, CLI, совместимые API, `/code`-агент, память, skills и IDE-интеграции.
+> Локальный AI-клиент, который превращает веб-чаты DeepSeek, Qwen, ChatGPT и Google AI Mode в инструмент для разработчика: окно чатов, CLI, совместимые API, `/code`-агент, память, skills и IDE-интеграции.
 
 ---
 
@@ -74,13 +64,7 @@ People usually look for this project as a **free AI coding assistant**, **local 
 
 Если AI Free экономит тебе время, поставь звезду на GitHub — это помогает проекту появляться в поиске и рекомендациях.
 
-## 💳 Поддержать развитие
-
-Если хочется отблагодарить материально — любая сумма даёт сигнал, что проект имеет смысл, и мотивацию добавлять новые фичи (мультипровайдер Qwen/Kimi, attachments, стриминг ответов и т.д.).
-
-- **Карта (ОТП Банк):** `2201 9604 2500 7505`
-
-Спасибо!
+SYNVOX бесплатен для личного использования. Для подключения моделей действуют правила и лимиты AI-провайдеров.
 
 ---
 
@@ -88,7 +72,7 @@ People usually look for this project as a **free AI coding assistant**, **local 
 
 ## ✨ Что внутри
 
-- 💬 **Три провайдера:** DeepSeek, Qwen и ChatGPT в одном окне с выбором модели при создании беседы.
+- 💬 **Четыре провайдера:** DeepSeek, Qwen, ChatGPT и Google AI Mode в одном окне с выбором модели при создании беседы.
 - 🔑 **Авто-логин DeepSeek:** один вход через браузер, затем тихое восстановление сессии или окно re-login.
 - 🔐 **Авто-логин Qwen и ChatGPT:** отдельные профили и локальные сессии для каждого провайдера.
 - 🪟 **Окно чатов** (`localhost:4317`): несколько параллельных бесед, каждая привязана к своей папке-проекту.
@@ -115,9 +99,9 @@ People usually look for this project as a **free AI coding assistant**, **local 
 
 Везде нужно:
 
-- **Node.js ≥ 18** ([nodejs.org](https://nodejs.org)). Проверить: `node -v`.
+- **Node.js ≥ 22** ([nodejs.org](https://nodejs.org)). Проверить: `node -v`.
 - **npm** (идёт в комплекте с Node).
-- Подключение к интернету и установки Chromium (~150 МБ).
+- Подключение к интернету. Для входа Qwen/DeepSeek нужен Python 3.10+ ([python.org](https://www.python.org/downloads/)); при установке на Windows включите добавление Python в PATH и перезапустите IDE. Camoufox и браузер скачиваются при первом подключении; этап подготовки и ошибки видны в Настройки → Аккаунты. Нужен доступ к PyPI и загрузкам GitHub. Chromium устанавливается только для компонентов, которые его используют.
 
 Опционально:
 
@@ -326,6 +310,8 @@ Remove-Item -Recurse -Force `
 | `npm run check` | Проверка auth DeepSeek (`OK: authenticated`). |
 | `npm run login` | Re-login DeepSeek → `~/.deepseek-cli/auth.json`. |
 | `npm run login-qwen` | Re-login Qwen → `~/.qwen-cli/auth.json`. |
+| `npm run login-google-ai` | Вход в Google AI Mode → отдельный профиль `~/.google-ai-cli/`. |
+| `npm run login-glm` | Вход в Z.ai для моделей GLM → отдельный профиль `~/.glm-cli/`. |
 | `npm run import-qwen` | Импорт cookies из JSON (Chrome / Cookie Editor), без Playwright. |
 | `npm run save-creds` | Email + пароль для авто-заполнения формы DeepSeek. |
 | `npm test` | Полный набор юнит- и интеграционных тестов. |
@@ -338,9 +324,10 @@ npm run api
 ```
 
 Если уже открыто окно чатов (`npm start`), тот же API доступен прямо на порту окна:
-`http://127.0.0.1:4317/v1`. Base URL и ключи есть в Settings. Для DeepSeek и
-Qwen создаются отдельные ключи формата `sk-...`; каждый ключ переиспользуется из
-`~/.deepseek-cli/settings.json` и не дублируется.
+`http://127.0.0.1:4317/v1`. Base URL и ключи есть в Settings. Для каждого
+провайдера создаётся отдельный ключ формата `sk-...`; он переиспользуется из
+`~/.deepseek-cli/settings.json`. API-ключ обязателен: без настроенного ключа
+запрос получает HTTP 401. Браузерные API-клиенты поддерживаются с localhost.
 
 Если окно не нужно, запусти:
 
@@ -371,6 +358,17 @@ Qwen использует **отдельный** Chromium-профиль и API 
 npm run login-qwen
 ```
 
+Первый вход сохраняется как первый аккаунт пула. При следующих запусках этой
+команды открывается меню: можно добавить аккаунты пользователя или друзей,
+проверить их состояние, повторно войти либо удалить аккаунт. Для каждого
+аккаунта используются отдельный браузерный профиль, сессия, поток и cooldown.
+AI Free сохраняет привязку чата/Telegram-пользователя к аккаунту и переключает
+его только при подтверждённой ошибке авторизации или лимите `429`.
+
+Если Qwen показывает Baxia-слайдер, AI Free может аккуратно попробовать решить
+его локально. Ошибка решателя не ломает запрос: включается обычная пауза, а
+функцию можно полностью отключить через `QWEN_BAXIA_AUTO_SOLVE=0`.
+
 ### Способ 3 — импорт cookies (если Playwright блокирует антибот)
 
 1. Залогинься в **обычном Chrome** на [chat.qwen.ai](https://chat.qwen.ai)
@@ -388,6 +386,32 @@ npm run import-qwen -- /path/to/cookies.json
 Как у DeepSeek: при протухшей сессии программа сначала пробует **тихий refresh** из `~/.qwen-cli/browser-profile` (без окна). Если не вышло — открывает окно логина. В окне чатов и в API (`node api/server.mjs`) это встроено.
 
 Перед Qwen-чатом нужен хотя бы один успешный `login-qwen` или импорт — иначе нечего обновлять.
+
+---
+
+## 🔎 Подключение Google AI Mode
+
+Google AI Mode работает через личную сессию Google Search и отдельный браузерный профиль. В окне AI Free выбери **Google AI**, нажми **«Подключить»** и заверши вход, либо выполни:
+
+```bash
+npm run login-google-ai
+```
+
+После входа модель `google-ai-mode` доступна в Desktop, VS Code, Telegram и локальном OpenAI-compatible API. Обычный чат и `/code` используют одну цепочку Google AI Mode, поэтому результаты workspace-инструментов возвращаются модели на следующих шагах.
+
+## 🧩 Подключение GLM
+
+GLM работает через личную браузерную сессию Z.ai. AI Free не хранит и не раздаёт общий API-ключ: каждый пользователь входит в собственный аккаунт. В окне нового чата выбери **GLM**, нажми **«Подключить»** и заверши вход либо выполни:
+
+```bash
+npm run login-glm
+```
+
+После входа модели `glm-5.3-flash`, `glm-5.3`, `glm-5.2` и `glm-5-turbo` доступны в Desktop, VS Code, Telegram и локальном OpenAI-compatible API. Доступность отдельных моделей определяется аккаунтом Z.ai; бесплатная сессия может разрешать только GLM 5.3 Flash. Окно браузера используется только для входа; обычные ответы и Coder-задачи отображаются внутри AI Free через сохранённую сессию `~/.glm-cli/`.
+
+Графическое окно требуется только для первичной авторизации. После неё AI Free сохраняет переносимую сессию в `~/.google-ai-cli/storage-state.json`, а запросы выполняет через headless Camoufox без запуска пользовательского Chrome. Для работы на сервере без графической оболочки сначала выполни вход на компьютере с браузером, затем безопасно перенеси каталог `~/.google-ai-cli/` в домашний каталог того же пользователя на сервере и запусти `npm run api`.
+
+AI Free не передаёт логин или пароль Google и не раздаёт общую сессию: профиль хранится локально в `~/.google-ai-cli/browser-profile`. Лимиты и доступность AI Mode определяет Google; проект не обещает безлимитный доступ.
 
 ---
 
@@ -485,10 +509,10 @@ npm run save-creds
 
 ### Linux
 
-- Окно чатов открывается в **`--app=` режиме**: программа ищет `google-chrome`, `chromium`, `chromium-browser` или `microsoft-edge` в `PATH` и запускает с флагом `--app=URL`. Получаешь отдельное окно-приложение, как на macOS.
-- Если ни один из этих браузеров не установлен — fallback на `xdg-open`: обычная вкладка в дефолтном браузере.
-- Если у тебя Wayland (а не X11), Chromium из Playwright обычно работает, но если возникнут странности — попробуй `XDG_SESSION_TYPE=x11 npm start`.
-- Системные зависимости для Playwright Chromium ставятся командой `sudo npx playwright install-deps chromium`.
+- DeepSeek, Qwen, Google AI и встроенный браузер по умолчанию используют Camoufox. Проверка Chromium не блокирует запуск CLI/API и вход через Camoufox.
+- Desktop-оболочка, GLM и вкладка Web ещё используют Chromium. При обращении к ним проверяется только выбранный движок: Patchright, либо Playwright при его отсутствии.
+- `npm install` устанавливает зависимости приложения; отдельные браузерные бинарники больше не скачиваются обеими библиотеками заранее.
+- Для графического окна нужен рабочий X11/Wayland-сеанс и системные библиотеки выбранного браузера. Отсутствие этих библиотек отличается от отсутствующего бинарника.
 
 ### Windows
 
@@ -550,7 +574,7 @@ npm run api
 
 ### Настройка в Kilo Code
 
-1. Подключи провайдеров в CLI: `npm run login` и/или `npm run login-qwen`
+1. Подключи провайдеров в CLI: `npm run login`, `npm run login-qwen` и/или `npm run login-google-ai`
 2. Запусти API: `npm run api` или открой окно чатов и возьми Base URL из Settings
 3. В Kilo Code — **OpenAI-совместимый провайдер**:
    - **Base URL:** `http://127.0.0.1:4318/v1`
@@ -562,6 +586,7 @@ npm run api
 | `deepseek-v4-flash`, `deepseek-chat` | DeepSeek, обычный чат |
 | `deepseek-v4-pro`, `deepseek-reasoner` | DeepSeek reasoning / Expert |
 | `qwen3.7-max` (дефолт), `qwen3.6-plus`, `qwen3-max`, … | Qwen |
+| `google-ai-mode` | Google Search AI Mode |
 
 **Важно:** в настройках Kilo указывай именно эти id — не подставляй `deepseek-reasoner` вручную в другие поля. Сервер сам маппит `deepseek-reasoner` → `model_type: expert` у DeepSeek.
 
@@ -614,7 +639,7 @@ ACP-агент ходит в наш OpenAI-compatible API (`http://127.0.0.1:431
 - `credentials.json` — только DeepSeek, опционально. **Не используй тот же пароль, что для банка/почты.**
 - `/code` — команды без shell, в пределах workspace, whitelist. `curl`/`wget`/`bash` заблокированы по умолчанию.
 - Серверы чатов и API слушают только `127.0.0.1` (`4317`, `4318`).
-- Chromium-профили DeepSeek и Qwen **разделены** — сессии не смешиваются; открывает только Playwright по запросу программы.
+- Camoufox-профили DeepSeek и Qwen **разделены** — сессии не смешиваются; браузер запускается по запросу программы.
 
 ## 🧾 Подробные логи
 

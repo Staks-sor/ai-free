@@ -116,8 +116,8 @@ export function isQwenAuthError(error) {
   if (error.isAuthError) return true;
   const msg = String(error.message || "");
   const status = error.status || error.httpStatus;
-  if (status === 401 || status === 403) return true;
+  if (status === 401) return true;
   if (isQwenSessionExpiredText(msg)) return true;
-  return /(?:^|\s)(401|403)(?:\s|$)/.test(msg)
+  return /(?:^|\s)401(?:\s|$)/.test(msg)
     || /unauthorized|not.?logged|login required|please log in|sign.?in|auth(?:entication)? failed|сессия qwen устарела/i.test(msg);
 }

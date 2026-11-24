@@ -1,3 +1,5 @@
+import { browserRequestPolicies } from "../browser-request-policy.mjs";
+import { measureProviderExchange } from "../../diagnostics/runtime-metrics.mjs";
 // Клиент ChatGPT поверх веб-сессии (как Qwen): отправка идёт через настоящий
 // интерфейс chatgpt.com в фоновом браузере. Никаких PoW/Turnstile в Node —
 // React-фронтенд сам подписывает запросы. Вся механика в browser-proxy.mjs.
@@ -12,13 +14,15 @@ import { createFileLogger } from "../../logging/logger.mjs";
 const providerLogger = createFileLogger({ component: "provider.chatgpt" });
 
 export class ChatGPTChatClient {
-  constructor({ accessToken, cookies, cookieHeader, userAgent, debug = false, proxyFactory = getChatGPTBrowserProxy }) {
+  constructor({ accessToken, cookies, cookieHeader, userAgent, debug = false, accountId = "default", proxyFactory = getChatGPTBrowserProxy, resetProxy = resetChatGPTBrowserProxy }) {
     this.accessToken = accessToken;
     this.cookies = cookies || [];
     this.cookieHeader = cookieHeader || "";
     this.userAgent = userAgent || "";
+    this.accountId = accountId;
     this.debug = debug;
     this.proxyFactory = proxyFactory;
+    this.resetProxy = resetProxy;
   }
 
   setAuth({ accessToken, cookies, cookieHeader }) {
@@ -30,7 +34,9 @@ export class ChatGPTChatClient {
   // model/parentMessageId не используются: модель берётся та, что выбрана в веб-UI,
   // а цепочка контекста ведётся самим ChatGPT через conversationId.
   // images: [{ name, mimeType, dataBase64 }] — прикрепляются в веб-композер ChatGPT.
-  async complete({ prompt, model = null, onText = null, conversationId = null, images = [] }) {
+  async complete({ prompt, model = null, onText = null, conversationId = null, images = [], signal = null }) {
+    signal?.throwIfAborted();
+    browserRequestPolicies.chatgpt.assertAvailable(this.accountId);
     const startedAt = Date.now();
     providerLogger.info("provider.chatgpt.request", {
       model,
@@ -40,8 +46,9 @@ export class ChatGPTChatClient {
     });
     try {
       try {
-        const proxy = await this.proxyFactory({ debug: this.debug });
-        const result = await proxy.sendChat({ prompt, model, conversationId, onText, images });
+        const proxy = await this.proxyFactory({ debug: this.debug, accountId: this.accountId });
+        signal?.throwIfAborted();
+        const result = await measureProviderExchange("chatgpt", probe => proxy.sendChat({ prompt, model, conversationId, onText: probe.onText, images, signal, accountId: this.accountId }), { onText, attempt: 1 });
         providerLogger.info("provider.chatgpt.success", {
           model,
           responseChars: String(result?.text || "").length,
@@ -49,16 +56,17 @@ export class ChatGPTChatClient {
         });
         return result;
       } catch (error) {
-        if (!isChatGPTTransportError(error)) throw error;
+        if (signal?.aborted || error?.promptSubmitted || error?.delivery !== "not_sent" || !isChatGPTTransportError(error)) throw error;
         providerLogger.warn("provider.chatgpt.retry", {
           model,
           reason: error.message,
           durationMs: Date.now() - startedAt,
         });
         if (this.debug) console.log(`[chatgpt-client] browser transport reset: ${error.message}`);
-        resetChatGPTBrowserProxy();
-        const proxy = await this.proxyFactory({ debug: this.debug });
-        const result = await proxy.sendChat({ prompt, model, conversationId, onText, images });
+        await this.resetProxy(this.accountId);
+        const proxy = await this.proxyFactory({ debug: this.debug, accountId: this.accountId });
+        signal?.throwIfAborted();
+        const result = await measureProviderExchange("chatgpt", probe => proxy.sendChat({ prompt, model, conversationId, onText: probe.onText, images, signal, accountId: this.accountId }), { onText, attempt: 2 });
         providerLogger.info("provider.chatgpt.success", {
           model,
           retried: true,
@@ -74,7 +82,7 @@ export class ChatGPTChatClient {
       });
       throw error;
     } finally {
-      scheduleChatGPTBrowserIdleClose();
+      if (this.accountId === "default") scheduleChatGPTBrowserIdleClose();
     }
   }
 }

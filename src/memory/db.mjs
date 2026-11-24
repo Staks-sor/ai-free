@@ -1,9 +1,11 @@
+import path from "node:path";
+import { fileVersion } from "./source-version.mjs";
 // SQLite FTS5 backend + JSON fallback для Node < 22.
 
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
-import { LEGACY_INDEX, MEMORY_DB, MIGRATION_FLAG, ensureMemoryDirs } from "./paths.mjs";
+import { LEGACY_INDEX, MEMORY_DB, MEMORY_BASE, MIGRATION_FLAG, ensureMemoryDirs } from "./paths.mjs";
 import { deleteMemoryMarkdown, writeMemoryMarkdown } from "./markdown.mjs";
 import { buildFtsMatchQuery, rankFtsResults } from "./search/fts-query.mjs";
 import { listRecentItems, searchKeywordItems } from "./search/keyword.mjs";
@@ -15,8 +17,21 @@ const require = createRequire(import.meta.url);
 let sqliteDb = null;
 let jsonItems = null;
 let backend = null;
+let revision = 0, jsonVersion = "";
+
+export function getMemorySourceVersion() {
+  ensureBackend();
+  const currentJson = fileVersion(LEGACY_INDEX);
+  if (backend === "json" && currentJson !== jsonVersion) jsonItems = loadJsonItems();
+  jsonVersion = currentJson;
+  const sqliteVersion = sqliteDb?.prepare("PRAGMA data_version").get()?.data_version || 0;
+  return [revision, sqliteVersion, fileVersion(MEMORY_DB), fileVersion(`${MEMORY_DB}-wal`),
+    currentJson, fileVersion(path.join(MEMORY_BASE, "graph.json"))].join("|");
+}
 
 export function closeMemoryBackend() {
+  revision++;
+  jsonVersion = "";
   if (sqliteDb) {
     try { sqliteDb.close(); } catch {}
     sqliteDb = null;
@@ -142,17 +157,121 @@ function ensureBackend() {
 function loadJsonItems() {
   ensureMemoryDirs();
   if (!fs.existsSync(LEGACY_INDEX)) return [];
-  try {
-    const index = JSON.parse(fs.readFileSync(LEGACY_INDEX, "utf8"));
-    return Array.isArray(index.items) ? index.items.map(normalizeItem) : [];
-  } catch {
-    return [];
-  }
+  const index = JSON.parse(fs.readFileSync(LEGACY_INDEX, "utf8"));
+  if (!index || !Array.isArray(index.items)) throw new Error(`Invalid memory index: ${LEGACY_INDEX}`);
+  return index.items.map(normalizeItem);
 }
 
 function saveJsonItems(items) {
   ensureMemoryDirs();
-  fs.writeFileSync(LEGACY_INDEX, JSON.stringify({ items }, null, 2));
+  const temporaryPath = `${LEGACY_INDEX}.${process.pid}.${randomUUID()}.tmp`;
+  const fd = fs.openSync(temporaryPath, "wx", 0o600);
+  try {
+    fs.writeFileSync(fd, JSON.stringify({ items }, null, 2));
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fs.renameSync(temporaryPath, LEGACY_INDEX);
+  } finally {
+    try { fs.closeSync(fd); } catch {}
+    fs.rmSync(temporaryPath, { force: true });
+  }
+}
+
+function withJsonIndexLock(update) {
+  const lockPath = `${LEGACY_INDEX}.lock`;
+  const deadline = Date.now() + 10000;
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  const token = randomUUID();
+  while (true) {
+    const preparedLock = `${lockPath}.init-${process.pid}-${token}`;
+    fs.mkdirSync(preparedLock, { mode: 0o700 });
+    try {
+      const temporaryOwner = path.join(preparedLock, `owner.${token}.tmp`);
+      fs.writeFileSync(temporaryOwner, JSON.stringify({ pid: process.pid, token, createdAt: Date.now() }), { flag: "wx", mode: 0o600 });
+      fs.renameSync(temporaryOwner, path.join(preparedLock, "owner.json"));
+    } catch (error) {
+      fs.rmSync(preparedLock, { recursive: true, force: true });
+      throw error;
+    }
+    let claimError;
+    try {
+      try {
+        fs.lstatSync(lockPath);
+        claimError = Object.assign(new Error("Memory index lock exists"), { code: "EEXIST" });
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        fs.renameSync(preparedLock, lockPath);
+        break;
+      }
+    } catch (error) {
+      claimError = error;
+    }
+    fs.rmSync(preparedLock, { recursive: true, force: true });
+    if (claimError.code !== "EEXIST" && claimError.code !== "ENOTEMPTY") throw claimError;
+
+    let stale = false;
+    try {
+      const stat = fs.statSync(lockPath);
+      let owner;
+      try { owner = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")); } catch {}
+      if (Number.isSafeInteger(owner?.pid)) {
+        try { process.kill(owner.pid, 0); } catch (killError) { stale = killError.code === "ESRCH"; }
+      } else {
+        stale = Date.now() - stat.mtimeMs > 30000;
+      }
+      if (stale) {
+        const stalePath = Number.isSafeInteger(owner?.pid) && typeof owner.token === "string"
+          ? `${lockPath}.stale-${owner.token}`
+          : `${lockPath}.stale-init-${stat.dev}-${stat.ino}`;
+        try {
+          let currentOwner;
+          try { currentOwner = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")); } catch {}
+          const currentStat = fs.statSync(lockPath);
+          const sameOwner = owner?.token
+            ? currentOwner?.token === owner.token
+            : currentOwner?.pid === owner?.pid && currentStat.dev === stat.dev && currentStat.ino === stat.ino;
+          if (sameOwner) {
+            fs.renameSync(lockPath, stalePath);
+            fs.writeFileSync(path.join(stalePath, ".reaped"), "", { flag: "wx", mode: 0o600 });
+            for (const entry of fs.readdirSync(stalePath).filter((name) => name !== ".reaped")) {
+              fs.rmSync(path.join(stalePath, entry), { recursive: true, force: true });
+            }
+          }
+        } catch (renameError) {
+          if (renameError.code !== "ENOENT" && renameError.code !== "EEXIST" && renameError.code !== "ENOTEMPTY") throw renameError;
+        }
+      }
+    } catch (statError) {
+      if (statError.code === "ENOENT") continue;
+      throw statError;
+    }
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for memory index lock: ${lockPath}`);
+    Atomics.wait(wait, 0, 0, 5);
+  }
+
+  try {
+    const items = loadJsonItems();
+    const updated = update(items);
+    if (updated) saveJsonItems(items);
+    jsonItems = items;
+    jsonVersion = fileVersion(LEGACY_INDEX);
+    return updated;
+  } finally {
+    try {
+      const owner = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8"));
+      if (owner.token === token) fs.rmSync(lockPath, { recursive: true, force: true });
+    } catch (error) {
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+  }
+}
+
+function refreshJsonItems() {
+  const current = fileVersion(LEGACY_INDEX);
+  if (current !== jsonVersion) {
+    jsonItems = loadJsonItems();
+    jsonVersion = current;
+  }
 }
 
 function migrateLegacyJson(db) {
@@ -258,10 +377,13 @@ export function insertMemoryItem(rawItem) {
     upsertSqliteItem(sqliteDb, item);
     upsertItemVector(sqliteDb, item);
   } else {
-    jsonItems = [item, ...jsonItems.filter((entry) => entry.id !== item.id)];
-    saveJsonItems(jsonItems);
+    withJsonIndexLock((items) => {
+      items.splice(0, items.length, item, ...items.filter((entry) => entry.id !== item.id));
+      return true;
+    });
   }
 
+  revision++;
   writeMemoryMarkdown(item);
   return item;
 }
@@ -272,10 +394,12 @@ export function getMemoryItem(id) {
     const row = sqliteDb.prepare(`SELECT * FROM memory_items WHERE id = ?`).get(String(id));
     return rowToItem(row);
   }
+  refreshJsonItems();
   return jsonItems.find((entry) => entry.id === id) || null;
 }
 
 export function deleteMemoryItem(id) {
+  revision++;
   ensureBackend();
   const target = String(id);
 
@@ -287,10 +411,12 @@ export function deleteMemoryItem(id) {
     return result.changes > 0;
   }
 
-  const before = jsonItems.length;
-  jsonItems = jsonItems.filter((entry) => entry.id !== target);
-  if (jsonItems.length !== before) {
-    saveJsonItems(jsonItems);
+  const deleted = withJsonIndexLock((items) => {
+    const before = items.length;
+    for (let index = items.length - 1; index >= 0; index -= 1) if (items[index].id === target) items.splice(index, 1);
+    return items.length !== before;
+  });
+  if (deleted) {
     deleteMemoryMarkdown(target);
     return true;
   }
@@ -303,6 +429,7 @@ export function searchMemoryItems(query = "", workspace = "", limit = 20) {
 
   if (!q) {
     if (backend === "sqlite") return listRecentSqlite(workspace, limit);
+    refreshJsonItems();
     return listRecentItems(jsonItems, workspace, limit);
   }
 
@@ -310,6 +437,7 @@ export function searchMemoryItems(query = "", workspace = "", limit = 20) {
     return searchHybridSqlite(q, workspace, limit);
   }
 
+  refreshJsonItems();
   return searchHybridJson(q, workspace, limit);
 }
 

@@ -7,16 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Известные модули с намеренными платформенными различиями
-export const KNOWN_PLATFORM_SPECIFIC = new Map([
-  [
-    "src/state/window-state.mjs",
-    "Desktop поддерживает поле mainAgentId в нормализации пайплайнов для мультиагентных команд (agent-team)",
-  ],
-  [
-    "src/window-app/web-browser.mjs",
-    "VS Code запускает headed Chrome за пределами экрана (-32000,-32000) для работы внутри webview редактора",
-  ],
-]);
+export const KNOWN_PLATFORM_SPECIFIC = new Map();
 
 // Модули, присутствующие только в Desktop-версии
 export const KNOWN_DESKTOP_ONLY = new Set([

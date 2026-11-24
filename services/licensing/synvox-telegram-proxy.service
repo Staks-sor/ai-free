@@ -1,0 +1,19 @@
+[Unit]
+Description=SYNVOX Telegram-only Xray egress
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=synvox-merchant
+Group=synvox-merchant
+ExecStart=/opt/synvox-telegram/xray run -config /opt/synvox-telegram/config.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -84,8 +84,11 @@ describe("conversationList", () => {
         model: "",
         roleId: "assistant",
         pipelineMode: false,
-        coderMode: false,
+        pipelineAgents: [],
+        coderMode: true,
+        interactionMode: "execute",
         hardwareMode: false,
+        accessMode: "project",
         memoryEnabled: true,
         autoSkill: true,
         skillId: null,
@@ -133,6 +136,7 @@ describe("conversationList", () => {
 import { COMMAND_CATALOG, loadSettings } from "../src/state/settings.mjs";
 import { getProviderIds } from "../src/providers/model-catalog.mjs";
 import { mergeWindowStates, normalizeWindowState } from "../src/state/window-state.mjs";
+import { SETTINGS_FILE } from "../src/config.mjs";
 
 describe("COMMAND_CATALOG integrity", () => {
   it("has at least the legacy 7 base commands enabled by default", () => {
@@ -171,6 +175,12 @@ describe("COMMAND_CATALOG integrity", () => {
     assert.throws(() => dotnet.validateArgs(["nuget", "push", "package.nupkg"]));
     assert.throws(() => dotnet.validateArgs(["tool", "install", "example"]));
   });
+
+  it("allows Windows tasklist diagnostics by default", () => {
+    assert.ok(COMMAND_CATALOG.tasklist);
+    assert.equal(COMMAND_CATALOG.tasklist.enabledByDefault, true);
+    assert.ok(loadSettings().allowedCommands.includes("tasklist"));
+  });
 });
 
 describe("loadSettings fallback", () => {
@@ -190,6 +200,31 @@ describe("loadSettings fallback", () => {
     assert.ok(result.allowedCommands.includes("docker"));
     assert.ok(result.allowedCommands.includes("ssh"));
     assert.ok(result.allowedCommands.includes("dotnet"));
+  });
+});
+
+describe("saved command permissions", () => {
+  for (const allowedCommands of [[], ["node"], ["node", "unknown-command"]]) {
+    it(`respects the saved command list ${JSON.stringify(allowedCommands)}`, (t) => {
+      const originalExists = fs.existsSync;
+      const originalRead = fs.readFileSync;
+      t.mock.method(fs, "existsSync", (file) => file === SETTINGS_FILE || originalExists(file));
+      t.mock.method(fs, "readFileSync", (file, ...args) => file === SETTINGS_FILE
+        ? JSON.stringify({ allowedCommands })
+        : originalRead(file, ...args));
+      assert.deepEqual(loadSettings().allowedCommands, allowedCommands.filter((cmd) => COMMAND_CATALOG[cmd]));
+    });
+  }
+
+  it("uses defaults for a legacy settings file without a command list", (t) => {
+    const originalExists = fs.existsSync;
+    const originalRead = fs.readFileSync;
+    t.mock.method(fs, "existsSync", (file) => file === SETTINGS_FILE || originalExists(file));
+    t.mock.method(fs, "readFileSync", (file, ...args) => file === SETTINGS_FILE
+      ? JSON.stringify({ ui: { language: "ru" } })
+      : originalRead(file, ...args));
+    assert.ok(loadSettings().allowedCommands.includes("node"));
+    assert.ok(loadSettings().allowedCommands.includes("tasklist"));
   });
 });
 
@@ -241,6 +276,17 @@ describe("mergeWindowStates", () => {
 });
 
 describe("normalizeWindowState", () => {
+  it("migrates every existing conversation to permanent Coder mode", () => {
+    const normalized = normalizeWindowState({
+      conversations: [
+        { id: "old-off", coderMode: false, messages: [] },
+        { id: "old-missing", messages: [] },
+      ],
+    }, "/tmp/main");
+
+    assert.deepEqual(normalized.conversations.map((conversation) => conversation.coderMode), [true, true]);
+  });
+
   it("removes deleted conversations from active state and pipeline edges", () => {
     const normalized = normalizeWindowState({
       version: 2,

@@ -35,7 +35,6 @@ export function qwenBaseHeaders(cookieHeader) {
     Cookie: cookieHeader,
     "X-Accel-Buffering": "no",
     "X-Request-Id": randomUUID(),
-    "bx-v": "2.5.36",
     "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"macOS"',

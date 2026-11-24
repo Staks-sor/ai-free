@@ -33,8 +33,6 @@
 
 如果 AI Free 为你节省了时间，请为[仓库点星](https://github.com/Staks-sor/ai-free)，这能帮助更多人发现本项目。
 
-- 捐赠银行卡（OTP Bank）：`2201 9604 2500 7505`
-
 ## ✨ 主要功能
 
 - 💬 **统一界面：**在一个桌面窗口中使用 DeepSeek、Qwen 和 ChatGPT。

@@ -12,6 +12,12 @@ export const AGENT_ROLES = [
     prompt: "You are a prompt builder. Convert the user's rough request into a precise task brief. Ask for missing critical details only when needed. Return a clear prompt that the next agent can execute.",
   },
   {
+    id: "analyst",
+    label: "Analyst",
+    description: "Исследует данные, факты, варианты и риски и выдаёт структурированный анализ.",
+    prompt: "You are an analyst. Examine the assigned question, separate facts from assumptions, compare options and risks, and return a concise evidence-based analysis for the lead agent.",
+  },
+  {
     id: "architect",
     label: "Architect",
     description: "Проектирует решение, границы модулей, данные и риски.",

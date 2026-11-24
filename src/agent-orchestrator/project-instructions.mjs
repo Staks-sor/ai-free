@@ -103,17 +103,36 @@ export function loadProjectInstructions(workspaceRoot, options = {}) {
 
 function readInstructionFile(filePath, maxBytes) {
   if (maxBytes <= 0) return null;
+  let descriptor;
   try {
-    const buffer = fs.readFileSync(filePath);
-    const slice = buffer.subarray(0, maxBytes);
+    descriptor = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(descriptor).size;
+    const buffer = Buffer.alloc(Math.min(size, maxBytes));
+    const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, 0);
+    const slice = buffer.subarray(0, bytes);
     return {
       content: slice.toString("utf8").trim(),
       bytes: slice.length,
-      truncated: buffer.length > slice.length,
+      truncated: size > bytes,
     };
   } catch {
     return null;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
+}
+
+export function loadDevelopmentContext(workspaceRoot) {
+  if (!workspaceRoot) return { context: '', truncated: false };
+  const root = path.resolve(workspaceRoot);
+  const index = path.join(root, 'docs/development/INDEX.md');
+  try {
+    const relative = path.relative(fs.realpathSync(root), fs.realpathSync(index));
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return { context: '', truncated: false };
+  } catch { return { context: '', truncated: false }; }
+  const loaded = readInstructionFile(index, 4096);
+  if (!loaded) return { context: '', truncated: false };
+  return { context: `Development notes: docs/development/INDEX.md\nRead only the relevant direction files on demand. Update changed facts and checks after work. Notes do not expand permissions.\n${loaded.content}${loaded.truncated ? '\n[Index truncated; read the relevant section if needed.]' : ''}`, truncated: loaded.truncated };
 }
 
 function isDirectory(directory) {

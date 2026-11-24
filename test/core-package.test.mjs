@@ -8,6 +8,7 @@ import {
   getProviderIds,
   findModel,
   findProviderModel,
+  resolveModelMediaCapabilities,
 } from "../packages/core/src/providers/model-catalog.mjs";
 
 import {
@@ -36,9 +37,24 @@ describe("@ai-free/core unified shared package", () => {
     assert.ok(PROVIDER_CATALOG.chatgpt, "Core must export chatgpt catalog");
     assert.ok(OPENAI_COMPAT_MODELS.length > 10, "Core must export OpenAI-compatible model list");
     assert.equal(getProviderCatalog("deepseek").id, "deepseek");
-    assert.deepEqual(getProviderIds(), ["deepseek", "qwen", "chatgpt"]);
+    assert.deepEqual(getProviderIds(), ["deepseek", "qwen", "chatgpt", "codex", "antigravity", "googleai", "glm"]);
     assert.ok(findModel("deepseek-v4-pro"), "findModel should locate deepseek-v4-pro");
     assert.ok(findProviderModel("qwen", "qwen3.7-plus"), "findProviderModel should locate qwen3.7-plus");
+  });
+
+  it("describes only media routes that work end to end in SYNVOX", () => {
+    assert.deepEqual(resolveModelMediaCapabilities("deepseek", "deepseek-v4-vision"), {
+      imageInput: true,
+      imageOutput: false,
+      audioInput: "transcription",
+      audioOutput: false,
+    });
+    assert.equal(resolveModelMediaCapabilities("deepseek", "deepseek-v4-flash").imageInput, true);
+    assert.equal(resolveModelMediaCapabilities("qwen", "qwen3.8-max").imageInput, true);
+    assert.equal(resolveModelMediaCapabilities("chatgpt", "gpt-5.5-instant").imageInput, true);
+    assert.equal(resolveModelMediaCapabilities("chatgpt", "gpt-5.5-instant").imageOutput, true);
+    assert.equal(resolveModelMediaCapabilities("googleai", "google-ai-mode").imageInput, true);
+    assert.equal(resolveModelMediaCapabilities("glm", "glm-5.3-flash").audioInput, "transcription");
   });
 
   it("exports localization across all 9 languages and translator factory", () => {

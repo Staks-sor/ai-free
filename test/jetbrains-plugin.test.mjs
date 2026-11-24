@@ -16,7 +16,7 @@ test("JetBrains plugin declares a PyCharm-compatible AI Free tool window", () =>
 
   assert.match(manifest, /<id>ru\.stas-sor\.ai-free<\/id>/);
   assert.match(manifest, /<depends>com\.intellij\.modules\.platform<\/depends>/);
-  assert.match(manifest, /<toolWindow[^>]+id="AI Free"/);
+  assert.match(manifest, /<toolWindow[^>]+id="SYNVOX"/);
   assert.match(manifest, /factoryClass="ru\.stassor\.aifree\.ui\.AiFreeToolWindowFactory"/);
 });
 
@@ -47,6 +47,11 @@ test("backend locates its bundled runtime without IntelliJ internal plugin APIs"
 
   assert.doesNotMatch(source, /PluginManagerCore|PluginId/);
   assert.match(source, /PluginRuntimeLocator\.resolve/);
+});
+
+test('support diagnostics use public package metadata for the actual plugin version', () => {
+  assert.match(read('build.gradle.kts'), /Implementation-Version/);
+  assert.match(read('src/main/kotlin/ru/stassor/aifree/runtime/AiFreeBackendService.kt'), /implementationVersion/);
 });
 
 test("Gradle package syncs the shared AI Free runtime without generated artifacts", () => {

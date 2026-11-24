@@ -47,6 +47,17 @@ export function resolveChatImage(pathname) {
   return { file, mimeType: EXTENSION_MIME.get(extension) || "application/octet-stream" };
 }
 
+export function restoreChatImages(conversationId, urls = []) {
+  const prefix = `/api/chat-images/${safeSegment(conversationId)}/`;
+  return urls.map(url => {
+    const saved = typeof url === 'string' && url.startsWith(prefix) && resolveChatImage(url);
+    if (!saved) throw new Error('Cannot restore saved chat image.');
+    const buffer = fs.readFileSync(saved.file);
+    if (buffer.length > 10 * 1024 * 1024) throw new Error('Cannot restore saved chat image: size limit.');
+    return { name: path.basename(saved.file), mimeType: saved.mimeType, dataBase64: buffer.toString('base64') };
+  });
+}
+
 export function deleteConversationImages(conversationId) {
   const safeConversationId = safeSegment(conversationId);
   if (!safeConversationId) return;

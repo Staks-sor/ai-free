@@ -24,11 +24,11 @@ describe("duplicate module inventory", () => {
     assert.equal(inventory.summary.vscodeOnlyCount, KNOWN_VSCODE_ONLY.size);
   });
 
-  it("documents known intentional platform-specific differences", () => {
+  it("recognizes formerly platform-specific modules as synchronized", () => {
     const inventory = getDuplicateInventory();
-    const platformPaths = inventory.platformSpecific.map((item) => item.desktopPath);
-    assert.ok(platformPaths.includes("src/state/window-state.mjs"));
-    assert.ok(platformPaths.includes("src/window-app/web-browser.mjs"));
+    const identicalPaths = inventory.identical.map((item) => item.desktopPath);
+    assert.ok(identicalPaths.includes("src/state/window-state.mjs"));
+    assert.ok(identicalPaths.includes("src/window-app/web-browser.mjs"));
     for (const item of inventory.platformSpecific) {
       assert.ok(item.reason && item.reason.length > 10, "Platform difference must have documented reason");
     }

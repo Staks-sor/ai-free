@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { loadDotEnv } from "../src/args.mjs";
 import { resolveOpenAICompatApiKey } from "../src/state/settings.mjs";
 import { createFileLogger } from "../src/logging/logger.mjs";
+import { createLocalHttpSecurity } from "../src/window-app/local-http-security.mjs";
 
 loadDotEnv();
 
@@ -39,6 +40,7 @@ export const DEFAULT_API_HOST = "127.0.0.1"; // намеренно НЕ слуш
 const apiLogger = createFileLogger({ component: "openai-api" });
 
 export function createOpenAICompatServer() {
+  const localHttpSecurity = createLocalHttpSecurity();
   return http.createServer(async (req, res) => {
     const startedAt = Date.now();
     const requestPath = String(req.url || "/").split("?", 1)[0];
@@ -51,9 +53,13 @@ export function createOpenAICompatServer() {
         provider: req.openAICompatProvider || null,
       });
     });
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
     // CORS — на всякий случай, для веб-клиентов на localhost.
-    setOpenAICorsHeaders(res);
+    const rejected = localHttpSecurity.check(req, requestPath);
+    if (rejected) {
+      res.writeHead(rejected.status, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: rejected.error }));
+    }
+    setOpenAICorsHeaders(res, req);
     if (req.method === "OPTIONS") {
       res.statusCode = 204;
       return res.end();
@@ -76,7 +82,6 @@ export function createOpenAICompatServer() {
         path: requestPath,
         durationMs: Date.now() - startedAt,
       });
-      console.error("[api]", e);
       if (!res.headersSent) {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
@@ -86,8 +91,11 @@ export function createOpenAICompatServer() {
   });
 }
 
-export function setOpenAICorsHeaders(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+export function setOpenAICorsHeaders(res, req) {
+  if (req?.headers.origin) {
+    res.setHeader("Access-Control-Allow-Origin", req.headers.origin);
+    res.setHeader("Vary", "Origin");
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, x-api-key, Anthropic-Version, Anthropic-Beta");
 }
@@ -99,11 +107,6 @@ export function startOpenAICompatServer({
   const server = createOpenAICompatServer();
   server.listen(port, host, () => {
     apiLogger.info("api.server.started", { host, port });
-    console.log(`OpenAI-compat API: http://${host}:${port}`);
-    console.log(`Models:    GET  http://${host}:${port}/v1/models`);
-    console.log(`Chat:      POST http://${host}:${port}/v1/chat/completions`);
-    console.log(`Responses: POST http://${host}:${port}/v1/responses`);
-    console.log(`Messages:  POST http://${host}:${port}/v1/messages`);
   });
 
   return server;

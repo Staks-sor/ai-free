@@ -1,0 +1,14 @@
+# Deploy ONLY on the verified Russian support host. Do not proxy through the foreign website host.
+support.synvox.pro {
+    handle /v1/support/* {
+        request_body { max_size 3MB }
+        reverse_proxy 127.0.0.1:4330 {
+            header_up X-Synvox-IP {remote_host}
+        }
+    }
+    handle /support-admin/* {
+        reverse_proxy 127.0.0.1:4330
+    }
+    handle { respond 404 }
+    # Do not enable request/access logging with client IPs or request bodies here.
+}

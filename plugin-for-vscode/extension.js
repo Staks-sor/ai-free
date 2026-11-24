@@ -92,7 +92,8 @@ function waitForServerReady(port, child, timeoutMs = 30000) {
     });
 }
 
-async function reportStartupError(message) {
+async function reportStartupError(message, provider) {
+    provider.setError(message);
     outputChannel.appendLine(`[Startup Error] ${message}`);
     outputChannel.show(true);
     const action = await vscode.window.showErrorMessage(`AI Free: ${message}`, 'Open log');
@@ -133,13 +134,19 @@ function resolveWorkspacePath() {
  */
 async function activate(context) {
     outputChannel = vscode.window.createOutputChannel("AI Free");
+    const provider = new AIWebviewViewProvider();
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider("ai-free-chat", provider, {
+            webviewOptions: { retainContextWhenHidden: true }
+        })
+    );
     outputChannel.appendLine("Activating AI Free Chat & Agent...");
     outputChannel.appendLine(`Platform: ${process.platform} ${process.arch}`);
 
     const nodeRuntime = await resolveNodeRuntime();
     if (nodeRuntime.ok === false) {
         const detail = nodeRuntime.attempts.join('; ');
-        await reportStartupError(`не найден рабочий Node.js ${REQUIRED_NODE_MAJOR}+: ${detail}. Обновите VS Code или установите Node.js ${REQUIRED_NODE_MAJOR}+.`);
+        await reportStartupError(`не найден рабочий Node.js ${REQUIRED_NODE_MAJOR}+: ${detail}. Обновите VS Code или установите Node.js ${REQUIRED_NODE_MAJOR}+.`, provider);
         return;
     }
     outputChannel.appendLine(`Node.js: ${nodeRuntime.version} (${nodeRuntime.label})`);
@@ -159,7 +166,7 @@ async function activate(context) {
     outputChannel.appendLine(`Project root: ${projectRoot}`);
 
     if (!fs.existsSync(serverPath)) {
-        vscode.window.showErrorMessage(`AI Free: Не найден исполняемый файл сервера по пути ${serverPath}`);
+        await reportStartupError(`Не найден исполняемый файл сервера по пути ${serverPath}`, provider);
         return;
     }
 
@@ -178,6 +185,8 @@ async function activate(context) {
     const env = {
         ...process.env,
         AI_FREE_VSCODE: "1",
+        SYNVOX_EXTENSION_VERSION: context.extension.packageJSON.version,
+        SYNVOX_IDE_VERSION: vscode.version,
         AI_FREE_LOG_SURFACE: "vscode",
         AI_FREE_VSCODE_WORKSPACE: workspacePath,
         AI_FREE_DISABLE_TELEGRAM: "1",
@@ -195,6 +204,7 @@ async function activate(context) {
     });
 
     let startupError = null;
+    let serverReady = false;
     serverProcess.on('error', (error) => {
         startupError = error;
         outputChannel.appendLine(`[Error] Failed to spawn server: ${error.message}`);
@@ -211,6 +221,7 @@ async function activate(context) {
     });
 
     serverProcess.on('close', (code, signal) => {
+        if (serverReady) provider.setError(`Сервер SYNVOX остановился (код ${code ?? 'неизвестен'}). Перезагрузите окно VS Code. Подробности: Вывод → AI Free.`);
         if (code !== 0 && !startupError) {
             startupError = new Error(`server process exited before startup, code=${code}, signal=${signal || 'none'}`);
         }
@@ -219,39 +230,60 @@ async function activate(context) {
 
     try {
         const ready = await waitForServerReady(port, serverProcess, SERVER_START_TIMEOUT_MS);
+        serverReady = true;
+        provider.setPort(port);
         outputChannel.appendLine(`Server readiness confirmed by ${ready.source}`);
     } catch (error) {
         try { if (serverProcess) serverProcess.kill(); } catch {}
         const detail = startupError ? `${error.message}; ${startupError.message}` : error.message;
-        await reportStartupError(`сервер не запустился: ${detail}`);
+        await reportStartupError(`сервер не запустился: ${detail}`, provider);
         return;
     }
-
-    // Регистрируем провайдер для Sidebar Webview
-    const provider = new AIWebviewViewProvider(port);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider("ai-free-chat", provider, {
-            webviewOptions: {
-                retainContextWhenHidden: true // Сохраняем состояние чата при переключении вкладок
-            }
-        })
-    );
 
     outputChannel.appendLine(`AI Free Chat ready on http://127.0.0.1:${port}`);
 }
 
 class AIWebviewViewProvider {
-    constructor(port) {
+    constructor() {
+        this.port = null;
+        this.error = null;
+    }
+
+    setPort(port) {
         this.port = port;
+        this.error = null;
+        this.render();
+    }
+
+    setError(message) {
+        this.error = String(message);
+        this.render();
     }
 
     /**
      * @param {vscode.WebviewView} webviewView
      */
     resolveWebviewView(webviewView) {
+        this.view = webviewView;
+        this.render();
+    }
+
+    render() {
+        if (!this.view) return;
+        const webviewView = this.view;
         webviewView.webview.options = {
-            enableScripts: true
+            enableScripts: true,
+            portMapping: this.port ? [{ webviewPort: this.port, extensionHostPort: this.port }] : []
         };
+        if (this.error || !this.port) {
+            const message = String(this.error || 'Подготавливаем локальный сервер…')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            webviewView.webview.html = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+                <body style="margin:20px;color:var(--vscode-foreground,#ddd);background:var(--vscode-sideBar-background,#1e1e1e);font:14px var(--vscode-font-family,sans-serif)">
+                <h3>${this.error ? 'SYNVOX не запустился' : 'Запускаем SYNVOX…'}</h3><p style="white-space:pre-wrap;overflow-wrap:anywhere">${message}</p>
+                ${this.error ? '<p>Подробности: Вид → Вывод → AI Free.</p>' : ''}</body></html>`;
+            return;
+        }
 
         // Встраиваем локальный сервер во фрейм. 
         // CSS стили адаптируют iframe под размер боковой панели VS Code.

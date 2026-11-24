@@ -1,6 +1,7 @@
 package ru.stassor.aifree.runtime
 
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
@@ -58,6 +59,8 @@ class AiFreeBackendService(private val project: Project) : Disposable {
             .redirectErrorStream(true)
             .apply {
                 environment()["AI_FREE_JETBRAINS"] = "1"
+                environment()["SYNVOX_EXTENSION_VERSION"] = AiFreeBackendService::class.java.`package`.implementationVersion ?: ""
+                environment()["SYNVOX_IDE_VERSION"] = ApplicationInfo.getInstance().build.asStringWithoutProductCode()
                 environment()["AI_FREE_LOG_SURFACE"] = "jetbrains"
                 environment()["AI_FREE_DISABLE_TELEGRAM"] = "1"
             }

@@ -18,7 +18,6 @@ export function baseHeaders(cookieHeader, token, { hifLeim = "" } = {}) {
     "Content-Type": "application/json",
     Origin: BASE_URL,
     Referer: `${BASE_URL}/`,
-    Cookie: cookieHeader,
     "X-App-Version": APP_VERSION,
     "x-client-platform": "web",
     "x-client-version": APP_VERSION,
@@ -26,6 +25,7 @@ export function baseHeaders(cookieHeader, token, { hifLeim = "" } = {}) {
     "x-client-timezone-offset": String(-new Date().getTimezoneOffset() * 60),
   };
 
+  if (cookieHeader) headers.Cookie = cookieHeader;
   if (token) headers.Authorization = `Bearer ${token}`;
 
   // Фичетокен DeepSeek для web search. Сначала берём актуальный из профиля,

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://synvox.pro/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/en/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/updates/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/updates/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/updates/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/en/updates/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/updates/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/updates/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/documents/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/documents/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/documents/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/en/documents/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/documents/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/documents/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/instructions/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/instructions/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/instructions/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/en/instructions/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/instructions/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/instructions/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/guides/ai-for-coding/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/guides/ai-for-coding/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/guides/ai-for-coding/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/en/guides/ai-for-coding/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/guides/ai-for-coding/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/guides/ai-for-coding/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/guides/ai-agent-team/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/guides/ai-agent-team/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/guides/ai-agent-team/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/en/guides/ai-agent-team/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/guides/ai-agent-team/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/guides/ai-agent-team/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/guides/ai-vscode-pycharm/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/guides/ai-vscode-pycharm/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/guides/ai-vscode-pycharm/" />
+  </url>
+  <url>
+    <loc>https://synvox.pro/en/guides/ai-vscode-pycharm/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://synvox.pro/guides/ai-vscode-pycharm/" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://synvox.pro/en/guides/ai-vscode-pycharm/" />
+  </url>
+</urlset>

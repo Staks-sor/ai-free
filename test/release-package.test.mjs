@@ -19,6 +19,20 @@ function assertTestExclusions(contents, label) {
   }
 }
 
+test('0.5.65 release versions agree across Desktop and both IDE packages', () => {
+  const expected = '0.5.65';
+  for (const file of ['package.json', 'plugin-for-vscode/package.json', 'package-lock.json', 'plugin-for-vscode/package-lock.json']) {
+    const pkg = JSON.parse(read(file));
+    assert.equal(pkg.version, expected, file);
+    if (pkg.packages) assert.equal(pkg.packages[''].version, expected, file);
+  }
+  assert.match(read('plugin-for-jetbrains/gradle.properties'), /^version=0\.5\.65$/m);
+  for (const language of ['RU', 'EN']) assert.ok(read('docs/INSTALL-' + language + '.md').includes('SYNVOX ' + expected));
+  assert.match(read('plugin-for-vscode/CHANGELOG.md'), /## 0\.5\.65/);
+  assert.match(read('plugin-for-jetbrains/build.gradle.kts'), /SYNVOX 0\.5\.65/);
+  assert.equal(JSON.parse(read('plugin-for-vscode/package.json')).publisher, 'developers-daily-life');
+});
+
 test("client release packages explicitly exclude internal tests", () => {
   assertTestExclusions(read(".npmignore"), ".npmignore");
   assertTestExclusions(read("plugin-for-vscode/.vscodeignore"), "plugin-for-vscode/.vscodeignore");
@@ -28,6 +42,13 @@ test("README presents the current desktop agent screenshot", () => {
   const asset = "docs/assets/ai-free-agent-0.4.13.png";
   assert.ok(fs.existsSync(path.join(root, asset)), `${asset} must exist`);
   assert.match(read("README.md"), new RegExp(asset.replaceAll(".", "\\.")));
+});
+
+test("desktop and VS Code packages include the SYNVOX watermark asset", () => {
+  const asset = "src/window-app/assets/synvox-watermark.png";
+  assert.ok(fs.existsSync(path.join(root, asset)), `desktop ${asset} must exist`);
+  assert.ok(fs.existsSync(path.join(root, "plugin-for-vscode", asset)), `VS Code ${asset} must exist`);
+  assert.match(read("plugin-for-vscode/build.mjs"), /src\/window-app\/assets\/synvox-watermark\.png/);
 });
 
 test("plugin packages keep shared core inside their distributable runtime", () => {

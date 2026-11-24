@@ -1,0 +1,23 @@
+# Релизы SYNVOX
+
+25 ноября 2026, Codex. Версия0.5.65, бесплатное личное использование на условиях прежней лицензии.
+
+## 0.5.65
+
+`src/licensing/` и shared window runtime: startup/API/IDE не зависят от активации SYNVOX. В старом подмаршруте подписки локальный статус free_release, платёжные POST410. Сохранены локальное согласие на условия и отдельная авторизация провайдеров. UI без платёжных форм. Qwen HTTP429 без явного кода исчерпанной квоты больше не исключает аккаунт. Колокольчик объявлений в Desktop/VSCode/JetBrains.
+
+`services/licensing/merchant-{run,http,bot}.mjs`: новые продажи остановлены, прежние подтверждения, сверка и поддержка сохранены. Production HTTPS: health paymentsEnabled=false; пять прежних маршрутов возвращают410. База сохранена. Сайт RU/EN предлагает бесплатный Desktop и пакеты IDE, старые условия и возвраты в архиве документов.
+
+Сборки: `output/release-0.5.65/`, `manifest.json`, `SHA256SUMS`. Публикация VS Code: прежний ID `developers-daily-life.ai-free-vscode`. JetBrains: `ru.stas-sor.ai-free`, карточка33364. Версия и IDs проверены в архивных манифестах. Архивы совпадают с298 runtime-файлами, IDE содержат шесть нативных сборок. CI, полный прогон1754/1754 в193 suites и16 coverage gates, VS Code package, Gradle test/buildPlugin PASS. Физические Windows/Linux и живые ответы AI не проверялись. Release notes: `../RELEASE-0.5.65.md`.
+
+## 0.5.64
+
+`output/release-0.5.64/`: Desktop ZIP, universal VSIX, JetBrains ZIP, SHA256SUMS, manifest и воспроизводимые audit/boot scripts. [Заметки](../RELEASE-0.5.64.md).
+
+Форма сообщения о проблеме: локальная диагностика, предварительный просмотр, необязательные контакт/изображение и экспорт JSON. Онлайн-приём выключен до подготовки хранения в РФ/документов/личного Telegram-чата владельца. Пароли/ключи/история автоматически не включаются; текст/изображения могут содержать ПД. Qwen resource/readiness и DeepSeek CAPTCHA имеют безопасные технические события. Детали: `SUPPORT.md`.
+
+Версии Desktop/VSCode/JetBrains и locks согласованы0.5.64. В итоговом JAR исправлено отсутствие Implementation-Version: manifest применяется ко всем Jar tasks, проверен фактический архив. История, аккаунты, ключ установки и публичный ключ проверки сохранены.
+
+Red→green версии/архивный manifest; full1747/1747,193 suites/16 coverage gates; CI/VSCode build PASS. JDK21 Gradle test/buildPlugin6/6 PASS. Каждый архив совпадает с296 runtime-файлами; IDE содержат шесть native prebuilds, прежние IDs, без private data/services. Точный Desktop ZIP npm ci/npm start --no-window на macOS PASS; искусственные история/ID/ключ сохранены, report работает без активации, online disabled. Протокол: `desktop-boot-verification.json` рядом с ZIP.
+
+Сайт `20261110-0564`: RU/EN страницы/инструкции/ссылки обновлены. Website23/23, check0/0, build/E2E16/16 PASS; UI1280/360 без overflow. HTTPS6 страниц, ZIP/version/SHA-256 PASS. Предыдущий `20261108-0563`,256 файлов и ZIP0.5.63 сохранены; robots/sitemap/updater неизменны. Desktop: https://synvox.pro/downloads/synvox-desktop-0.5.64.zip. Протокол: `output/release-0.5.64/site/public-verification.json`.

@@ -1,6 +1,6 @@
 const { spawn } = require('child_process');
 
-const REQUIRED_NODE_MAJOR = 18;
+const REQUIRED_NODE_MAJOR = 22;
 
 function parseNodeMajor(version) {
     const match = /^v(\d+)\./.exec(String(version || '').trim());

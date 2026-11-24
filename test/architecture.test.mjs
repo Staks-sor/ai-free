@@ -4,7 +4,7 @@ import { strict as assert } from "node:assert";
 
 import { AI_FREE_VERSION as ROOT_VERSION } from "../src/config.mjs";
 import { AI_FREE_VERSION as PLUGIN_VERSION } from "../plugin-for-vscode/src/config.mjs";
-import { OPENAI_COMPAT_MODELS, uiModelCatalog } from "../src/providers/model-catalog.mjs";
+import { PROVIDER_CATALOG, OPENAI_COMPAT_MODELS, uiModelCatalog } from "../src/providers/model-catalog.mjs";
 import {
   MODELS as API_MODELS,
   modelsList,
@@ -77,6 +77,7 @@ describe("architecture invariants", () => {
 
   it("keeps the current Qwen flagship in the offline fallback catalog", () => {
     assert.ok(uiModelCatalog().providers.qwen.models.some((model) => model.id === "qwen3.8-max"));
+    assert.ok(uiModelCatalog().providers.qwen.models.some((model) => model.id === "qwen3.8-omni-flash"));
     assert.equal(uiModelCatalog().providers.qwen.models.some((model) => model.id === "qwen3.8-max-preview"), false);
   });
 
@@ -93,18 +94,19 @@ describe("architecture invariants", () => {
     const uiIds = Object.values(uiModelCatalog().providers)
       .flatMap((provider) => provider.models.map((model) => model.id))
       .sort();
-    const expected = OPENAI_COMPAT_MODELS
+    const expected = Object.values(PROVIDER_CATALOG).flatMap((provider) => provider.models)
       .filter((model) => model.legacy !== true)
-      .map((model) => model.name)
+      .map((model) => model.id)
       .sort();
     assert.deepEqual(uiIds, expected);
   });
 
-  it("exposes current ChatGPT modes and hides retired ChatGPT models", () => {
+  it("exposes web modes without claiming a GPT version and hides old selector IDs", () => {
     const ids = uiModelCatalog().providers.chatgpt.models.map((model) => model.id);
-    assert.ok(ids.includes("gpt-5.5-instant"));
-    assert.ok(ids.includes("gpt-5.6-sol-high"));
-    assert.ok(ids.includes("gpt-5.6-sol-pro-extended"));
+    assert.ok(ids.includes("chatgpt-instant"));
+    assert.ok(ids.includes("chatgpt-thinking-high"));
+    assert.ok(ids.includes("chatgpt-pro-extended"));
+    assert.ok(!ids.includes("gpt-5.6-sol-high"));
     assert.ok(!ids.includes("gpt-4o"));
     assert.ok(!ids.includes("o3-mini"));
   });
@@ -123,6 +125,6 @@ describe("architecture invariants", () => {
     assert.equal(PLUGIN_VERSION, pluginPackage.version);
     assert.equal(ROOT_VERSION, PLUGIN_VERSION);
     assert.equal(ROOT_VERSION, jetbrainsVersion);
-    assert.equal(ROOT_VERSION, "0.4.25");
+    assert.equal(ROOT_VERSION, "0.5.65");
   });
 });

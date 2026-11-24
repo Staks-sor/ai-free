@@ -21,3 +21,9 @@
 - Do not claim a fix without an automated test or a reproducible verification step.
 - For UI changes, verify computed styles and inspect screenshots at representative desktop and narrow viewports.
 - Keep generated packages, screenshots, archives, and local runtime data out of Git unless explicitly required for a release.
+
+## Development context and handoff
+
+- Start with `docs/development/INDEX.md`, then read only the direction file relevant to the task. Read detailed plans and historical context sections on demand.
+- After work, update the relevant direction file with date, author/agent, changed behavior and paths, exact checks and outcomes, remaining work, and whether changes are uncommitted or published.
+- Keep the index under 250 words and each direction under 400 words. Replace stale facts; do not append chat transcripts, raw logs, credentials or customer data.

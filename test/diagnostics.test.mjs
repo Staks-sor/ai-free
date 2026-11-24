@@ -14,6 +14,7 @@ describe("diagnostics report", () => {
     const homePath = path.join(os.homedir(), "project");
     const report = formatDiagnosticReport({
       generatedAt: "2026-01-01T00:00:00.000Z",
+      performance: { scope:"current_backend_since_start", uptimeSeconds:10, memoryBytes:{rss:1048576}, cpuMicroseconds:{user:1000,system:2000}, metrics:{model_ms:{count:2,samples:2,p50:10,p95:20,max:20}} },
       app: { version: "0.0.0", node: "v20.0.0", platform: "darwin arm64", release: "1" },
       workspace: { root: homePath, exists: true },
       state: {
@@ -37,6 +38,8 @@ describe("diagnostics report", () => {
     });
 
     assert.match(report, /AI Free diagnostic report/);
+    assert.match(report, /Performance \(current backend/);
+    assert.match(report, /model_ms: count=2, samples=2, p50=10, p95=20/);
     assert.match(report, /Workspace/);
     assert.match(report, /Root: ~[/\\]project/);
     assert.doesNotMatch(report, new RegExp(os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));

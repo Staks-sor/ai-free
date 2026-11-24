@@ -1,0 +1,8 @@
+{
+  "name": "synvox-merchant-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "undici": "^7.0.0"
+  }
+}

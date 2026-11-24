@@ -4,48 +4,48 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadSkillMdFile } from "../plugins/skill-md.mjs";
 
-export function loadSkillFromDir(dir, fallbackId = "") {
+export function loadSkillFromDir(dir, fallbackId = "", { metadataOnly = false } = {}) {
   const manifestPath = path.join(dir, "skill.json");
   if (fs.existsSync(manifestPath)) {
-    return loadNativeSkill(dir, fallbackId, manifestPath);
+    return loadNativeSkill(dir, fallbackId, manifestPath, metadataOnly);
   }
 
   const skillMdPath = path.join(dir, "SKILL.md");
   if (fs.existsSync(skillMdPath)) {
-    return loadSkillMdFile(skillMdPath, { fallbackId: fallbackId || path.basename(dir) });
+    return loadSkillMdFile(skillMdPath, { fallbackId: fallbackId || path.basename(dir), metadataOnly });
   }
 
   const claudePath = path.join(dir, "CLAUDE.md");
   if (fs.existsSync(claudePath)) {
-    return loadClaudeSkill(dir, fallbackId, claudePath);
+    return loadClaudeSkill(dir, fallbackId, claudePath, metadataOnly);
   }
 
   const codexYaml = path.join(dir, "codex.yaml");
   const codexJson = path.join(dir, "codex.json");
   if (fs.existsSync(codexYaml)) {
-    return loadCodexSkill(dir, fallbackId, codexYaml, "yaml");
+    return loadCodexSkill(dir, fallbackId, codexYaml, "yaml", metadataOnly);
   }
   if (fs.existsSync(codexJson)) {
-    return loadCodexSkill(dir, fallbackId, codexJson, "json");
+    return loadCodexSkill(dir, fallbackId, codexJson, "json", metadataOnly);
   }
 
   throw new Error(`No skill manifest found in ${dir}`);
 }
 
-function loadNativeSkill(dir, fallbackId, manifestPath) {
+function loadNativeSkill(dir, fallbackId, manifestPath, metadataOnly) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   const id = String(manifest.id || fallbackId || path.basename(dir)).trim();
   const promptFile = manifest.promptFile || "prompt.md";
   const promptPath = path.join(dir, promptFile);
   let prompt = "";
 
-  if (fs.existsSync(promptPath)) {
+  if (!metadataOnly && fs.existsSync(promptPath)) {
     prompt = fs.readFileSync(promptPath, "utf8");
-  } else if (typeof manifest.prompt === "string") {
+  } else if (!metadataOnly && typeof manifest.prompt === "string") {
     prompt = manifest.prompt;
   }
 
-  if (!prompt.trim()) {
+  if (!metadataOnly && !prompt.trim()) {
     throw new Error(`Skill ${id} has no prompt (${promptFile})`);
   }
 
@@ -62,10 +62,10 @@ function loadNativeSkill(dir, fallbackId, manifestPath) {
   };
 }
 
-function loadClaudeSkill(dir, fallbackId, claudePath) {
+function loadClaudeSkill(dir, fallbackId, claudePath, metadataOnly) {
   const id = String(fallbackId || path.basename(dir)).trim();
-  const prompt = fs.readFileSync(claudePath, "utf8").trim();
-  if (!prompt) throw new Error(`Skill ${id} CLAUDE.md is empty`);
+  const prompt = metadataOnly ? "" : fs.readFileSync(claudePath, "utf8").trim();
+  if (!metadataOnly && !prompt) throw new Error(`Skill ${id} CLAUDE.md is empty`);
 
   return {
     id,
@@ -80,19 +80,19 @@ function loadClaudeSkill(dir, fallbackId, claudePath) {
   };
 }
 
-function loadCodexSkill(dir, fallbackId, manifestPath, kind) {
+function loadCodexSkill(dir, fallbackId, manifestPath, kind, metadataOnly) {
   const raw = fs.readFileSync(manifestPath, "utf8");
   const manifest = kind === "json" ? JSON.parse(raw) : parseSimpleYaml(raw);
   const id = String(manifest.id || manifest.name || fallbackId || path.basename(dir)).trim();
 
   const instructionsFile = manifest.instructionsFile || manifest.promptFile;
-  let prompt = String(manifest.instructions || manifest.prompt || manifest.system || "").trim();
-  if (!prompt && instructionsFile) {
+  let prompt = metadataOnly ? "" : String(manifest.instructions || manifest.prompt || manifest.system || "").trim();
+  if (!metadataOnly && !prompt && instructionsFile) {
     const filePath = path.join(dir, instructionsFile);
     if (fs.existsSync(filePath)) prompt = fs.readFileSync(filePath, "utf8").trim();
   }
 
-  if (!prompt) {
+  if (!metadataOnly && !prompt) {
     throw new Error(`Skill ${id} Codex manifest has no instructions`);
   }
 

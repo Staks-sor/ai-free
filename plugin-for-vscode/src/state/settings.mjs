@@ -199,6 +199,7 @@ export const COMMAND_CATALOG = {
   gunzip:  { description: "Распаковка gzip",                                   risk: "low",    enabledByDefault: true },
 
   ps:      { description: "Список процессов",                                  risk: "medium", enabledByDefault: true },
+  tasklist:{ description: "Список процессов Windows",                          risk: "medium", enabledByDefault: true },
   pgrep:   { description: "Поиск PID по имени",                                risk: "medium", enabledByDefault: true },
   lsof:    { description: "Открытые файлы/порты",                              risk: "medium", enabledByDefault: true },
   kill:    { description: "Завершение процесса по PID",                        risk: "high",   enabledByDefault: true },
@@ -295,14 +296,6 @@ function normalizeCommandPermissions(rawPermissions = {}) {
   };
 }
 
-function mergeDefaultAllowedCommands(allowed) {
-  const set = new Set(Array.isArray(allowed) ? allowed : []);
-  for (const [cmd, meta] of Object.entries(COMMAND_CATALOG)) {
-    if (meta.enabledByDefault) set.add(cmd);
-  }
-  return [...set];
-}
-
 export function loadSettings() {
   const fallback = {
     allowedCommands: Object.keys(COMMAND_CATALOG).filter(
@@ -331,7 +324,7 @@ export function loadSettings() {
     const legacyKey = typeof raw?.openAICompat?.apiKey === "string" ? raw.openAICompat.apiKey : "";
     const apiKeys = raw?.openAICompat?.apiKeys || {};
     return {
-      allowedCommands: mergeDefaultAllowedCommands(allowed),
+      allowedCommands: allowed,
       openAICompat: {
         apiKeys: normalizeProviderApiKeys(apiKeys, legacyKey),
       },
@@ -424,7 +417,7 @@ export function ensureOpenAICompatApiKey(provider) {
 export function resolveOpenAICompatApiKey(req) {
   const keys = loadSettings().openAICompat?.apiKeys || {};
   const configured = Object.entries(keys).filter(([, key]) => key);
-  if (!configured.length) return { ok: true, provider: null };
+  if (!configured.length) return { ok: false, provider: null };
 
   const auth = String(req.headers.authorization || "");
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();

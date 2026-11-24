@@ -153,6 +153,8 @@ function readAcpConfig(env) {
 }
 
 async function handlePrompt({ request, sessions, config, respond, respondError, notify }) {
+  try { await assertLicensedAccess(); }
+  catch (error) { respondError(request.id, -32001, error.message); return; }
   const sessionId = request.params?.sessionId;
   const session = sessions.get(sessionId);
   if (!session) {
@@ -281,3 +283,4 @@ function contentBlocksToText(blocks) {
     return `[Unsupported content block: ${block?.type || "unknown"}]`;
   }).filter(Boolean).join("\n\n");
 }
+import { assertLicensedAccess } from '../licensing/client.mjs';

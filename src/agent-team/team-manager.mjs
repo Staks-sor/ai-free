@@ -1,3 +1,7 @@
+import { createFileLogger } from "../logging/logger.mjs";
+
+const teamLogger = createFileLogger({ component: "agent-team" });
+
 export function createTeamConfig({ leader = null, agents = [] } = {}) {
   return normalizeTeamConfig({
     enabled: true,
@@ -7,9 +11,16 @@ export function createTeamConfig({ leader = null, agents = [] } = {}) {
 }
 
 export function normalizeTeamConfig(config = {}) {
+  const warnings = [];
   const agents = Array.isArray(config.agents)
     ? config.agents
-        .filter((agent) => agent && agent.id && agent.provider)
+        .filter((agent, index) => {
+          if (agent && agent.id && agent.provider) return true;
+          const warning = { index, reason: "Agent requires id and provider" };
+          warnings.push(warning);
+          teamLogger.warn("team.agent.discarded", warning);
+          return false;
+        })
         .map((agent) => ({
           id: String(agent.id),
           provider: String(agent.provider),
@@ -29,6 +40,7 @@ export function normalizeTeamConfig(config = {}) {
     enabled: config.enabled === true,
     leader,
     agents,
+    warnings,
   };
 }
 

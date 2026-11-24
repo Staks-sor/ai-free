@@ -1,0 +1,9 @@
+[Unit]
+Description=SYNVOX merchant database backup
+
+[Service]
+Type=oneshot
+User=synvox-merchant
+Group=synvox-merchant
+UMask=0077
+ExecStart=/usr/bin/node /opt/synvox-merchant/current/services/licensing/backup.mjs

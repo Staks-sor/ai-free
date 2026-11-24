@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { loadSettings, saveSettings } from "../state/settings.mjs";
 
-const PROVIDERS = new Set(["deepseek", "qwen", "chatgpt"]);
+const PROVIDERS = new Set(["deepseek", "qwen", "chatgpt", "googleai", "glm"]);
 const POLL_TIMEOUT_SEC = 25;
 const IDLE_DELAY_MS = 3000;
 const MAX_TELEGRAM_MESSAGE = 3900;
@@ -457,7 +457,7 @@ export async function startTelegramBot({ port, workspaceRoot, log = console.log,
       return;
     }
     if (command?.command === "help" || command?.command === "menu") {
-      await showMenu(chatId, "Команды: /chats, /new [deepseek|qwen|chatgpt] название. При создании чата бот спросит проект.");
+      await showMenu(chatId, "Команды: /chats, /new [deepseek|qwen|chatgpt|googleai|glm] название. При создании чата бот спросит проект.");
       return;
     }
     if (command?.command === "chats") {

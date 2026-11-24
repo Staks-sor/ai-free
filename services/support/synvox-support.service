@@ -1,0 +1,23 @@
+[Unit]
+Description=SYNVOX opt-in support reports
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=synvox-support
+Group=synvox-support
+WorkingDirectory=/opt/synvox-support/current
+EnvironmentFile=/etc/synvox-support.conf
+ExecStart=/usr/bin/node /opt/synvox-support/current/services/support/run.mjs
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/synvox-support
+
+[Install]
+WantedBy=multi-user.target

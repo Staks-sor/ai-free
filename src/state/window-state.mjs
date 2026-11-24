@@ -1,9 +1,13 @@
-// Глобальный state.json: список всех чатов из всех проектов.
-// Лежит в ~/.deepseek-cli/state.json. На старте — одноразовая миграция из
-// старых per-workspace локаций.
+// Общие чаты: ~/.deepseek-cli/state.json.revisions/. Старый state.json
+// и per-workspace файлы остаются источниками миграции.
 
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { createJsonStateWriter } from "./state-writer.mjs";
+import { createWindowStateStore, readWindowStateRevision } from "./window-state-store.mjs";
+
+const stores = new WeakMap();
 import { AUTH_DIR, STATE_VERSION } from "../config.mjs";
 
 export function getStateFile() {
@@ -38,16 +42,24 @@ export function loadWindowState(workspaceRoot) {
     }
   }
 
-  const primary = readFirstStateFile([file, getStateBackupFile(), ...legacyFiles]);
+  const primary = readWindowStateRevision(file)?.state || readFirstStateFile([file, getStateBackupFile(), ...legacyFiles]);
   if (primary) {
     const merged = mergeWindowStates(primary, legacyFiles.map(readStateFile).filter(Boolean), workspaceRoot);
     if (merged.conversations.length > primary.conversations.length) {
       saveWindowState(workspaceRoot, merged);
     }
+    stores.set(merged, createWindowStateStore(file, normalizeWindowState(readWindowStateRevision(file)?.state || primary, workspaceRoot), {
+      normalize: value => normalizeWindowState(value, workspaceRoot), legacyFiles: [getStateBackupFile(), ...legacyFiles],
+    }));
     return merged;
   }
 
-  return createEmptyState(workspaceRoot);
+  if ([file, getStateBackupFile(), ...legacyFiles].some(candidate => fs.existsSync(candidate))) {
+    throw Object.assign(new Error('История чатов повреждена. Восстановите исправную резервную копию; исходные файлы сохранены.'), { code: 'STATE_CORRUPT' });
+  }
+  const empty = createEmptyState(workspaceRoot);
+  stores.set(empty, createWindowStateStore(file, empty, { normalize: value => normalizeWindowState(value, workspaceRoot) }));
+  return empty;
 }
 
 export function getLegacyStateFiles(workspaceRoot) {
@@ -103,14 +115,47 @@ export function mergeWindowStates(primary, states, workspaceRoot) {
   }, workspaceRoot);
 }
 
-export function saveWindowState(workspaceRoot, state) {
-  const file = getStateFile();
-  const backupFile = getStateBackupFile();
-  const normalized = normalizeWindowState(state, workspaceRoot);
+function storeFor(workspaceRoot, state) {
+  if (!stores.has(state)) {
+    const initial = readWindowStateRevision(getStateFile())?.state || readStateFile(getStateFile()) || createEmptyState(workspaceRoot);
+    stores.set(state, createWindowStateStore(getStateFile(), normalizeWindowState(initial, workspaceRoot),
+      { normalize: value => normalizeWindowState(value, workspaceRoot), legacyFiles: [getStateBackupFile(), ...getLegacyStateFiles(workspaceRoot)] }));
+  }
+  return stores.get(state);
+}
 
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (fs.existsSync(file)) fs.copyFileSync(file, backupFile);
-  fs.writeFileSync(file, JSON.stringify(normalized, null, 2), "utf8");
+export function saveWindowState(workspaceRoot, state) {
+  return storeFor(workspaceRoot, state).commit(normalizeWindowState(state, workspaceRoot));
+}
+
+export function createWindowStateWriter(workspaceRoot, state, { onError } = {}) {
+  const store = storeFor(workspaceRoot, state);
+  const writer = createJsonStateWriter(getStateFile(), {
+    prepare: value => normalizeWindowState(value, workspaceRoot),
+    write: (_file, value) => store.commitAsync(value), onError,
+  });
+  let refreshing;
+  async function refreshState() {
+    await writer.flush();
+    const next = await store.refresh(() => normalizeWindowState(state, workspaceRoot));
+    if (!next) return;
+    const existing = new Map(state.conversations.map(c => [c.id, c]));
+    next.conversations = next.conversations.map(value => {
+      const current = existing.get(value.id);
+      if (!current) return value;
+      for (const key of Object.keys(current)) if (!(key in value)) delete current[key];
+      for (const [key, nextValue] of Object.entries(value)) {
+        if (!isDeepStrictEqual(current[key], nextValue)) current[key] = nextValue;
+      }
+      return current;
+    });
+    // Selection belongs to this window, even when another window saves its own.
+    next.activeConversationId = next.conversations.some(c => c.id === state.activeConversationId)
+      ? state.activeConversationId : null;
+    Object.assign(state, next);
+  }
+  writer.refresh = () => refreshing ||= refreshState().finally(() => { refreshing = null; });
+  return writer;
 }
 
 export function createEmptyState(workspaceRoot) {
@@ -126,7 +171,9 @@ export function createEmptyState(workspaceRoot) {
 
 export function readStateFile(file) {
   try {
-    return normalizeWindowState(JSON.parse(fs.readFileSync(file, "utf8")), path.dirname(file));
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!value || !Array.isArray(value.conversations)) return null;
+    return normalizeWindowState(value, path.dirname(file));
   } catch {
     return null;
   }
@@ -136,7 +183,9 @@ export function normalizeWindowState(state, workspaceRoot) {
   const deletedConversationIds = normalizeDeletedConversationIds([state]);
   const deleted = new Set(deletedConversationIds);
   const conversations = Array.isArray(state?.conversations)
-    ? state.conversations.filter((conversation) => conversation && conversation.id && !deleted.has(String(conversation.id)))
+    ? state.conversations
+        .filter((conversation) => conversation && conversation.id && !deleted.has(String(conversation.id)))
+        .map((conversation) => ({ ...conversation, coderMode: conversation.interactionMode !== "discuss" }))
     : [];
   const activeConversationId = conversations.some((item) => item.id === state?.activeConversationId)
     ? state.activeConversationId

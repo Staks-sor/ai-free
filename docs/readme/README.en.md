@@ -33,7 +33,7 @@
 
 If AI Free saves you time, please [star the repository](https://github.com/Staks-sor/ai-free). It helps other people discover the project.
 
-- Donation card (OTP Bank): `2201 9604 2500 7505`
+SYNVOX 0.5.65 is free for personal use. AI provider terms and usage limits apply separately.
 
 ## ✨ Features
 

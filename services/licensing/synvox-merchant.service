@@ -1,0 +1,26 @@
+[Unit]
+Description=SYNVOX Telegram Stars merchant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=synvox-merchant
+Group=synvox-merchant
+WorkingDirectory=/opt/synvox-merchant/current
+Environment=SYNVOX_DATA_DIR=/var/lib/synvox-merchant
+LoadCredentialEncrypted=bot-token:/etc/credstore.encrypted/synvox-bot-token
+Environment=SYNVOX_BOT_TOKEN_FILE=%d/bot-token
+Environment=SYNVOX_STARS_PRICE=100
+ExecStart=/usr/bin/node /opt/synvox-merchant/current/services/licensing/merchant-run.mjs
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/synvox-merchant
+
+[Install]
+WantedBy=multi-user.target

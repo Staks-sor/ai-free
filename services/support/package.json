@@ -1,0 +1,7 @@
+{
+  "name": "synvox-support-runtime",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": { "pngjs": "7.0.0", "undici": "^7.0.0" }
+}

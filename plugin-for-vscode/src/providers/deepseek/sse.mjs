@@ -12,6 +12,7 @@ export async function streamSse(res, debug, onText = null) {
   const fragments = new Map();
   let eventCount = 0;
   const eventTypes = new Set();
+  let rateLimited = false;
 
   const processEvent = (rawEvent) => {
     const event = parseSseEvent(rawEvent);
@@ -26,6 +27,10 @@ export async function streamSse(res, debug, onText = null) {
       parsed = JSON.parse(event.data);
     } catch {
       return;
+    }
+
+    if (event.event === "hint" && parsed?.finish_reason === "rate_limit_reached") {
+      rateLimited = true;
     }
 
     const upstreamError = extractStreamError(parsed);
@@ -55,6 +60,12 @@ export async function streamSse(res, debug, onText = null) {
 
   buffer += decoder.decode();
   if (buffer.trim()) processEvent(buffer);
+  if (rateLimited) {
+    const error = new Error("Достигнут лимит запросов DeepSeek. Подождите и повторите запрос позже.");
+    error.code = "DEEPSEEK_RATE_LIMIT";
+    error.delivery = fullText || lastAssistantMessageId !== null ? "unknown" : "rejected";
+    throw error;
+  }
   if (!fullText) {
     const types = [...eventTypes].join(", ") || "message";
     const error = new Error(`DeepSeek stream ended without response content (events=${eventCount}, types=${types}).`);

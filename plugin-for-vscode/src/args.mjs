@@ -29,6 +29,8 @@ export function parseArgs(argv) {
     importQwenFile: null,
     loginChatGPT: false,
     importChatGPTFile: null,
+    loginGoogleAI: false,
+    loginGLM: false,
     forceWelcome: false,
     prompt: [],
   };
@@ -59,6 +61,8 @@ export function parseArgs(argv) {
     else if (arg === "--import-qwen") args.importQwenFile = argv[++i];
     else if (arg === "--login-chatgpt") args.loginChatGPT = true;
     else if (arg === "--import-chatgpt") args.importChatGPTFile = argv[++i];
+    else if (arg === "--login-google-ai") args.loginGoogleAI = true;
+    else if (arg === "--login-glm") args.loginGLM = true;
     else if (arg === "--welcome") args.forceWelcome = true;
     else if (arg === "--port") args.port = Number(argv[++i]);
     else if (arg === "--api-port") args.apiPort = Number(argv[++i]);
@@ -117,6 +121,8 @@ Options:
   --import-qwen FILE  Import Qwen cookies from a Chrome JSON export (bypasses anti-bot)
   --login-chatgpt     Same but for chatgpt.com (separate profile, separate auth)
   --import-chatgpt FILE Import ChatGPT session from a JSON export (containing accessToken/sessionToken)
+  --login-google-ai    Open Google Search AI Mode and save its browser profile
+  --login-glm          Open chat.z.ai and save the personal GLM browser session
   --welcome           Force show welcome screen (for adding new provider or testing)
   --save-creds        Save email + password for autofill on re-login
   --thinking          Enable thinking mode

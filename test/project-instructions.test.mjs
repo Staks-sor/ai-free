@@ -70,3 +70,29 @@ function write(root, relativePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content);
 }
+
+describe('progressive development context', () => {
+  it('loads only the bounded index without reading linked direction files', async () => {
+    const { loadDevelopmentContext } = await import('../src/agent-orchestrator/project-instructions.mjs');
+    const root = makeWorkspace();
+    write(root, 'docs/development/INDEX.md', '# Context\nRead PROVIDERS.md when needed.');
+    write(root, 'docs/development/PROVIDERS.md', 'DIRECTION_CONTENT_MUST_NOT_BE_PRELOADED');
+    const result = loadDevelopmentContext(root);
+    assert.match(result.context, /Read PROVIDERS.md/);
+    assert.doesNotMatch(result.context, /DIRECTION_CONTENT/);
+    assert.equal(result.truncated, false);
+    write(root, 'docs/development/INDEX.md', 'x'.repeat(100_000));
+    const bounded = loadDevelopmentContext(root);
+    assert.ok(bounded.context.length < 5000);
+    assert.equal(bounded.truncated, true);
+  });
+
+  it('does not follow a context symlink outside the selected workspace', async () => {
+    const { loadDevelopmentContext } = await import('../src/agent-orchestrator/project-instructions.mjs');
+    const root = makeWorkspace(), outside = makeWorkspace();
+    write(outside, 'INDEX.md', 'private outside context');
+    fs.mkdirSync(path.join(root, 'docs/development'), { recursive: true });
+    fs.symlinkSync(path.join(outside, 'INDEX.md'), path.join(root, 'docs/development/INDEX.md'));
+    assert.equal(loadDevelopmentContext(root).context, '');
+  });
+});

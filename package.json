@@ -1,8 +1,17 @@
 {
   "name": "ai-free",
-  "version": "0.4.25",
-  "description": "Free local AI client for DeepSeek, Qwen and ChatGPT with OpenAI-compatible API, CLI, code agent, memory and skills.",
+  "version": "0.5.65",
+  "description": "Local AI client for DeepSeek, Qwen, ChatGPT, Google AI Mode and GLM with OpenAI-compatible API, CLI, code agent, memory and skills.",
   "private": true,
+  "files": [
+    "bin",
+    "src",
+    "api",
+    "packages",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "workspaces": [
@@ -22,6 +31,8 @@
     "deepseek",
     "qwen",
     "chatgpt",
+    "google-ai",
+    "glm",
     "openai-api",
     "anthropic-api",
     "openai-compatible-api",
@@ -48,9 +59,8 @@
     "ai-free-browser-mcp": "./bin/ai-free-browser-mcp.mjs"
   },
   "scripts": {
-    "postinstall": "patchright install chromium && playwright install chromium",
-    "start": "node ./bin/deepseek.mjs --window",
-    "window": "node ./bin/deepseek.mjs --window",
+    "start": "node ./bin/synvox-desktop.mjs",
+    "window": "node ./bin/synvox-desktop.mjs",
     "server": "node ./bin/deepseek.mjs --no-window",
     "cli": "node ./bin/deepseek.mjs",
     "chat": "node ./bin/deepseek.mjs",
@@ -59,21 +69,30 @@
     "login-qwen": "node ./bin/deepseek.mjs --login-qwen",
     "import-qwen": "node ./bin/deepseek.mjs --import-qwen",
     "login-chatgpt": "node ./bin/deepseek.mjs --login-chatgpt",
+    "login-google-ai": "node ./bin/deepseek.mjs --login-google-ai",
+    "login-glm": "node ./bin/deepseek.mjs --login-glm",
     "import-chatgpt": "node ./bin/deepseek.mjs --import-chatgpt",
     "welcome": "node ./bin/deepseek.mjs --welcome",
     "save-creds": "node ./bin/deepseek.mjs --save-creds",
     "check": "node ./bin/deepseek.mjs --check",
     "precheck:ci": "node plugin-for-vscode/build.mjs",
     "check:ci": "node ./scripts/check-ci-invariants.mjs",
+    "verify:desktop-release": "node ./scripts/verify-desktop-release.mjs",
     "inventory": "node ./scripts/inventory-duplicates.mjs --report",
+    "pretest:coverage": "node plugin-for-vscode/build.mjs",
+    "test:coverage": "node --test --experimental-test-coverage --test-reporter=./scripts/coverage-reporter.mjs test/*.test.mjs",
     "pretest": "node plugin-for-vscode/build.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "patchright": "^1.60.2",
-    "playwright": "^1.60.0"
+    "playwright": "^1.60.0",
+    "pngjs": "7.0.0"
+  },
+  "optionalDependencies": {
+    "@jitsi/robotjs": "0.6.24"
   }
 }

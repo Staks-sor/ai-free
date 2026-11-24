@@ -20,4 +20,16 @@ class NodeRuntimeResolverTest {
 
         assertTrue(candidates.any { it.contains("first") && it.endsWith("node") })
     }
+
+    @Test
+    fun `rejects Node 20 and falls back to Node 22`() {
+        val majors = mapOf("/node20" to 20, "/node22" to 22)
+
+        val selected = NodeRuntimeResolver.firstCompatible(
+            listOf("/node20", "/node22"),
+            majors::get
+        )
+
+        assertEquals("/node22", selected)
+    }
 }

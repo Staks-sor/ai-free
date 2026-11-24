@@ -3,7 +3,7 @@
 // Все network/browser штуки делает src/browser/login.mjs.
 
 import fs from "node:fs";
-import path from "node:path";
+import { writeAtomicJsonSync } from "../state/state-writer.mjs";
 import { BASE_URL } from "../config.mjs";
 
 // Нормализация userToken: фронт DeepSeek хранит его в localStorage либо как сырую строку,
@@ -29,13 +29,13 @@ export function loadCookies(file) {
   return cookieHeaderFromArray(parsed);
 }
 
-export function cookieHeaderFromArray(parsed) {
+export function cookieHeaderFromArray(parsed, { requireSession = true } = {}) {
   if (!Array.isArray(parsed)) {
     throw new Error("Cookie data must be a JSON array exported from the browser.");
   }
 
   const usable = parsed.filter((cookie) => cookie?.name && "value" in cookie);
-  if (!usable.some((cookie) => cookie.name === "ds_session_id")) {
+  if (requireSession && !usable.some((cookie) => cookie.name === "ds_session_id")) {
     throw new Error("Cookie file does not contain ds_session_id.");
   }
 
@@ -50,7 +50,8 @@ export function readSavedAuth(file) {
   if (!parsed || typeof parsed !== "object") return null;
 
   const token = normalizeToken(parsed.userToken || parsed.token || "");
-  const cookieHeader = cookieHeaderFromArray(parsed.cookies || []);
+  if (!token) throw new Error("Saved auth does not contain userToken.");
+  const cookieHeader = cookieHeaderFromArray(parsed.cookies || [], { requireSession: false });
   return {
     token,
     cookieHeader,
@@ -61,7 +62,6 @@ export function readSavedAuth(file) {
 }
 
 export function writeSavedAuth(file, { cookies, userToken, profileDir, hifLeim = "", hifDliq = "" }) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
   const payload = {
     version: 1,
     savedAt: new Date().toISOString(),
@@ -72,12 +72,7 @@ export function writeSavedAuth(file, { cookies, userToken, profileDir, hifLeim =
     hifDliq,
     cookies,
   };
-  fs.writeFileSync(file, JSON.stringify(payload, null, 2), { mode: 0o600 });
-  try {
-    fs.chmodSync(file, 0o600);
-  } catch {
-    // Windows / некоторые FS — chmod игнорируется, это ок
-  }
+  writeAtomicJsonSync(file, payload);
 }
 
 // .env.example по дефолту содержит "paste_userToken_here" — это плейсхолдер.

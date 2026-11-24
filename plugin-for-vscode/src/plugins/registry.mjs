@@ -22,14 +22,15 @@ export function listPluginRoots() {
     .map((entry) => path.join(PLUGINS_DIR, entry.name));
 }
 
-export function loadPlugin(pluginRoot) {
-  const cached = pluginCache.get(pluginRoot);
+export function loadPlugin(pluginRoot, { metadataOnly = false } = {}) {
+  const cacheKey = metadataOnly ? `${pluginRoot}:metadata` : pluginRoot;
+  const cached = pluginCache.get(cacheKey);
   if (cached) return cached;
 
   const manifest = detectPluginManifest(pluginRoot);
   const id = manifest?.id || path.basename(pluginRoot);
-  const skills = discoverSkillsInTree(pluginRoot, { pluginId: id, pluginMeta: manifest });
-  for (const skill of skills) skillCache.set(skill.id, skill);
+  const skills = discoverSkillsInTree(pluginRoot, { pluginId: id, pluginMeta: manifest, metadataOnly });
+  if (!metadataOnly) for (const skill of skills) skillCache.set(skill.id, skill);
 
   const plugin = {
     id,
@@ -42,15 +43,15 @@ export function loadPlugin(pluginRoot) {
     skills,
   };
 
-  pluginCache.set(pluginRoot, plugin);
+  pluginCache.set(cacheKey, plugin);
   return plugin;
 }
 
-export function listInstalledPlugins() {
+export function listInstalledPlugins(options = {}) {
   return listPluginRoots()
     .map((root) => {
       try {
-        return loadPlugin(root);
+        return loadPlugin(root, options);
       } catch {
         return null;
       }
@@ -59,10 +60,10 @@ export function listInstalledPlugins() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function listPluginSkillsFlat() {
+export function listPluginSkillsFlat(options = {}) {
   const skills = [];
   const seen = new Set();
-  for (const plugin of listInstalledPlugins()) {
+  for (const plugin of listInstalledPlugins(options)) {
     for (const skill of plugin.skills) {
       if (seen.has(skill.id)) continue;
       seen.add(skill.id);

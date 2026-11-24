@@ -1,3 +1,5 @@
+import { createProviderCooldown } from "../request-cooldown.mjs";
+import { measureProviderExchange } from "../../diagnostics/runtime-metrics.mjs";
 // HTTP-клиент к chat.deepseek.com.
 // На каждый запрос — подписи (cookies + Bearer), PoW для completion, SSE-парсинг.
 // _withReauth: до двух retry на запрос — после silent refresh и после visible re-login.
@@ -6,9 +8,13 @@ import { BASE_URL, COMPLETION_PATH, DEFAULT_AUTH_FILE } from "../../config.mjs";
 import { baseHeaders } from "./headers.mjs";
 import { solvePow } from "./pow.mjs";
 import { streamSse } from "./sse.mjs";
+import { throwIfDeepSeekResponseFailure } from "./response-errors.mjs";
+import { parseToolCall as parseWorkspaceToolCall } from "../../code-agent/parser.mjs";
+import { parseDeepSeekDsml } from "./tool-call.mjs";
 import { createFileLogger } from "../../logging/logger.mjs";
 
 const providerLogger = createFileLogger({ component: "provider.deepseek" });
+const requestCooldown = createProviderCooldown({ provider: "deepseek", errorCode: "DEEPSEEK_RATE_LIMIT" });
 
 // Экспорт для тестов и документации статусов upload/fetch_files.
 const FILE_STATUS_READY = [
@@ -18,6 +24,24 @@ const FILE_STATUS_PENDING = [
   "PENDING", "PROCESSING", "UPLOADING", "RUNNING", "PARSING", "PARSE",
   "PARSING_IMAGE", "INDEXING", "QUEUED", "WAITING", "INIT", "INITIALIZING",
 ];
+
+function waitForDeepSeekFileDelay(ms, signal = null) {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(done, ms);
+    const abort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    function done() {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
 
 export function isDeepSeekFileReadyStatus(status) {
   const s = String(status || "").toUpperCase();
@@ -61,12 +85,31 @@ export function formatDeepSeekFileFailure(file, fileId) {
 }
 
 export class DeepSeekChatClient {
-  constructor({ cookieHeader, token, debug, authManager = null, hifLeim = "" }) {
+  constructor({ cookieHeader, token, debug, authManager = null, hifLeim = "", accountId = "default", authFile = DEFAULT_AUTH_FILE, browserOptions = {} }) {
+    this.accountId = accountId;
+    this.authFile = authFile;
+    this.browserOptions = browserOptions;
     this.cookieHeader = cookieHeader;
     this.token = token;
     this.debug = debug;
     this.authManager = authManager;
     this.hifLeim = hifLeim;
+  }
+
+  parseToolCall(text) {
+    const parsed = parseWorkspaceToolCall(text);
+    // DeepSeek sometimes appends orphan DSML closing tags to a JSON call.
+    // A genuine opening DSML envelope still goes through strict validation.
+    if (parsed && !/<\s*[｜|]+\s*DSML\s*[｜|]+/.test(String(text || ""))) return parsed;
+    const dsml = parseDeepSeekDsml(text);
+    if (dsml) return dsml;
+    if (parsed) return parsed;
+    const match = /^\{"tool":"finish","message":"([\s\S]*)"\}$/.exec(String(text || "").trim());
+    if (!match) return null;
+    return {
+      tool: "finish",
+      message: match[1].replace(/\\(n|r|t|"|\\)/g, (_match, value) => ({ n: "\n", r: "\r", t: "\t", '"': '"', "\\": "\\" })[value]),
+    };
   }
 
   setAuthManager(authManager) {
@@ -75,7 +118,7 @@ export class DeepSeekChatClient {
 
   _applyAuth(auth) {
     if (!auth) return;
-    if (auth.cookieHeader) this.cookieHeader = auth.cookieHeader;
+    if (typeof auth.cookieHeader === "string") this.cookieHeader = auth.cookieHeader;
     if (auth.token) this.token = auth.token;
     if (auth.hifLeim) this.hifLeim = auth.hifLeim;
   }
@@ -86,7 +129,7 @@ export class DeepSeekChatClient {
     if (this.debug) console.error("[search] DeepSeek hif token missing; refreshing from browser profile...");
     try {
       const { refreshDeepSeekFeatureTokensFromProfile } = await import("../../browser/login.mjs");
-      const tokens = await refreshDeepSeekFeatureTokensFromProfile(DEFAULT_AUTH_FILE);
+      const tokens = await refreshDeepSeekFeatureTokensFromProfile(this.authFile, this.browserOptions);
       if (tokens?.hifLeim) {
         this.hifLeim = tokens.hifLeim;
         if (this.debug) console.error("[search] DeepSeek hif token loaded from browser profile.");
@@ -104,13 +147,15 @@ export class DeepSeekChatClient {
   // Обёртка с эскалацией: до 2 retry на один API-вызов.
   // 1-й retry — после silent headless refresh.
   // 2-й retry — после visible re-login (forceVisible=true, силент пропускается).
-  async _withReauth(fn) {
+  async _withReauth(fn, signal = null) {
     let escalate = false;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
+        signal?.throwIfAborted();
         return await fn();
       } catch (error) {
-        if (!error?.isAuthError || !this.authManager) throw error;
+        signal?.throwIfAborted();
+        if (!error?.isAuthError || !["rejected", "not_sent"].includes(error.delivery) || !this.authManager) throw error;
         if (attempt >= 2) throw error;
         providerLogger.warn("provider.deepseek.retry", {
           operation: "reauth",
@@ -121,6 +166,7 @@ export class DeepSeekChatClient {
           console.error(`[auth] attempt ${attempt + 1} got auth error; refreshing (escalate=${escalate}).`);
         }
         const fresh = await this.authManager.refresh({ forceVisible: escalate });
+        signal?.throwIfAborted();
         this._applyAuth(fresh);
         escalate = true;
       }
@@ -129,16 +175,17 @@ export class DeepSeekChatClient {
   }
 
   async json(path, opts = {}) {
-    return await this._withReauth(() => this._jsonOnce(path, opts));
+    return await this._withReauth(() => this._jsonOnce(path, opts), opts.signal);
   }
 
-  async _jsonOnce(path, { method = "GET", body, headers = {} } = {}) {
+  async _jsonOnce(path, { method = "GET", body, headers = {}, signal = null } = {}) {
     const startedAt = Date.now();
     providerLogger.debug("provider.deepseek.request", { operation: "json", method, path });
     const res = await fetch(`${BASE_URL}${path}`, {
       method,
       headers: { ...baseHeaders(this.cookieHeader, this.token, { hifLeim: this.hifLeim }), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: signal || undefined,
     });
     providerLogger.info("provider.deepseek.response", {
       operation: "json",
@@ -149,15 +196,11 @@ export class DeepSeekChatClient {
     });
 
     const text = await res.text();
+    throwIfDeepSeekResponseFailure(res.status, text, path);
     let json;
     try {
       json = JSON.parse(text);
     } catch {
-      if (res.status === 401 || res.status === 403) {
-        const err = new Error(`Auth required at ${path}: HTTP ${res.status}`);
-        err.isAuthError = true;
-        throw err;
-      }
       throw new Error(
         `Expected JSON from ${path}, got HTTP ${res.status}: ${text.slice(0, 180)}`,
       );
@@ -165,18 +208,6 @@ export class DeepSeekChatClient {
 
     if (this.debug) {
       console.error(`[debug] ${method} ${path} -> HTTP ${res.status}`, json);
-    }
-
-    if (
-      res.status === 401 ||
-      res.status === 403 ||
-      (json && (json.code === 40002 || json.code === 40003))
-    ) {
-      const err = new Error(
-        `Auth required at ${path}: code ${json?.code ?? ""}, http ${res.status}`,
-      );
-      err.isAuthError = true;
-      throw err;
     }
 
     if (!res.ok || (json.code !== undefined && json.code !== 0)) {
@@ -201,10 +232,11 @@ export class DeepSeekChatClient {
     return session.id;
   }
 
-  async createPowHeader(targetPath) {
+  async createPowHeader(targetPath, signal = null) {
     const json = await this.json("/api/v0/chat/create_pow_challenge", {
       method: "POST",
       body: { target_path: targetPath },
+      signal,
     });
 
     const challenge = json?.data?.biz_data?.challenge;
@@ -231,14 +263,16 @@ export class DeepSeekChatClient {
   // возвращает file_id с префиксом "file-". Этот id потом идёт в ref_file_ids
   // массиве запроса completion.
   async uploadFile(buffer, mimeType, filename, options = {}) {
-    return await this._withReauth(() =>
-      this._uploadFileOnce(buffer, mimeType, filename, options),
+    return await this._withReauth(
+      () => this._uploadFileOnce(buffer, mimeType, filename, options),
+      options.signal,
     );
   }
 
-  async _uploadFileOnce(buffer, mimeType, filename, { chatSessionId = null } = {}) {
+  async _uploadFileOnce(buffer, mimeType, filename, { chatSessionId = null, signal = null } = {}) {
     const path = "/api/v0/file/upload_file";
-    const pow = await this.createPowHeader(path);
+    signal?.throwIfAborted();
+    const pow = await this.createPowHeader(path, signal);
 
     const form = new FormData();
     const blob = new Blob([buffer], { type: mimeType || "application/octet-stream" });
@@ -258,33 +292,20 @@ export class DeepSeekChatClient {
       method: "POST",
       headers,
       body: form,
+      signal: signal || undefined,
     });
 
     const text = await res.text();
+    throwIfDeepSeekResponseFailure(res.status, text, path);
     let json;
     try {
       json = JSON.parse(text);
     } catch {
-      if (res.status === 401 || res.status === 403) {
-        const err = new Error(`Auth required during upload: HTTP ${res.status}`);
-        err.isAuthError = true;
-        throw err;
-      }
       throw new Error(`Upload failed: HTTP ${res.status}: ${text.slice(0, 400)}`);
     }
 
     if (this.debug) {
       console.error(`[debug] POST ${path} -> HTTP ${res.status}`, json);
-    }
-
-    if (
-      res.status === 401 ||
-      res.status === 403 ||
-      (json && (json.code === 40002 || json.code === 40003))
-    ) {
-      const err = new Error(`Auth required during upload: code ${json?.code ?? ""}`);
-      err.isAuthError = true;
-      throw err;
     }
 
     if (!res.ok || (json.code !== undefined && json.code !== 0)) {
@@ -337,7 +358,7 @@ export class DeepSeekChatClient {
     console.log(
       `[upload] file ${fileId} uploaded (initial status=${initialStatus ?? "unknown"}), waiting until ready...`,
     );
-    const finalStatus = await this.waitForFileReady(fileId);
+    const finalStatus = await this.waitForFileReady(fileId, { signal });
     console.log(`[upload] file ${fileId} ready (status=${finalStatus})`);
 
     return fileId;
@@ -381,17 +402,18 @@ export class DeepSeekChatClient {
   }
 
   // Polling статуса файла после upload. Картинки 3–15+ сек (PENDING → PARSING → SUCCESS).
-  async waitForFileReady(fileId, { timeoutMs = 120000, intervalMs = 800, settleMs = 1200 } = {}) {
+  async waitForFileReady(fileId, { timeoutMs = 120000, intervalMs = 800, settleMs = 1200, signal = null } = {}) {
     const deadline = Date.now() + timeoutMs;
     let lastStatus = null;
     let attempt = 0;
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       attempt += 1;
       let json;
       try {
         json = await this.json(
           `/api/v0/file/fetch_files?file_ids=${encodeURIComponent(fileId)}`,
-          { method: "GET" },
+          { method: "GET", signal },
         );
       } catch (error) {
         console.error(`[upload] fetch_files attempt ${attempt} failed: ${error.message}`);
@@ -419,12 +441,12 @@ export class DeepSeekChatClient {
       if (this._isFileReadyStatus(status)) {
         if (settleMs > 0) {
           console.log(`[upload] status=${status}, settle ${settleMs}ms before ref_file_ids…`);
-          await new Promise((resolve) => setTimeout(resolve, settleMs));
+          await waitForDeepSeekFileDelay(settleMs, signal);
         }
         return status;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      await waitForDeepSeekFileDelay(intervalMs, signal);
     }
     if (isDeepSeekFileFailedStatus(lastStatus)) {
       throw new Error(formatDeepSeekFileFailure({ status: lastStatus }, fileId));
@@ -437,6 +459,7 @@ export class DeepSeekChatClient {
 
   // Completion с ref_file_ids: при biz_code 9 повторно ждём готовность файлов и ретраим.
   async complete(args) {
+    args?.signal?.throwIfAborted();
     const startedAt = Date.now();
     const refFileIds = Array.isArray(args?.refFileIds) ? args.refFileIds.filter(Boolean) : [];
     providerLogger.info("provider.deepseek.request", {
@@ -448,7 +471,14 @@ export class DeepSeekChatClient {
       searchEnabled: args?.searchEnabled === true,
     });
     try {
-      const result = await this._withReauth(() => this._completeWithInvalidMessageRetry(args, refFileIds));
+      let result;
+      try {
+        result = await this._withReauth(() => this._completeWithInvalidMessageRetry(args, refFileIds), args?.signal);
+      } catch (error) {
+        if (error?.code !== "EMPTY_UPSTREAM_STREAM" || !["not_sent", "rejected"].includes(error.delivery)) throw error;
+        providerLogger.warn("provider.deepseek.retry", { operation: "empty_stream" });
+        result = await this._withReauth(() => this._completeWithInvalidMessageRetry(args, refFileIds), args?.signal);
+      }
       providerLogger.info("provider.deepseek.success", {
         operation: "completion",
         model: args?.modelType || null,
@@ -516,9 +546,12 @@ async _completeOnce({
      searchEnabled = false,
      onText = null,
      refFileIds = [],
+     signal = null,
    }) {
+     signal?.throwIfAborted();
+     requestCooldown.assertAvailable(this.accountId);
      await this._ensureSearchFeatureToken(searchEnabled);
-     const pow = await this.createPowHeader(COMPLETION_PATH);
+     const pow = await this.createPowHeader(COMPLETION_PATH, signal);
      const body = {
        chat_session_id: sessionId,
        parent_message_id: parentMessageId,
@@ -536,57 +569,80 @@ async _completeOnce({
       `[complete] model_type=${modelType} thinking=${thinkingEnabled} search=${searchEnabled} ref_files=${body.ref_file_ids.length}`,
     );
 
-    const res = await fetch(`${BASE_URL}${COMPLETION_PATH}`, {
-      method: "POST",
-      headers: {
-        ...baseHeaders(this.cookieHeader, this.token, { hifLeim: this.hifLeim }),
-        "X-DS-PoW-Response": pow,
-      },
-      body: JSON.stringify(body),
-    });
-    providerLogger.info("provider.deepseek.response", {
-      operation: "completion",
-      model: modelType,
-      statusCode: res.status,
-      contentType: String(res.headers.get("content-type") || ""),
-    });
+    signal?.throwIfAborted();
+    requestCooldown.assertAvailable(this.accountId);
+    return measureProviderExchange("deepseek", async probe => {
+      const res = await fetch(`${BASE_URL}${COMPLETION_PATH}`, {
+        method: "POST",
+        headers: {
+          ...baseHeaders(this.cookieHeader, this.token, { hifLeim: this.hifLeim }),
+          "X-DS-PoW-Response": pow,
+        },
+        body: JSON.stringify(body),
+        signal: signal || undefined,
+      });
+      probe.headers();
+      providerLogger.info("provider.deepseek.response", {
+        operation: "completion",
+        model: modelType,
+        statusCode: res.status,
+        contentType: String(res.headers.get("content-type") || ""),
+      });
 
-    const contentType = String(res.headers.get("content-type") || "");
-    if (!res.ok || !contentType.includes("text/event-stream")) {
-      const text = await res.text();
-      if (res.status === 401 || res.status === 403) {
-        const err = new Error(`Auth required during completion: HTTP ${res.status}`);
-        err.isAuthError = true;
-        throw err;
+      if (res.status === 429) {
+        const retryAfterMs = requestCooldown.recordRateLimit(res.headers.get("retry-after"), this.accountId);
+        try { await res.body?.cancel(); } catch {}
+        throw Object.assign(new Error("Достигнут лимит запросов DeepSeek. Повторите позже."),
+          { code: "DEEPSEEK_RATE_LIMIT", status: 429, delivery: "rejected", retryAfterMs });
       }
+      const contentType = String(res.headers.get("content-type") || "");
+      if (!res.ok || !contentType.includes("text/event-stream")) {
+        const text = await res.text();
+        throwIfDeepSeekResponseFailure(res.status, text, "completion");
+        try {
+          const parsed = JSON.parse(text);
+          const bizCode = parsed?.data?.biz_code;
+          const bizMsg = parsed?.data?.biz_msg || "";
+          if (bizCode === 9 || /invalid ref file id/i.test(bizMsg)) {
+            throw new Error(
+              `Изображение ещё не готово для распознавания (biz_code 9: invalid ref file id). ` +
+                `Подожди несколько секунд и отправь сообщение снова, или прикрепи картинку заново. ` +
+                `ref_files=${JSON.stringify(refFileIds)}`,
+            );
+          }
+          if (bizCode !== undefined && bizCode !== 0) {
+            throw new Error(`Completion rejected: biz_code ${bizCode}, ${bizMsg}: ${text.slice(0, 500)}`);
+          }
+        } catch (parseError) {
+          if (parseError?.message?.includes("biz_code") || parseError?.message?.includes("ref file")) {
+            throw parseError;
+          }
+        }
+        throw new Error(`Completion failed: HTTP ${res.status}: ${text.slice(0, 1000)}`);
+      }
+
       try {
-        const parsed = JSON.parse(text);
-        if (parsed && (parsed.code === 40002 || parsed.code === 40003)) {
-          const err = new Error(`Auth required during completion: code ${parsed.code}`);
-          err.isAuthError = true;
-          throw err;
+        return await streamSse(res, this.debug, createDeepSeekContentObserver(probe, onText));
+      } catch (error) {
+        if (error.code === "DEEPSEEK_RATE_LIMIT") {
+          error.retryAfterMs = requestCooldown.recordRateLimit(res.headers.get("retry-after"), this.accountId);
         }
-        const bizCode = parsed?.data?.biz_code;
-        const bizMsg = parsed?.data?.biz_msg || "";
-        if (bizCode === 9 || /invalid ref file id/i.test(bizMsg)) {
-          throw new Error(
-            `Изображение ещё не готово для распознавания (biz_code 9: invalid ref file id). ` +
-              `Подожди несколько секунд и отправь сообщение снова, или прикрепи картинку заново. ` +
-              `ref_files=${JSON.stringify(refFileIds)}`,
-          );
-        }
-        if (bizCode !== undefined && bizCode !== 0) {
-          throw new Error(`Completion rejected: biz_code ${bizCode}, ${bizMsg}: ${text.slice(0, 500)}`);
-        }
-      } catch (parseError) {
-        if (parseError?.isAuthError) throw parseError;
-        if (parseError?.message?.includes("biz_code") || parseError?.message?.includes("ref file")) {
-          throw parseError;
-        }
+        throw error;
       }
-      throw new Error(`Completion failed: HTTP ${res.status}: ${text.slice(0, 1000)}`);
-    }
-
-    return streamSse(res, this.debug, onText);
+    }, { http: true, observeText: true });
   }
+}
+
+// Parser-generated thinking tags are observed separately; original UI chunks
+// are forwarded intact. The observer stores no content between callbacks.
+export function createDeepSeekContentObserver(probe, onText = null) {
+  let thinking = false;
+  return chunk => {
+    for (const part of chunk.split(/(<think>|<\/think>)/)) {
+      if (part === '<think>') thinking = true;
+      else if (part === '</think>') thinking = false;
+      else if (part.trim()) (thinking ? probe.thinking : probe.text)(part);
+    }
+    return onText?.(chunk);
+  };
 }

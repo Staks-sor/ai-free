@@ -153,4 +153,22 @@ describe("streamSse", () => {
       /ended without response content/i,
     );
   });
+
+  it("reports DeepSeek's rate limit hint instead of an empty stream", async () => {
+    const response = new Response([
+      'event: ready\ndata: {}',
+      'event: hint\ndata: {"type":"error","finish_reason":"rate_limit_reached"}',
+      'event: close\ndata: {"auto_resume":false}',
+    ].join("\n\n"));
+    await assert.rejects(
+      () => streamSse(response, false),
+      (error) => error.code === "DEEPSEEK_RATE_LIMIT" && /лимит запросов DeepSeek/i.test(error.message),
+    );
+  });
+});
+
+it('marks a rate hint after generated content as unknown delivery, not a safe automatic resend', async () => {
+  const content = 'data: {"v":"partial answer"}\n\nevent: hint\ndata: {"finish_reason":"rate_limit_reached"}\n\n';
+  await assert.rejects(streamSse(new Response(content)), error => error.code === 'DEEPSEEK_RATE_LIMIT' && error.delivery === 'unknown');
+  await assert.rejects(streamSse(new Response('event: hint\ndata: {"finish_reason":"rate_limit_reached"}\n\n')), error => error.delivery === 'rejected');
 });

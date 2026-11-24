@@ -5,6 +5,16 @@ import os from "node:os";
 import path from "node:path";
 
 describe("background task runner tracing", () => {
+  it("keeps a Qwen cooldown task active beyond the default stale timeout", async () => {
+    const { startTask, getTaskInfo, stopTask } = await import(`../src/window-app/task-runner.mjs?cooldown-test=${Date.now()}`);
+    const id = `qwen-cooldown-${Date.now()}`;
+    startTask(id, "code", async (signal) => new Promise((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener("abort", resolve, { once: true });
+    }), "Qwen /code", { staleAfterMs: 45 * 60_000 });
+    assert.equal(getTaskInfo(id)?.staleAfterMs, 45 * 60_000);
+    stopTask(id);
+  });
   it("records correlated success, failure, and cancellation lifecycles", async () => {
     const logDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-free-task-trace-"));
     const previousLogDir = process.env.AI_FREE_LOG_DIR;
@@ -59,7 +69,7 @@ describe("background task runner tracing", () => {
   });
 
   it("does not let an old stopped task clear a replacement task for the same chat", async () => {
-    const { startTask, isRunning, stopTask } = await import(`../src/window-app/task-runner.mjs?identity-test=${Date.now()}`);
+    const { startTask, isRunning, getTaskSignal, stopTask } = await import(`../src/window-app/task-runner.mjs?identity-test=${Date.now()}`);
     const conversationId = `replacement-${Date.now()}`;
     let finishOldTask;
     let finishReplacementTask;
@@ -69,14 +79,16 @@ describe("background task runner tracing", () => {
     }));
     await waitUntil(() => typeof finishOldTask === "function");
     assert.equal(stopTask(conversationId), true);
+    assert.equal(isRunning(conversationId), true);
+    assert.equal(getTaskSignal(conversationId)?.aborted, true);
+    assert.throws(() => startTask(conversationId, "code", async () => {}), /already running/);
+    finishOldTask();
+    await waitUntil(() => !isRunning(conversationId));
 
     startTask(conversationId, "code", () => new Promise((resolve) => {
       finishReplacementTask = resolve;
     }));
     await waitUntil(() => typeof finishReplacementTask === "function");
-    finishOldTask();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
     assert.equal(isRunning(conversationId), true);
     finishReplacementTask();
     await waitUntil(() => !isRunning(conversationId));
@@ -90,3 +102,27 @@ async function waitUntil(predicate, timeoutMs = 1_000) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+it('extends stale detection through a provider wait and keeps an aborted task busy until it settles', async () => {
+  const { startTask, isRunning, getTaskSignal, extendTaskWait, stopTask } = await import(`../src/window-app/task-runner.mjs?auto-wait=${Date.now()}`);
+  const original = Date.now;
+  let now = original();
+  Date.now = () => now;
+  let signal;
+  const id = 'auto-continue-long-wait';
+  try {
+    startTask(id, 'code', input => { signal = input; return new Promise(resolve => input.addEventListener('abort', resolve, { once: true })); });
+    await Promise.resolve();
+    extendTaskWait(id, 30 * 60_000);
+    now += 25 * 60_000;
+    assert.equal(isRunning(id), true);
+    assert.equal(signal.aborted, false);
+    now += 60 * 60_000;
+    assert.equal(isRunning(id), true);
+    assert.equal(signal.aborted, true);
+    assert.equal(getTaskSignal(id), signal);
+    // This stale task is still occupying the slot until its work really settles.
+    assert.throws(() => startTask(id, 'code', async () => {}), /already running/);
+    await waitUntil(() => !isRunning(id));
+  } finally { stopTask(id); Date.now = original; }
+});

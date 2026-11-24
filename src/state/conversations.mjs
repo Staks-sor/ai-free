@@ -1,3 +1,4 @@
+import { getHarnessTaskView } from "../harness/task-view.mjs";
 // Хелперы для работы с conversation: список для UI, авто-генерация title из первого
 // сообщения, проверка «надо ли переименовать».
 
@@ -11,13 +12,19 @@ export function conversationList(state) {
     model: conversation.model || "",
     roleId: conversation.roleId || "assistant",
     pipelineMode: conversation.pipelineMode === true,
-    coderMode: conversation.coderMode === true,
+    pipelineAgents: Array.isArray(conversation.pipelineAgents) ? conversation.pipelineAgents : [],
+    coderMode: conversation.interactionMode !== "discuss",
+    interactionMode: conversation.interactionMode === "discuss" ? "discuss" : "execute",
     hardwareMode: conversation.hardwareMode === true,
+    accessMode: conversation.accessMode === "computer" ? "computer" : "project",
     memoryEnabled: conversation.memoryEnabled !== false,
     autoSkill: conversation.autoSkill !== false,
     skillId: conversation.skillId || null,
     updatedAt: conversation.updatedAt,
     messageCount: conversation.messages.length,
+    ...(conversation.harnessTask ? { taskView: getHarnessTaskView(conversation) } : {}),
+    ...(Array.isArray(conversation.harnessHistory) ? { taskHistoryView: conversation.harnessHistory.slice(-30).map(task =>
+      getHarnessTaskView({ provider: task.provider, workspace: task.workspace, harnessTask: task })) } : {}),
   }));
 }
 

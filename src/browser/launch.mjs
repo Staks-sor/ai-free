@@ -5,18 +5,29 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
-// Поднять persistent Chromium-профиль для DeepSeek/Qwen/ChatGPT. headless=false —
+function isChromeProfileOwnerAlive(profileDir) {
+  let target;
+  try { target = fs.readlinkSync(path.join(profileDir, "SingletonLock")); }
+  catch { return false; }
+  const pid = Number(target.match(/-(\d+)$/)?.[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error?.code === "EPERM"; }
+}
+
+// Поднять persistent Chromium-профиль для других браузерных провайдеров. headless=false —
 // видимое окно, true — для тихого refresh из профиля. Чистит stale SingletonLock-файлы от падений.
 export async function launchPersistentDeepSeekContext(chromium, profileDir, headless, overrides = {}) {
   fs.mkdirSync(profileDir, { recursive: true });
+  const { channel: overrideChannel, ...launchOverrides } = overrides;
   const options = {
     headless,
     viewport: null,
     args: ["--disable-blink-features=AutomationControlled"],
-    ...overrides,
+    ...launchOverrides,
   };
   const preferredChannel = Object.prototype.hasOwnProperty.call(overrides, "channel")
-    ? overrides.channel
+    ? overrideChannel
     : "chrome";
 
   const tryLaunch = async () => {
@@ -46,6 +57,9 @@ export async function launchPersistentDeepSeekContext(chromium, profileDir, head
   } catch (error) {
     const message = String(error?.message || "");
     if (message.includes("ProcessSingleton") || message.includes("SingletonLock")) {
+      if (isChromeProfileOwnerAlive(profileDir)) {
+        throw new Error("Профиль Chrome уже используется другим окном; активный профиль не удалён.");
+      }
       // Stale-локи от прошлого упавшего Chromium-инстанса.
       for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
         try { fs.unlinkSync(path.join(profileDir, f)); } catch {}

@@ -164,13 +164,22 @@ check("desktop and VS Code duplicate module inventory is synchronized", () => {
   );
 });
 
-check("Git does not track generated VSIX or operating-system metadata", () => {
+check("Russian README stays synchronized with the root document", () => {
+  const expected = read("README.md").replace(/(href="|src="|\]\()((?!https?:|#)[^"\)]+)/g,
+    (_match, prefix, target) => `${prefix}../../${target}`);
+  assert.equal(read("docs/readme/README.ru.md"), expected);
+});
+
+check("Git does not track generated browser or release artifacts", () => {
   const result = spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr || "git ls-files failed");
   const forbidden = result.stdout
     .split("\0")
     .filter(Boolean)
-    .filter((file) => file.endsWith(".vsix") || path.basename(file) === ".DS_Store");
+    .filter((file) => /\.(?:vsix|zip|tar\.gz|jar)$/.test(file)
+      || path.basename(file) === ".DS_Store"
+      || /(?:^|\/)(?:output|\.playwright-cli)\//.test(file))
+    .filter(file => file !== "plugin-for-jetbrains/gradle/wrapper/gradle-wrapper.jar");
   assert.deepEqual(forbidden, [], `tracked generated files: ${forbidden.join(", ")}`);
 });
 

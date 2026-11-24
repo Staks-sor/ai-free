@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.5.65
+
+- Free personal use without SYNVOX activation, subscription or trial.
+- Adds in-app service announcements.
+- Keeps local chats, settings and provider accounts on update.
+- Distinguishes temporary Qwen throttling from an exhausted account quota.
+
+## 0.5.64
+
+- Adds a problem-report form beside errors and in Settings → Status, with an optional description, reply contact and image.
+- Prepares diagnostics locally, shows the exact report before per-report consent, and supports saving a JSON file. Online intake remains disabled pending verified support hosting and operator configuration.
+- Records actual app/IDE versions, build fingerprint, OS/runtime details, Qwen resource/readiness failures and safe DeepSeek CAPTCHA outcomes. No chat history, project files, installation keys or provider credentials are automatically attached.
+- Preserves existing chats, accounts, subscriptions and installation keys. This release improves diagnostics; it does not claim to bypass CAPTCHA or fix every provider outage.
+
+## 0.5.63
+
+- Prevents browser storage export or window cleanup from blocking sign-in indefinitely; retains the previous snapshot when export stalls.
+- Saves browser snapshots atomically with private permissions and closes only the session-owned browser when graceful context closing stalls.
+- Shows the finishing phase and reports Qwen login success only after browser cleanup; surfaces cleanup errors.
+- Distinguishes missing hCaptcha results from explicit rejection and shows DeepSeek challenge progress in Settings. Captcha success still requires authenticated-account verification.
+- Preserves chats, accounts and installation keys.
+
+## 0.5.62
+
+- Shows first-login browser preparation progress and actionable Python 3.10+, download, permissions and display errors. Saved sessions are preserved when setup fails.
+- Allows different AI providers to sign in independently while keeping each account profile isolated.
+- Explains Qwen page/CDN readiness failures without treating them as expired authorization or sending the request again.
+- Maps the backend port for remote VS Code workspaces and keeps visible startup errors.
+- Preserves chats, accounts, subscriptions and installation keys.
+
+## 0.5.61
+
+- Fixes the blank VS Code panel by allowing the exact workbench frame origin and displaying loading/startup failures in the sidebar.
+- Keeps Qwen browser profiles, cookies and cache across restarts; separates page-loading failures from expired authorization.
+- Supports localized Qwen model controls and the current role-based model selector.
+- Compacts the collapsible sidebar and preserves chats, accounts and installation keys.
+- Verified Qwen coding with project files, test execution and Russian replies before and after a VS Code restart.
+
+## 0.5.60
+
+- Adds the redesigned workspace with Chat, Tasks and Files, a live task board, both themes and a visible subscription.
+- Continues saved Harness tasks with plan completion and verification evidence; improves Stop and checkpoint recovery.
+- Adds per-chat Project/Computer access and image delivery for ChatGPT, DeepSeek, Qwen, Google AI, GLM and Codex.
+- Corrects Qwen URL attachment validation and Russian upload controls, and recovers terminal GLM replies when its UI stalls.
+- Requires Node.js 22+ and includes native desktop prebuilds for macOS, Windows and Linux. Linux desktop control requires X11; Wayland is unsupported.
+- Preserves saved chats, accounts, permissions and installation keys.
+
+## 0.5.5
+
+- Adds saved agents, task status, verification evidence, Continue and Stop controls.
+- Shares project context between chat and coding; Coder chooses when tools are needed.
+- Supports up to ten saved accounts for each Web AI with isolated sessions.
+- Adds checkpoint continuation, bounded request pacing and local memory budgets.
+- Corrects folder selection and improves Qwen challenge and timeout diagnostics.
+- Preserves saved chats, command permissions and the installation key.
+
+## 0.5.3
+
+- Accepts documents independently of license activation and subscription expiry.
+- Preserves saved command permissions and fixes completed background chat highlighting.
+- Keeps the unique installation key across updates.
+
+## 0.5.2
+
+- Recovers completed ChatGPT replies after uncertain browser submission without reposting the prompt.
+- Improves DeepSeek sign-in and Google AI response handling.
+- Highlights completed background chats until they are opened.
+- Thank you for being with us!
+
 ## 0.4.25
 
 - Recovers valid unfenced Qwen tool calls and emits the required terminal `finish_reason: "tool_calls"` chunk.

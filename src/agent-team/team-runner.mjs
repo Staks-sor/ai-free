@@ -1,29 +1,25 @@
-export async function runTeamTasks(tasks = []) {
-  return Promise.all(
-    tasks.map(async (task) => {
+export async function runTeamTasks(tasks = [], { concurrency = 2 } = {}) {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new TypeError('concurrency must be a positive integer');
+  }
+  const results = new Array(tasks.length);
+  let next = 0;
+  async function worker() {
+    while (next < tasks.length) {
+      const index = next++;
+      const task = tasks[index];
       try {
-        const output = await task.run();
-        return {
-          id: task.id,
-          status: "success",
-          output,
-        };
+        results[index] = { id: task.id, status: 'success', output: await task.run() };
       } catch (error) {
-        return {
-          id: task.id,
-          status: "failed",
-          error: error.message,
-        };
+        results[index] = { id: task.id, status: 'failed',
+          error: { message: error?.message || String(error), stack: error?.stack || null } };
       }
-    }),
-  );
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker));
+  return results;
 }
 
-export async function runTeamAgents(agents = [], executor) {
-  return runTeamTasks(
-    agents.map((agent) => ({
-      id: agent.id,
-      run: () => executor(agent),
-    })),
-  );
+export async function runTeamAgents(agents = [], executor, options = {}) {
+  return runTeamTasks(agents.map(agent => ({ id: agent.id, run: () => executor(agent) })), options);
 }

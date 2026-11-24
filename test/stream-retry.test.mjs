@@ -37,6 +37,23 @@ describe("empty provider stream retry", () => {
     }), /without response/);
     assert.equal(attempts, 1);
   });
+
+  it("waits exponential backoff between empty-stream retries (1s cap-scaled in tests)", async () => {
+    let attempts = 0;
+    const beforeRetryCalls = [];
+    await assert.rejects(() => runWithEmptyStreamRetry({
+      operation: async () => {
+        attempts += 1;
+        throw emptyStreamError();
+      },
+      onDelta: () => {},
+      maxAttempts: 3,
+      backoffBaseMs: 1, // тестовый масштаб: 1ms, 2ms вместо 1s, 2s
+      beforeRetry: async ({ attempt }) => { beforeRetryCalls.push(attempt); },
+    }), /without response/);
+    assert.equal(attempts, 3);
+    assert.equal(beforeRetryCalls.length, 2);
+  });
 });
 
 function emptyStreamError() {

@@ -33,8 +33,6 @@
 
 Si AI Free te resulta útil, [añade una estrella al repositorio](https://github.com/Staks-sor/ai-free). Así ayudas a que más personas lo encuentren.
 
-- Tarjeta para donaciones (OTP Bank): `2201 9604 2500 7505`
-
 ## ✨ Funciones
 
 - 💬 **Una sola interfaz:** DeepSeek, Qwen y ChatGPT en una ventana.

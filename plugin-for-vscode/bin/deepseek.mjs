@@ -20,21 +20,14 @@ loadDotEnv();
 // Help / version не требуют зависимостей — пропускаем bootstrap, иначе юзер
 // не сможет даже посмотреть `--help` без интернета.
 const argv = process.argv.slice(2);
-const bootstrapLogger = createFileLogger({ component: "bootstrap", surface: "vscode" });
+const bootstrapLogger = createFileLogger({ component: "bootstrap", surface: "desktop" });
 installProcessErrorLogging(bootstrapLogger, { version: AI_FREE_VERSION, mode: argv });
 const isHelpOnly = argv.some((a) => a === "-h" || a === "--help" || a === "--version");
-const isVsCodeMode = process.env.AI_FREE_VSCODE === "1";
 
 // Проверяем единственную внешнюю зависимость. Если её нет — установка нужна.
 const playwrightPkg = path.join(projectRoot, "node_modules", "playwright", "package.json");
 if (!isHelpOnly && !fs.existsSync(playwrightPkg)) {
-  if (isVsCodeMode) {
-    console.error("AI Free VS Code extension is missing bundled dependencies.");
-    console.error("Reinstall the extension from Marketplace or install a newer VSIX build.");
-    process.exit(1);
-  }
-
-  console.log("📦 Первый запуск: ставлю зависимости (один раз, ~150 МБ с Chromium)...");
+  console.log("📦 Первый запуск: ставлю зависимости приложения...");
   console.log("   Это займёт минуту. Вывод npm:\n");
 
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -56,8 +49,14 @@ if (!isHelpOnly && !fs.existsSync(playwrightPkg)) {
   console.log("\n✅ Зависимости установлены. Запускаюсь...\n");
 }
 
+// До импорта модулей ChatGPT: headless-сессия, без отдельного окна Chrome.
+if (process.env.CHATGPT_EMBED_IN_UI == null) {
+  process.env.CHATGPT_EMBED_IN_UI = "1";
+}
+
 // Импортируем динамически — на случай если в будущем какой-то модуль захочет
 // что-то проверить перед стартом. Сейчас работает и через static, но dynamic безопаснее.
+// Browser runtimes are prepared by the component that actually launches them.
 const { run } = await import("../src/cli/run.mjs");
 
 run().catch((error) => {

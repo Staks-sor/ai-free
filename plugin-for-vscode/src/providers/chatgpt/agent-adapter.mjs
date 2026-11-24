@@ -18,12 +18,20 @@ export function createChatGPTAgentAdapter(chatGPTClient, { conversationId = null
   let pendingImages = Array.isArray(images) ? images : [];
 
   return {
+    supportsImageAttachments: true,
     getConversationId: () => convId,
 
-    async complete({ prompt }) {
-      const imagesToSend = pendingImages;
+    async complete({ prompt, signal = null, images = [] }) {
+      signal?.throwIfAborted();
+      const imagesToSend = [...pendingImages, ...images];
       pendingImages = [];
-      const result = await chatGPTClient.complete({ prompt, model, conversationId: convId, images: imagesToSend });
+      const transportPrompt = `SYNVOX uses an external JSON executor for this coding conversation.
+Workspace commands are not ChatGPT native tools. SYNVOX reads your plain-text JSON reply, executes the requested command locally, and sends its real result in the next message.
+For a workspace action, output one JSON object such as {"tool":"list_files","path":"."}; do not attempt a native function call. The absence of native workspace tools does not prevent this JSON protocol.
+Only claim execution after receiving a successful tool result. For a final answer use {"tool":"finish","message":"your answer"}.
+
+${prompt}`;
+      const result = await chatGPTClient.complete({ prompt: transportPrompt, model, conversationId: convId, images: imagesToSend, signal });
       if (result.conversationId && result.conversationId !== convId) {
         convId = result.conversationId;
         onConversationId?.(convId);

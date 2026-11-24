@@ -2,6 +2,7 @@
 // Маршрутизирует: --save-creds / --login / --window / --check / single prompt / REPL.
 
 import path from "node:path";
+import { assertLicensedAccess } from '../licensing/client.mjs';
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
@@ -10,6 +11,7 @@ import { readSavedAuth, resolveAuth } from "../auth/files.mjs";
 import { saveCredentialsInteractive } from "../auth/credentials.mjs";
 import { AuthManager } from "../auth/manager.mjs";
 import { loginAndSaveAuth, refreshAuthFromProfile } from "../browser/login.mjs";
+import { selectCLIAccount } from "./account-selection.mjs";
 import { DeepSeekChatClient } from "../providers/deepseek/client.mjs";
 import { executeWorkspaceTool } from "../code-agent/executor.mjs";
 import { runAgentTask } from "../agent-orchestrator/index.mjs";
@@ -34,7 +36,34 @@ export async function run() {
 
   if (args.loginQwen) {
     const { loginQwenAndSave } = await import("../providers/qwen/browser-login.mjs");
-    await loginQwenAndSave();
+    const { interactiveAccountMenu } = await import("../providers/qwen/account-setup.mjs");
+    // Старое поведение (один аккаунт): если мультиаккаунтов ещё нет — сразу окно логина.
+    // После первого добавленного аккаунта --login-qwen открывает меню управления.
+    const { loadAccounts } = await import("../providers/qwen/account-store.mjs");
+    const accounts = loadAccounts();
+    if (accounts.length === 0) {
+      console.log("Мультиаккаунт Qwen: сохранённый аккаунт один — логин как раньше.");
+      console.log("После логина он станет аккаунтом №1 (acc_1); повторный запуск покажет меню.");
+      await loginQwenAndSave();
+      const { addAccount } = await import("../providers/qwen/account-store.mjs");
+      const { readQwenAuth } = await import("../providers/qwen/auth-files.mjs");
+      const { QWEN_AUTH_FILE, QWEN_BROWSER_PROFILE } = await import("../providers/qwen/config.mjs");
+      const auth = readQwenAuth(QWEN_AUTH_FILE);
+      if (auth?.token) {
+        addAccount({
+          id: "acc_1",
+          token: auth.token,
+          cookies: auth.cookies,
+          cookieHeader: auth.cookieHeader,
+          userId: auth.userId,
+          // acc_1 наследует дефолтный профиль (там его Google-сессия).
+          profileDir: QWEN_BROWSER_PROFILE,
+        });
+        console.log("✅ Аккаунт acc_1 добавлен в пул. Дальше npm run login-qwen открывает меню.");
+      }
+      return;
+    }
+    await interactiveAccountMenu();
     return;
   }
 
@@ -56,6 +85,18 @@ export async function run() {
     return;
   }
 
+  if (args.loginGoogleAI) {
+    const { loginGoogleAIAndSave } = await import("../providers/google-ai/browser-login.mjs");
+    await loginGoogleAIAndSave();
+    return;
+  }
+
+  if (args.loginGLM) {
+    const { loginGLMAndSave } = await import("../providers/glm/browser-login.mjs");
+    await loginGLMAndSave();
+    return;
+  }
+
   if (args.acp) {
     const { runAcpServer } = await import("../acp/server.mjs");
     await runAcpServer();
@@ -67,6 +108,10 @@ export async function run() {
     startOpenAICompatServer({ port: args.apiPort });
     return;
   }
+
+  const accountBinding = selectCLIAccount(args, { argv: process.argv.slice(2) });
+  if (accountBinding) args.authFile = accountBinding.paths.authFile;
+  const browserOptions = accountBinding?.paths || {};
 
   // Welcome TUI: показывается ТОЛЬКО если ни один провайдер не залогинен,
   // ИЛИ если юзер явно попросил через --welcome (для добавления провайдера).
@@ -80,13 +125,20 @@ export async function run() {
   // цикла зависимостей между src/auth/files.mjs и src/browser/login.mjs.
   const auth = args.window
     ? resolveWindowStartupAuth(args)
-    : await resolveAuth(args, { loginAndSaveAuth, refreshAuthFromProfile });
+    : await resolveAuth(args, {
+      loginAndSaveAuth: file => loginAndSaveAuth(file, browserOptions),
+      refreshAuthFromProfile: file => refreshAuthFromProfile(file, browserOptions),
+    });
   const authManager = new AuthManager({
     authFile: args.authFile,
+    browserOptions,
     debug: args.debug,
     autoVisible: true,
   });
   const client = new DeepSeekChatClient({
+    accountId: accountBinding?.id || "default",
+    authFile: args.authFile,
+    browserOptions,
     cookieHeader: auth.cookieHeader,
     token: auth.token,
     hifLeim: auth.hifLeim,
@@ -99,7 +151,7 @@ export async function run() {
     const fresh = await authManager.refresh({ forceVisible: true });
     client._applyAuth(fresh);
   } else if (!auth.token && args.window) {
-    console.log("⚠️ DeepSeek token missing — окно откроется, авторизация через Settings.");
+    console.log("Для входа в SYNVOX: в окне нажмите «+ Новый чат», выберите провайдера и «Авторизоваться».");
   }
 
   if (args.window) {
@@ -123,6 +175,7 @@ export async function run() {
   }
 
   if (args.prompt) {
+    await assertLicensedAccess();
     const skillParsed = parseAgentTaskPrompt(args.prompt);
     const directCodePrefix = "/code ";
     if (args.prompt.startsWith(directCodePrefix) || skillParsed) {
@@ -187,6 +240,7 @@ export async function run() {
       continue;
     }
     if (prompt.startsWith("/code ") || prompt.startsWith("/skill ")) {
+      await assertLicensedAccess();
       const parsed = parseAgentTaskPrompt(prompt);
       const task = parsed?.task || prompt.slice(6).trim();
       const codeResult = await runAgentTask(client, {
@@ -211,6 +265,7 @@ export async function run() {
     }
 
     try {
+      await assertLicensedAccess();
       const result = await client.complete({
         sessionId,
         prompt,

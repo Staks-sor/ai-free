@@ -9,8 +9,11 @@
 //      {"tool":"write_file",...} снаружи блока.
 //   3. Fallback — искать в исходном тексте целиком.
 
-export function parseToolCall(text) {
+export function parseToolCall(text, options = {}) {
   const trimmed = String(text || "").trim();
+
+  const workspaceFile = findWorkspaceFileCall(trimmed, options);
+  if (workspaceFile) return workspaceFile;
 
   const xmlResult = findXmlToolCall(trimmed);
   if (xmlResult) return xmlResult;
@@ -19,15 +22,35 @@ export function parseToolCall(text) {
     ...trimmed.matchAll(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/gi),
   ];
   for (const match of fencedBlocks) {
-    const result = findToolCallInText(match[1].trim());
+    const result = findToolCallInText(match[1].trim(), options);
     if (result) return result;
   }
 
   const stripped = trimmed.replace(/```[a-zA-Z0-9]*\n?[\s\S]*?```/gi, " ");
-  const result2 = findToolCallInText(stripped);
+  const result2 = findToolCallInText(stripped, options);
   if (result2) return result2;
 
-  return findToolCallInText(trimmed);
+  return findToolCallInText(trimmed, options);
+}
+
+function findWorkspaceFileCall(text, options) {
+  const match = text.match(/<workspace_file\s+tool=(["'])(write_file|append_file)\1\s+path=(["'])([^"']+)\3(?:\s+indent=(["'])levels\5)?\s*>([\s\S]*?)<\/workspace_file>/i);
+  if (!match) return null;
+  const rawContent = match[6].replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+  return {
+    tool: match[2],
+    path: normalizeWorkspaceValue(match[4], options),
+    content: match[5] ? restoreIndentLevels(rawContent, options) : rawContent,
+  };
+}
+
+function restoreIndentLevels(content, options) {
+  return content.split(/\r?\n/).map((line) => {
+    const match = line.match(/^\|(\d{1,2})\|(.*)$/);
+    if (!match) return line;
+    const restoredText = normalizeWorkspaceValue(match[2], options);
+    return `${" ".repeat(Math.min(Number(match[1]), 25) * 4)}${restoredText}`;
+  }).join("\n");
 }
 
 function findXmlToolCall(text) {
@@ -62,7 +85,7 @@ function findXmlToolCall(text) {
 
 // Ищет первый JSON-объект с полем "tool" (string) в тексте.
 // Если первый {...} не tool-call — пропускает и берёт следующий.
-function findToolCallInText(text) {
+function findToolCallInText(text, options) {
   let offset = 0;
 
   while (offset < text.length) {
@@ -75,10 +98,15 @@ function findToolCallInText(text) {
     }
 
     try {
-      const parsed = normalizeToolCall(JSON.parse(candidate));
+      const parsed = normalizeToolCall(JSON.parse(candidate), options);
       if (parsed) return parsed;
     } catch {
-      // Невалидный JSON — пробуем следующий объект.
+      try {
+        const parsed = normalizeToolCall(JSON.parse(escapeLiteralJsonControlCharacters(candidate)), options);
+        if (parsed) return parsed;
+      } catch {
+        // Невалидный JSON — пробуем следующий объект.
+      }
     }
 
     offset = start + Math.max(candidate.length, 1);
@@ -87,9 +115,39 @@ function findToolCallInText(text) {
   return null;
 }
 
-function normalizeToolCall(parsed) {
+function escapeLiteralJsonControlCharacters(value) {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  for (const char of value) {
+    if (!inString) {
+      result += char;
+      if (char === '"') inString = true;
+      continue;
+    }
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+    } else if (char === "\\") {
+      result += char;
+      escaped = true;
+    } else if (char === '"') {
+      result += char;
+      inString = false;
+    } else if (char === "\n") result += "\\n";
+    else if (char === "\r") result += "\\r";
+    else if (char === "\t") result += "\\t";
+    else result += char;
+  }
+
+  return result;
+}
+
+function normalizeToolCall(parsed, options) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  if (typeof parsed.tool === "string") return parsed;
+  if (typeof parsed.tool === "string") return normalizeWorkspaceToolPaths(parsed, options);
 
   // Some models emit ACP-ish or malformed tool JSON, for example:
   // {"":"write_file","path":"x","content":""}
@@ -97,14 +155,28 @@ function normalizeToolCall(parsed) {
   const emptyKeyTool = parsed[""];
   if (typeof emptyKeyTool === "string") {
     const { [""]: _ignored, ...rest } = parsed;
-    return { tool: emptyKeyTool, ...rest };
+    return normalizeWorkspaceToolPaths({ tool: emptyKeyTool, ...rest }, options);
   }
 
   if (typeof parsed.name === "string" && parsed.arguments && typeof parsed.arguments === "object") {
-    return { tool: parsed.name, ...parsed.arguments };
+    return normalizeWorkspaceToolPaths({ tool: parsed.name, ...parsed.arguments }, options);
   }
 
   return null;
+}
+
+function normalizeWorkspaceToolPaths(call, options) {
+  if (typeof call.path !== "string") return call;
+  return { ...call, path: normalizeWorkspaceValue(call.path, options) };
+}
+
+function normalizeWorkspaceValue(value, options) {
+  const text = String(value);
+  if (!options?.restoreGoogleMarkers) return text;
+  return text
+    .replaceAll("[LITERAL-US]", "\u0000")
+    .replaceAll("[US]", "_")
+    .replaceAll("\u0000", "[US]");
 }
 
 // Безопасный экстрактор первого валидного JSON-объекта из текста.

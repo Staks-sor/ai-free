@@ -15,6 +15,7 @@ import {
   getChatGPTSessionToken,
 } from "./auth-files.mjs";
 import { withChatGPTProfileLock } from "./chrome-profile-lock.mjs";
+import { accountActivity, profileActivityId, withAccountActivitySession } from '../activity-session.mjs';
 
 // Не передаём --disable-blink-features=AutomationControlled: Chrome/ChatGPT показывают
 // предупреждение и Cloudflare режет такую сессию.
@@ -48,7 +49,12 @@ export {
   trySolveTurnstileCheckbox,
 } from "./cloudflare-challenge.mjs";
 
-export async function launchInternalBrowserContext(
+export function launchInternalBrowserContext(chromium, profileDir, options = {}) {
+  return withAccountActivitySession('chatgpt', profileActivityId(profileDir), () =>
+    launchInternalBrowserContextSession(chromium, profileDir, options));
+}
+
+async function launchInternalBrowserContextSession(
   chromium,
   profileDir,
   {
@@ -122,8 +128,10 @@ let profileReadyPromise = null;
 
 // Один раз перед первым in-app Chrome: убить зомби и снять locks.
 export function ensureChatGPTProfileReady(profileDir = CHATGPT_BROWSER_PROFILE) {
+  if (accountActivity.isBusy('chatgpt', profileActivityId(profileDir), { otherProcessOnly: true })) return Promise.resolve();
   if (!profileReadyPromise) {
-    profileReadyPromise = withChatGPTProfileLock(() => prepareChromeProfileForLaunchInternal(profileDir, { clearCookies: false }));
+    profileReadyPromise = withChatGPTProfileLock(() => prepareChromeProfileForLaunchInternal(profileDir, { clearCookies: false }), profileDir)
+      .catch(error => { profileReadyPromise = null; if (error.code !== 'ACCOUNT_BUSY') throw error; });
   }
   return profileReadyPromise;
 }
@@ -147,7 +155,7 @@ async function prepareChromeProfileForLaunchInternal(profileDir, { clearCookies 
 }
 
 export async function prepareChromeProfileForLaunch(profileDir, options = {}) {
-  return withChatGPTProfileLock(() => prepareChromeProfileForLaunchInternal(profileDir, options));
+  return withChatGPTProfileLock(() => prepareChromeProfileForLaunchInternal(profileDir, options), profileDir);
 }
 
 async function minimizeEmbeddedChromeWindows(browser, viewport) {
@@ -310,6 +318,7 @@ async function connectOverCDP(chromium, port, timeoutMs = 45_000) {
 
 // Убиваем «зависшие» Chrome на этом user-data-dir (в т.ч. detached после прошлого запуска).
 export function killStaleChromeForProfile(profileDir) {
+  if (accountActivity.isBusy('chatgpt', profileActivityId(profileDir), { otherProcessOnly: true })) return false;
   let killed = false;
   try {
     if (process.platform === "win32") {
@@ -350,6 +359,9 @@ export function killStaleChromeForProfile(profileDir) {
 }
 
 export function cleanupChromeProfileForLaunch(profileDir, { clearCookies = false } = {}) {
+  if (accountActivity.isBusy('chatgpt', profileActivityId(profileDir), { otherProcessOnly: true })) {
+    throw Object.assign(new Error('Профиль ChatGPT занят в другом окне SYNVOX.'), { code: 'ACCOUNT_BUSY', delivery: 'not_sent', status: 409 });
+  }
   fs.mkdirSync(profileDir, { recursive: true });
   for (const file of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
     try { fs.unlinkSync(path.join(profileDir, file)); } catch {}
@@ -408,7 +420,12 @@ async function openChatGPTForLogin(page, context) {
   );
 }
 
-export async function launchNormalChromeForChatGPT(
+export function launchNormalChromeForChatGPT(chromium, profileDir, options = {}) {
+  return withAccountActivitySession('chatgpt', profileActivityId(profileDir), () =>
+    launchNormalChromeForChatGPTSession(chromium, profileDir, options));
+}
+
+async function launchNormalChromeForChatGPTSession(
   chromium,
   profileDir,
   {
@@ -520,10 +537,15 @@ export async function launchNormalChromeForChatGPT(
     },
     mode: embedded ? "chrome-cdp-embedded" : "chrome-cdp",
   };
-  });
+  }, profileDir);
 }
 
 async function launchPlaywrightChromeForLogin(chromium, profileDir) {
+  return withAccountActivitySession('chatgpt', profileActivityId(profileDir), () =>
+    launchPlaywrightChromeForLoginSession(chromium, profileDir));
+}
+
+async function launchPlaywrightChromeForLoginSession(chromium, profileDir) {
   cleanupChromeProfileForLaunch(profileDir, { clearCookies: false });
   const context = await launchPersistentDeepSeekContext(chromium, profileDir, false, {
     args: [],
@@ -618,7 +640,7 @@ export async function loginChatGPTAndSave(authFile = CHATGPT_AUTH_FILE, options 
 }
 
 async function loginChatGPTAndSaveInternal(authFile, options) {
-  const profileDir = CHATGPT_BROWSER_PROFILE;
+  const profileDir = options.profileDir || CHATGPT_BROWSER_PROFILE;
   const embedUi = process.env.CHATGPT_EMBED_IN_UI === "1";
   const forceExternal = options.forceExternal === true;
   const closeAfterLogin = options.closeAfterLogin === true;
@@ -626,7 +648,7 @@ async function loginChatGPTAndSaveInternal(authFile, options) {
   const { closeChatGPTBrowserProxy } = await import("./browser-proxy.mjs");
   // Дожидаемся полного закрытия прежнего транспорта. Фиксированная задержка
   // оставляла два Chrome на одном profileDir и порождала потерю/сброс сессии.
-  await closeChatGPTBrowserProxy();
+  await closeChatGPTBrowserProxy(options.accountId || "default");
 
   if (embedUi && !forceExternal) {
     console.log("🔓 ChatGPT: откройте 🧠 → Браузер → ChatGPT в окне ai-free.");
@@ -665,6 +687,7 @@ async function loginChatGPTAndSaveInternal(authFile, options) {
               const userAgent = await page.evaluate(() => navigator.userAgent);
               resolve({
                 accessToken: body.accessToken || "",
+                accountIdentity: body.user?.id || body.user?.email || "",
                 sessionToken,
                 cookies,
                 userAgent,
@@ -686,6 +709,7 @@ async function loginChatGPTAndSaveInternal(authFile, options) {
       sessionToken: captured.sessionToken,
       profileDir,
       userAgent: captured.userAgent,
+      accountIdentity: captured.accountIdentity,
     });
     console.log("✅ ChatGPT: сессия сохранена.");
     return captured;
@@ -767,6 +791,7 @@ async function loginChatGPTAndSaveInternal(authFile, options) {
             const userAgent = await page.evaluate(() => navigator.userAgent);
             resolve({
               accessToken: body.accessToken || "",
+                accountIdentity: body.user?.id || body.user?.email || "",
               sessionToken,
               cookies,
               userAgent,
@@ -793,6 +818,7 @@ async function loginChatGPTAndSaveInternal(authFile, options) {
                 const userAgent = await page.evaluate(() => navigator.userAgent);
                 resolve({
                   accessToken: body.accessToken || "",
+                accountIdentity: body.user?.id || body.user?.email || "",
                   sessionToken,
                   cookies,
                   userAgent,
@@ -816,6 +842,7 @@ async function loginChatGPTAndSaveInternal(authFile, options) {
     sessionToken: captured.sessionToken,
     profileDir,
     userAgent: captured.userAgent,
+      accountIdentity: captured.accountIdentity,
   });
 
   if (closeAfterLogin) {

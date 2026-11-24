@@ -95,4 +95,39 @@ describe("memory retrieval quality evaluation", () => {
     assert.ok(recordLines.length <= 6);
     assert.equal(new Set(recordLines).size, recordLines.length);
   });
+
+  it("does not inject weakly matched memories from an unrelated chat", async () => {
+    const {
+      filterRelevantMemoryItems,
+      shouldUseMemoryForTask,
+    } = await import("../src/memory/context-builder.mjs");
+    const exact = {
+      id: "inspect-project",
+      type: "fix",
+      content: "Problem: сам посмотри в папке\nFiles: scripts/inspect.mjs",
+      _hybridScore: 0.032,
+      _ftsMatch: true,
+      _vectorMatch: true,
+    };
+    const unrelated = {
+      id: "murmansk-cafe",
+      type: "error",
+      content: "Task: открой браузер и найди кафе в Мурманске",
+      tags: ["error"],
+      _hybridScore: 0.01,
+      _ftsMatch: true,
+      _vectorMatch: false,
+    };
+
+    assert.deepEqual(
+      filterRelevantMemoryItems("сам посмотри в папке", [exact, unrelated]).map((item) => item.id),
+      ["inspect-project"],
+    );
+    assert.equal(shouldUseMemoryForTask("сам посмотри в папке"), false);
+    assert.equal(shouldUseMemoryForTask("создай два файла в папке проекта"), false);
+    assert.equal(shouldUseMemoryForTask("что ты за модель?"), false);
+    assert.equal(shouldUseMemoryForTask("продолжи предыдущую задачу"), true);
+    assert.equal(shouldUseMemoryForTask("снова та же ошибка авторизации"), true);
+    assert.equal(shouldUseMemoryForTask("login session timeout"), true);
+  });
 });

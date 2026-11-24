@@ -1,8 +1,16 @@
-# AI Free Chat & Agent
+# SYNVOX — AI Chat & Agent
 
-AI Free brings DeepSeek, Qwen and ChatGPT into the VS Code sidebar as project-aware coding agents.
+SYNVOX brings DeepSeek, Qwen, ChatGPT, Google AI Mode and GLM into the VS Code sidebar as project-aware coding agents.
 
-Current release: **0.4.25**.
+Current release: **0.5.65**.
+
+## Access
+
+SYNVOX is free for personal use with no trial, activation, or subscription. Sign in to the AI providers you use. Their policies, availability and limits apply separately.
+
+Open **Settings → Accounts** to manage Qwen accounts and automatic switching when a supported quota response is detected. Other providers do not currently support this automatic account rotation.
+
+[Installation instructions](https://synvox.pro/instructions/) · [Terms, privacy and refunds](https://synvox.pro/documents/)
 
 ## Features
 
@@ -15,7 +23,9 @@ Current release: **0.4.25**.
 
 ## Requirements
 
-- Current VS Code or Cursor. The extension uses the IDE's bundled Node.js runtime when compatible and falls back to Node.js 18+ from `PATH`.
+- Qwen/DeepSeek browser sign-in requires Python 3.10+ from [python.org](https://www.python.org/downloads/), available in PATH (restart the IDE after installation). Camoufox and its browser download once from PyPI/GitHub. Settings → Accounts shows preparation progress and actionable errors. Interactive Linux/WSL/SSH sign-in requires a graphical display (WSLg/X11).
+
+- Current VS Code or Cursor. The extension uses the IDE's bundled Node.js runtime when compatible and falls back to Node.js 22+ from `PATH`.
 - Existing AI Free authentication state for the providers you use.
 - Qwen login can be prepared from the main AI Free app with `npm run login-qwen`.
 
@@ -32,7 +42,7 @@ The extension writes privacy-safe JSONL diagnostics to `%USERPROFILE%\.ai-free\l
 To remove only the VS Code extension:
 
 1. Open **Extensions** in VS Code.
-2. Find **AI Free Chat & Agent**.
+2. Find **SYNVOX — AI Chat & Agent**.
 3. Click **Uninstall**.
 4. Restart VS Code.
 
@@ -62,9 +72,7 @@ See the root README for the full desktop and plugin removal guide.
 
 ## Support
 
-Если хочешь поддержать мое развитие:
-
-`2201 9604 2500 7505` ОТП банк
+See the [SYNVOX website](https://synvox.pro/) for installation instructions and support.
 
 ## Repository
 

@@ -27,7 +27,7 @@ const isHelpOnly = argv.some((a) => a === "-h" || a === "--help" || a === "--ver
 // Проверяем единственную внешнюю зависимость. Если её нет — установка нужна.
 const playwrightPkg = path.join(projectRoot, "node_modules", "playwright", "package.json");
 if (!isHelpOnly && !fs.existsSync(playwrightPkg)) {
-  console.log("📦 Первый запуск: ставлю зависимости (один раз, ~150 МБ с Chromium)...");
+  console.log("📦 Первый запуск: ставлю зависимости приложения...");
   console.log("   Это займёт минуту. Вывод npm:\n");
 
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -56,17 +56,7 @@ if (process.env.CHATGPT_EMBED_IN_UI == null) {
 
 // Импортируем динамически — на случай если в будущем какой-то модуль захочет
 // что-то проверить перед стартом. Сейчас работает и через static, но dynamic безопаснее.
-const { ensureBrowserBinaries } = await import("../src/browser/ensure-binaries.mjs");
-const browserReady = await ensureBrowserBinaries();
-if (!browserReady.ok) {
-  bootstrapLogger.error("browser.bootstrap.error", new Error(browserReady.error || "Browser binaries unavailable"));
-  console.error(`\n❌ ${browserReady.error || "Chromium browser binaries are unavailable."}`);
-  if (process.platform === "win32") {
-    console.error("   Проверьте, что антивирус не заблокировал папку %LOCALAPPDATA%\\ms-playwright.");
-  }
-  process.exit(1);
-}
-
+// Browser runtimes are prepared by the component that actually launches them.
 const { run } = await import("../src/cli/run.mjs");
 
 run().catch((error) => {

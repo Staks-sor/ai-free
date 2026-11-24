@@ -54,7 +54,7 @@ export function loadSkill(skillId) {
   return skill;
 }
 
-export function listInstalledSkills() {
+export function listInstalledSkills({ metadataOnly = false } = {}) {
   const skills = [];
   const seen = new Set();
 
@@ -69,14 +69,14 @@ export function listInstalledSkills() {
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith(".") || seen.has(entry.name)) continue;
       try {
-        push(loadSkill(entry.name));
+        push(metadataOnly ? loadSkillFromDir(path.join(root, entry.name), entry.name, { metadataOnly: true }) : loadSkill(entry.name));
       } catch {
         // skip broken skill dirs
       }
     }
   }
 
-  for (const skill of listPluginSkillsFlat()) push(skill);
+  for (const skill of listPluginSkillsFlat({ metadataOnly })) push(skill);
 
   return skills.sort((a, b) => a.name.localeCompare(b.name));
 }

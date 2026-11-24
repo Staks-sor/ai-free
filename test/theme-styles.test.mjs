@@ -24,7 +24,14 @@ describe("window themes", () => {
     assert.match(STYLES, /body\[data-theme="light"\][\s\S]*--message-bg: #f8fafc/);
     assert.match(STYLES, /body\[data-theme="light"\][\s\S]*--composer-bg: #eaf0f6/);
     assert.match(STYLES, /\.topbar\s*\{[\s\S]*?background: var\(--topbar-bg\)/);
-    assert.match(STYLES, /\.messages\s*\{[\s\S]*?background: var\(--message-bg\)/);
+    assert.match(STYLES, /\.main\s*\{[\s\S]*?background: var\(--message-bg\)/);
     assert.match(STYLES, /\.composer\s*\{[\s\S]*?background: var\(--composer-bg\)/);
+  });
+
+  it("lets the browser drawer body consume all space below its header", () => {
+    assert.match(STYLES, /\.agentDrawer\s*\{[\s\S]*?grid-template-rows:\s*auto minmax\(0, 1fr\)/);
+    assert.doesNotMatch(STYLES, /\.agentDrawer\s*\{[\s\S]*?grid-template-rows:\s*auto auto minmax\(0, 1fr\)/);
+    assert.match(STYLES, /\.agentDrawerBody\s*\{[\s\S]*?min-height:\s*0/);
+    assert.match(STYLES, /\.agentBrowserFrame\s*\{[\s\S]*?height:\s*100%/);
   });
 });

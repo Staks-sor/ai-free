@@ -53,12 +53,12 @@ describe("VS Code Node.js runtime", () => {
     const result = await resolveNodeRuntime({
       execPath: "Code.exe",
       env: {},
-      spawnImpl: fakeSpawn(["v16.20.2", "v20.19.0"], calls),
+      spawnImpl: fakeSpawn(["v20.19.0", "v22.18.0"], calls),
     });
     assert.equal(result.command, "node");
-    assert.equal(result.version, "v20.19.0");
+    assert.equal(result.version, "v22.18.0");
     assert.equal(calls.length, 2);
-    assert.match(result.attempts[0], /requires Node\.js 18\+/);
+    assert.match(result.attempts[0], /requires Node\.js 22\+/);
   });
 
   it("probes the current executable successfully", async () => {

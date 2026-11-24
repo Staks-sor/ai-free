@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "announcements": [
+    {
+      "id": "support-delivery-2026-11-17",
+      "publishedAt": "2026-11-17T00:00:00Z",
+      "expiresAt": "2026-12-17T00:00:00Z",
+      "title": {
+        "ru": "Важное сообщение о поддержке SYNVOX",
+        "en": "Important information about SYNVOX support"
+      },
+      "body": {
+        "ru": "Выяснилось, что доставка обращений из встроенной формы не была подключена. Если вы уже сообщали о проблеме и не получили ответа либо сейчас что-то не работает — напишите разработчику в Telegram: @Staks_sor.\n\nУкажите версию SYNVOX, операционную систему, что именно не работает и приложите скриншот ошибки. Если сохранили файл отчёта — прикрепите его. Не присылайте пароли, cookies, токены или секретный ключ установки.\n\nПриносим извинения за оставшиеся без ответа обращения.",
+        "en": "We discovered that delivery from the built-in feedback form had not been connected. If you reported a problem and received no response, or something is not working now, please contact the developer on Telegram: @Staks_sor.\n\nInclude your SYNVOX version, operating system, what is not working, and an error screenshot. If you saved a report file, attach it. Do not send passwords, cookies, tokens or your secret installation key.\n\nWe apologize for the unanswered reports."
+      },
+      "link": {
+        "label": { "ru": "Написать разработчику", "en": "Contact the developer" },
+        "url": "https://t.me/Staks_sor"
+      }
+    }
+  ]
+}

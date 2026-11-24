@@ -1,11 +1,11 @@
 <idea-plugin>
     <id>ru.stas-sor.ai-free</id>
-    <name>AI Free Chat &amp; Agent</name>
+    <name>SYNVOX</name>
     <vendor url="https://github.com/Staks-sor/ai-free">Staks-sor</vendor>
 
     <description><![CDATA[
-      <p>AI Free inside PyCharm with DeepSeek, Qwen and ChatGPT.</p>
-      <p>Chat with models, run coding agents against the active project, use memory,
+      <p>SYNVOX brings local AI chat and coding agents to PyCharm.</p>
+      <p>Use DeepSeek, Qwen, ChatGPT, Google AI Mode and GLM with project tools, memory,
       voice input and local OpenAI- and Anthropic-compatible APIs.</p>
     ]]></description>
 
@@ -15,7 +15,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <projectService serviceImplementation="ru.stassor.aifree.runtime.AiFreeBackendService"/>
         <toolWindow
-            id="AI Free"
+            id="SYNVOX"
             anchor="right"
             icon="/icons/aiFree.svg"
             factoryClass="ru.stassor.aifree.ui.AiFreeToolWindowFactory"/>

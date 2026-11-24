@@ -6,7 +6,7 @@ import { loadSkillFromDir } from "../skills/loader.mjs";
 import { findSkillMdFiles, loadSkillMdFile } from "./skill-md.mjs";
 import { detectPluginManifest } from "./manifest.mjs";
 
-export function discoverSkillsInTree(rootDir, { pluginId = null, pluginMeta = null } = {}) {
+export function discoverSkillsInTree(rootDir, { pluginId = null, pluginMeta = null, metadataOnly = false } = {}) {
   const skills = [];
   const seen = new Set();
 
@@ -24,7 +24,7 @@ export function discoverSkillsInTree(rootDir, { pluginId = null, pluginMeta = nu
       skillRoots.push(manifest.skillsPath);
     }
     if (manifest.commandsPath && fs.existsSync(manifest.commandsPath)) {
-      loadLegacyCommands(manifest.commandsPath, pluginId || manifest.id).forEach(add);
+      loadLegacyCommands(manifest.commandsPath, pluginId || manifest.id, metadataOnly).forEach(add);
     }
     for (const skillsRoot of skillRoots) {
       for (const skillMd of findSkillMdFiles(skillsRoot, { maxDepth: 4 })) {
@@ -32,6 +32,7 @@ export function discoverSkillsInTree(rootDir, { pluginId = null, pluginMeta = nu
           add(loadSkillMdFile(skillMd, {
             fallbackId: path.basename(path.dirname(skillMd)),
             pluginId: pluginId || manifest.id,
+            metadataOnly,
           }));
         } catch {
           // skip broken skill
@@ -42,7 +43,7 @@ export function discoverSkillsInTree(rootDir, { pluginId = null, pluginMeta = nu
     const rootSkillMd = path.join(rootDir, "SKILL.md");
     if (fs.existsSync(rootSkillMd)) {
       try {
-        add(loadSkillMdFile(rootSkillMd, { pluginId: pluginId || manifest.id }));
+        add(loadSkillMdFile(rootSkillMd, { pluginId: pluginId || manifest.id, metadataOnly }));
       } catch {
         // skip
       }
@@ -52,13 +53,14 @@ export function discoverSkillsInTree(rootDir, { pluginId = null, pluginMeta = nu
   // Standalone layouts (single skill dir or skill.json)
   if (!skills.length) {
     try {
-      add({ ...loadSkillFromDir(rootDir), pluginId: pluginId || null });
+      add({ ...loadSkillFromDir(rootDir, "", { metadataOnly }), pluginId: pluginId || null });
     } catch {
       for (const skillMd of findSkillMdFiles(rootDir, { maxDepth: 3 })) {
         try {
           add(loadSkillMdFile(skillMd, {
             fallbackId: path.basename(path.dirname(skillMd)),
             pluginId,
+            metadataOnly,
           }));
         } catch {
           // skip
@@ -70,14 +72,14 @@ export function discoverSkillsInTree(rootDir, { pluginId = null, pluginMeta = nu
   return skills;
 }
 
-function loadLegacyCommands(commandsDir, pluginId) {
+function loadLegacyCommands(commandsDir, pluginId, metadataOnly) {
   if (!fs.existsSync(commandsDir)) return [];
   const skills = [];
   for (const entry of fs.readdirSync(commandsDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
     const name = entry.name.replace(/\.md$/i, "");
-    const content = fs.readFileSync(path.join(commandsDir, entry.name), "utf8").trim();
-    if (!content) continue;
+    const content = metadataOnly ? "" : fs.readFileSync(path.join(commandsDir, entry.name), "utf8").trim();
+    if (!metadataOnly && !content) continue;
     const id = pluginId ? `${pluginId}:${name}` : name;
     skills.push({
       id,

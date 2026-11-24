@@ -6,8 +6,8 @@
 
 import { searchMemory } from "./store.mjs";
 
-export function getAntiRepeatContext(task, workspaceRoot = "") {
-  const memories = searchMemory(task, workspaceRoot);
+export function getAntiRepeatContext(task, workspaceRoot = "", { memories: providedMemories = null } = {}) {
+  const memories = providedMemories || searchMemory(task, workspaceRoot);
 
   const errors = memories.filter(m =>
     m.type === "error" ||

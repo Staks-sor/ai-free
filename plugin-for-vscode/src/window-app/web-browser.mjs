@@ -109,9 +109,8 @@ async function launchWebBrowserContext() {
   const { getChatGPTChromium } = await import("../providers/chatgpt/engine.mjs");
   const chromium = await getChatGPTChromium();
   const viewport = getWebBrowserViewport();
-  // Headed Google Chrome выглядит для сайтов как обычный пользовательский браузер.
-  // Само окно находится за экраном, а в AI Free передаётся его изображение.
-  const context = await launchPersistentDeepSeekContext(chromium, WEB_BROWSER_PROFILE, false, {
+  // Браузер работает без собственного окна; интерфейс передаётся во встроенную Web-панель AI Free.
+  const context = await launchPersistentDeepSeekContext(chromium, WEB_BROWSER_PROFILE, true, {
     channel: "chrome",
     viewport,
     locale: "ru-RU",
@@ -119,9 +118,7 @@ async function launchWebBrowserContext() {
     ignoreDefaultArgs: ["--enable-automation"],
     args: [
       ...WEB_BROWSER_PERF_ARGS,
-      "--window-position=-32000,-32000",
       `--window-size=${viewport.width},${viewport.height}`,
-      "--start-minimized",
     ],
   });
   await installPerfInitScripts(context);

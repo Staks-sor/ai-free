@@ -2,11 +2,16 @@
 
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   cookieHeaderFromArray,
   isPlaceholderToken,
   normalizeToken,
+  readSavedAuth,
 } from "../src/auth/files.mjs";
+import { baseHeaders } from "../src/providers/deepseek/headers.mjs";
 
 describe("normalizeToken", () => {
   it("trims plain string token", () => {
@@ -104,5 +109,21 @@ describe("cookieHeaderFromArray", () => {
       null,
     ]);
     assert.equal(result, "ds_session_id=x");
+  });
+});
+
+describe("DeepSeek token-only session", () => {
+  it("loads a validated bearer token without requiring ds_session_id", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deepseek-safari-auth-"));
+    try {
+      const file = path.join(dir, "auth.json");
+      fs.writeFileSync(file, JSON.stringify({ userToken: "safari-user-token", cookies: [] }));
+      const auth = readSavedAuth(file);
+      assert.equal(auth.token, "safari-user-token");
+      assert.equal(auth.cookieHeader, "");
+      assert.equal("Cookie" in baseHeaders(auth.cookieHeader, auth.token), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

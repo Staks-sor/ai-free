@@ -31,6 +31,9 @@ import {
 import {
   buildContinuationPrompt,
   buildNoToolCorrectionPrompt,
+  buildProjectAnalysisCorrectionPrompt,
+  isProjectAnalysisTask,
+  shouldRejectPrematureProjectAnalysisFinish,
 } from "../src/code-agent/loop-helpers.mjs";
 import { createCodeSystemPrompt } from "../src/code-agent/prompt.mjs";
 import { getCommandDescription } from "../src/i18n/command-descriptions.mjs";
@@ -48,6 +51,33 @@ describe("code agent prompt", () => {
     assert.match(prompt, /do not tell the user to edit files manually/i);
   });
 
+  it("bounds repeated memory in compact provider continuation prompts", () => {
+    const prompt = buildContinuationPrompt({
+      memoryContext: `important:${"m".repeat(8000)}`,
+      memoryContextMaxChars: 600,
+      tool: "mkdir",
+      toolResult: { ok: true, path: "test" },
+    });
+    assert.match(prompt, /important:/);
+    assert.match(prompt, /\[truncated\]/);
+    assert.ok(prompt.length < 1400, `continuation prompt is ${prompt.length} chars`);
+  });
+
+  it("bounds large tool results while preserving their beginning and end", () => {
+    const prompt = buildContinuationPrompt({
+      tool: "list_files",
+      toolResult: {
+        ok: true,
+        output: `FIRST_ENTRY\n${"x".repeat(12000)}\nLAST_ENTRY`,
+      },
+      toolResultMaxChars: 2400,
+    });
+    assert.match(prompt, /FIRST_ENTRY/);
+    assert.match(prompt, /LAST_ENTRY/);
+    assert.match(prompt, /tool result truncated/);
+    assert.ok(prompt.length < 3200, `continuation prompt is ${prompt.length} chars`);
+  });
+
   it("does not tell the model that internet is unavailable when provider search is enabled", () => {
     const prompt = createCodeSystemPrompt("/tmp/project", "посмотри новости", "", { searchEnabled: true });
     assert.match(prompt, /Provider web search is ENABLED/);
@@ -60,6 +90,12 @@ describe("code agent prompt", () => {
     assert.match(prompt, /local workspace tools run on the user's machine/);
     assert.match(prompt, /not inside the provider chat page/);
     assert.match(prompt, /Never say that the workspace root does not exist/);
+  });
+
+  it("guides project reviews to finish after representative file evidence", () => {
+    const prompt = createCodeSystemPrompt("/tmp/project", "как думаешь что можно улучшить в проекте?");
+    assert.match(prompt, /read README\/AGENTS, a project manifest, one source file, and one test file/i);
+    assert.match(prompt, /finish once those files support concrete recommendations/i);
   });
 });
 
@@ -144,6 +180,69 @@ describe("parseToolCall", () => {
 
   it("returns null on malformed JSON", () => {
     assert.equal(parseToolCall("{tool:"), null);
+  });
+
+  it("repairs literal newlines inside Google AI write_file JSON strings", () => {
+    const text = '{"tool":"write_file","path":"app.py","content":"def main():\n    print(\'ok\')\n"}';
+    assert.deepEqual(parseToolCall(text), {
+      tool: "write_file",
+      path: "app.py",
+      content: "def main():\n    print('ok')\n",
+    });
+  });
+
+  it("parses raw source code from a write_file XML envelope", () => {
+    const text = [
+      '<workspace_file tool="write_file" path="src/app.py">',
+      'def main():',
+      '    print("ok")',
+      '</workspace_file>',
+    ].join("\n");
+    assert.deepEqual(parseToolCall(text), {
+      tool: "write_file",
+      path: "src/app.py",
+      content: 'def main():\n    print("ok")',
+    });
+  });
+
+  it("restores indentation levels stripped by the Google AI DOM", () => {
+    const text = [
+      '<workspace_file tool="write_file" path="src/app.py" indent="levels">',
+      '|0|def main():',
+      '|1|if True:',
+      '|2|print("ok")',
+      '|0|',
+      '|0|if [US][US]name[US][US] == "[US][US]main[US][US]":',
+      '|1|main()',
+      '</workspace_file>',
+    ].join("\n");
+    assert.deepEqual(parseToolCall(text, { restoreGoogleMarkers: true }), {
+      tool: "write_file",
+      path: "src/app.py",
+      content: 'def main():\n    if True:\n        print("ok")\n\nif __name__ == "__main__":\n    main()',
+    });
+  });
+
+  it("preserves literal Google marker text unless marker restoration is explicitly enabled", () => {
+    assert.deepEqual(
+      parseToolCall('{"tool":"delete_dir","path":"test[US]test"}'),
+      { tool: "delete_dir", path: "test[US]test" },
+    );
+  });
+
+  it("restores Google underscore markers in JSON and XML workspace paths when enabled", () => {
+    assert.deepEqual(
+      parseToolCall('{"tool":"mkdir","path":"test[US]test"}', { restoreGoogleMarkers: true }),
+      { tool: "mkdir", path: "test_test" },
+    );
+    assert.deepEqual(
+      parseToolCall([
+        '<workspace_file tool="write_file" path="test[US]test/app[US]main.py" indent="levels">',
+        '|0|print("ok")',
+        '</workspace_file>',
+      ].join("\n"), { restoreGoogleMarkers: true }),
+      { tool: "write_file", path: "test_test/app_main.py", content: 'print("ok")' },
+    );
   });
 
   it("ignores ```python``` fence and finds JSON tool-call after it (Qwen case)", () => {
@@ -322,6 +421,20 @@ describe("validateCommandArgs", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
+  });
+
+  it("routes a model's sh -c tool call through the enabled shell permission", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-sh-alias-"));
+    try {
+      const { saveSettings, loadSettings } = await import("../src/state/settings.mjs");
+      const previous = loadSettings();
+      try {
+        saveSettings({ ...previous, commandPermissions: { ...previous.commandPermissions, allowShell: true } });
+        const result = await executeWorkspaceTool(dir, { tool: "run_command", cmd: "sh", args: ["-c", "printf ready"] });
+        assert.equal(result.ok, true);
+        assert.equal(result.stdout, "ready");
+      } finally { saveSettings(previous); }
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("blocks network URLs in args", () => {
@@ -583,7 +696,7 @@ describe("runCodeTask late running clarifications", () => {
           calls += 1;
           prompts.push(options.prompt);
           if (calls === 1) return { text: '{"tool":"finish","message":"old result"}', lastAssistantMessageId: "m1" };
-          return { text: '{"tool":"finish","message":"updated result"}', lastAssistantMessageId: "m2" };
+          return { text: '{"tool":"finish","message":"clarified result"}', lastAssistantMessageId: "m2" };
         },
       };
       let taken = false;
@@ -594,7 +707,7 @@ describe("runCodeTask late running clarifications", () => {
           return ["исправь ещё и дублирование"];
         },
       });
-      assert.equal(result.message, "updated result");
+      assert.equal(result.message, "clarified result");
       assert.equal(calls, 2);
       assert.match(prompts[1], /исправь ещё и дублирование/);
     } finally {
@@ -630,6 +743,45 @@ describe("runCodeTask late running clarifications", () => {
 });
 
 describe("runCodeTask transient text retries", () => {
+  it("uses a provider-specific parser without redirecting a literal [US] path", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
+    const literalDir = path.join(dir, "test[US]test");
+    const underscoreDir = path.join(dir, "test_test");
+    fs.mkdirSync(literalDir);
+    fs.mkdirSync(underscoreDir);
+    let calls = 0;
+    try {
+      const fakeClient = {
+        parseToolCall(text) {
+          return parseToolCall(text, { restoreGoogleMarkers: true });
+        },
+        async complete() {
+          calls += 1;
+          if (calls === 1) {
+            return {
+              text: '{"tool":"delete_dir","path":"test[LITERAL-US]test"}',
+              lastAssistantMessageId: "tool",
+            };
+          }
+          return {
+            text: '{"tool":"finish","message":"Удалил test[US]test"}',
+            lastAssistantMessageId: "finish",
+          };
+        },
+      };
+
+      const result = await runCodeTask(fakeClient, { sessionId: "s1" }, dir, "delete test[US]test", null, {
+        executionPermissions: { allowDestructiveActions: true },
+      });
+
+      assert.equal(result.message, "Удалил test[US]test");
+      assert.equal(fs.existsSync(literalDir), false);
+      assert.equal(fs.existsSync(underscoreDir), true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it("retries transient quota text and continues the same step", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-"));
     const file = path.join(dir, "setup_venv.py");
@@ -822,6 +974,107 @@ describe("runCodeTask text-only code responses", () => {
         noToolTextRetries: 1,
       });
       assert.equal(result.message, "Это обычное объяснение без изменений файлов.");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it("requires representative project evidence before accepting an analysis finish", () => {
+    assert.equal(isProjectAnalysisTask("как думаешь что можно улучшить в проекте?"), true);
+    assert.equal(isProjectAnalysisTask("улучши проект"), false);
+    const task = "что думаешь о данном проекте?";
+    const shortAnswer = "Проект выглядит полезным, структура понятная и документация хорошая.";
+    const incompleteLogs = ["[tool] read_file README.md\n# Demo"];
+
+    assert.equal(
+      shouldRejectPrematureProjectAnalysisFinish(task, shortAnswer, incompleteLogs),
+      true,
+    );
+    assert.equal(
+      shouldRejectPrematureProjectAnalysisFinish("что улучшить в нашей программе?", "Я изучил структуру проекта, но папка пуста.", []),
+      true,
+    );
+    assert.equal(
+      shouldRejectPrematureProjectAnalysisFinish("изучи проект", "Проект построен на AI Free development.", []),
+      true,
+    );
+
+    const completeLogs = [
+      "[tool] read_file README.md\n# Demo",
+      "[tool] read_file package.json\n{\"name\":\"demo\"}",
+      "[tool] read_file plugin-for-vscode/api/server.mjs\nexport const app = true;",
+      "[tool] read_file test/app.test.mjs\nimport test from 'node:test';",
+    ];
+    const detailedAnswer = [
+      "Обзор архитектуры и назначения проекта с опорой на изученные файлы.",
+      "Сильные стороны: понятное разделение модулей, тестируемая бизнес-логика и документированный запуск.",
+      "Риски: необходимо следить за связностью модулей, обработкой ошибок и синхронизацией сборок.",
+      "Приоритетные рекомендации: сначала укрепить интеграционные тесты, затем улучшить диагностику и только после этого расширять функциональность.",
+      "Вывод: проект уже решает практическую задачу, но дальнейший рост требует сохранения модульности и контроля регрессий.",
+      "Дополнительно стоит проверять пользовательские сценарии на всех поддерживаемых платформах и фиксировать критерии готовности для каждого релиза.",
+    ].join("\n\n");
+
+    assert.ok(detailedAnswer.length >= 500);
+    assert.equal(
+      shouldRejectPrematureProjectAnalysisFinish(task, detailedAnswer, completeLogs),
+      false,
+    );
+    assert.equal(
+      shouldRejectPrematureProjectAnalysisFinish("объясни что такое JSON", shortAnswer, []),
+      false,
+    );
+    assert.match(
+      buildProjectAnalysisCorrectionPrompt(task, shortAnswer, incompleteLogs),
+      /read_file/i,
+    );
+  });
+
+  it("continues a project analysis after a premature finish", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-analysis-"));
+    const detailedAnswer = [
+      "Проект представляет собой модульное приложение с документированным назначением.",
+      "Сильные стороны: исходный код отделён от тестов, основные команды описаны в package.json, а README объясняет пользовательский сценарий.",
+      "Риски: центральный цикл агента отвечает за несколько состояний, поэтому изменения требуют регрессионных тестов и проверки ошибок провайдеров.",
+      "Рекомендации: сохранить узкие модули, расширить интеграционные проверки, измерять длительные операции и поддерживать синхронизацию desktop и VS Code.",
+      "Приоритет: сначала надёжность tool-loop, затем наблюдаемость, после чего можно развивать новые провайдеры без увеличения технического долга.",
+      "Итоговая оценка основана на README.md, package.json, src/code-agent/run.mjs и test/code-agent.test.mjs, а не только на описании проекта.",
+    ].join("\n\n");
+    const responses = [
+      '{"tool":"read_file","path":"README.md"}',
+      "Проект выглядит полезным и хорошо документирован.",
+      '{"tool":"read_file","path":"package.json"}',
+      '{"tool":"read_file","path":"src/code-agent/run.mjs"}',
+      '{"tool":"read_file","path":"test/code-agent.test.mjs"}',
+      JSON.stringify({ tool: "finish", message: detailedAnswer }),
+    ];
+    let calls = 0;
+
+    try {
+      fs.mkdirSync(path.join(dir, "src", "code-agent"), { recursive: true });
+      fs.mkdirSync(path.join(dir, "test"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "README.md"), "# Demo\n", "utf8");
+      fs.writeFileSync(path.join(dir, "package.json"), '{"name":"demo"}\n', "utf8");
+      fs.writeFileSync(path.join(dir, "src", "code-agent", "run.mjs"), "export const run = true;\n", "utf8");
+      fs.writeFileSync(path.join(dir, "test", "code-agent.test.mjs"), "// tests\n", "utf8");
+
+      const fakeClient = {
+        async complete() {
+          const text = responses[calls];
+          calls += 1;
+          return { text, lastAssistantMessageId: `analysis-${calls}` };
+        },
+      };
+
+      const result = await runCodeTask(
+        fakeClient,
+        { sessionId: "s1" },
+        dir,
+        "что думаешь о данном проекте?",
+      );
+
+      assert.equal(calls, 6);
+      assert.equal(result.message, detailedAnswer);
+      assert.equal(result.toolLogs.filter((log) => log.includes("read_file")).length, 4);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

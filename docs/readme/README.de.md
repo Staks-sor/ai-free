@@ -33,8 +33,6 @@
 
 Wenn AI Free dir Zeit spart, [gib dem Repository einen Stern](https://github.com/Staks-sor/ai-free). So können mehr Menschen das Projekt finden.
 
-- Spendenkarte (OTP Bank): `2201 9604 2500 7505`
-
 ## ✨ Funktionen
 
 - 💬 **Eine Oberfläche:** DeepSeek, Qwen und ChatGPT in einem Fenster.

@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import { describe, it, before, after, beforeEach } from "node:test";
 
 process.env.QWEN_TRANSPORT = "direct";
+// Recovery protocol tests use mocked HTTP; pacing has its own fake-clock suite.
+process.env.QWEN_COMPLETION_MIN_INTERVAL_MS = "0";
 process.env.QWEN_MODEL = "qwen3-max";
 // Авто-режим: короткие паузы и маленький лимит, чтобы тесты не висели минуты.
 process.env.QWEN_AUTO_RETRY_MAX_ATTEMPTS = "4";

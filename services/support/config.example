@@ -1,0 +1,10 @@
+# Keep disabled until the operator confirms actual Russian hosting and legal readiness.
+SYNVOX_SUPPORT_STORAGE_REGION=
+SYNVOX_SUPPORT_OPERATOR_READY=0
+SYNVOX_SUPPORT_DATA_DIR=/var/lib/synvox-support
+SYNVOX_SUPPORT_ADMIN_PASSWORD_FILE=/etc/synvox-support/admin-password
+SYNVOX_SUPPORT_BOT_TOKEN_FILE=/etc/synvox-support/bot-token
+# Numeric private chat ID of the owner, verified with that owner. Never infer from customer chats.
+SYNVOX_SUPPORT_CHAT_ID=
+# Optional existing loopback proxy for Telegram only:
+SYNVOX_TELEGRAM_PROXY_URL=

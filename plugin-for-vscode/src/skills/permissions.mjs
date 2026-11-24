@@ -3,6 +3,7 @@
 const ALWAYS_ALLOWED = new Set([
   "finish",
   "ask_user",
+  "update_plan",
 ]);
 
 const BROWSER_TOOLS = new Set([
@@ -24,10 +25,11 @@ export function getAllowedTools(skill) {
   return skill.commands;
 }
 
-export function isToolAllowed(toolName, allowedTools) {
+export function isToolAllowed(toolName, allowedTools, { accessMode = "project" } = {}) {
   const tool = String(toolName || "").trim();
   if (!tool) return false;
   if (ALWAYS_ALLOWED.has(tool)) return true;
+  if (tool.startsWith("computer_") && accessMode !== "computer") return false;
 
   // Браузер закрыт для обычных chat/code-агентов. Он доступен только когда
   // оркестратор явно передал browser-only whitelist для работы со страницей.
@@ -36,6 +38,8 @@ export function isToolAllowed(toolName, allowedTools) {
   }
 
   if (!Array.isArray(allowedTools) || !allowedTools.length) return true;
+  if (["list_skills", "load_skill", "read_skill_resource"].includes(tool)) return allowedTools.includes("read_file");
+  if (tool === "verify_task") return allowedTools.includes("run_command");
   return allowedTools.includes(tool);
 }
 

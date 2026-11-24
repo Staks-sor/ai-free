@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { readInitialStorageState, restoreInitialStorageState } from "./storage-bootstrap.mjs";
+import { writeAtomicJsonSync } from "../state/state-writer.mjs";
 
 export const CAMOUFOX_PACKAGE_VERSION = "0.5.4";
 export const CAMOUFOX_RUNTIME_ROOT = path.join(os.homedir(), ".deepseek-cli", "camoufox");
@@ -14,12 +16,22 @@ const VENV_PYTHON = process.platform === "win32"
 const BACKGROUND_PYTHON = process.platform === "darwin"
   ? path.join(VENV_DIR, "bin", "ai-free-python")
   : VENV_PYTHON;
-const CONFIG_CODE = [
-  "import json, sys",
-  "from camoufox.utils import launch_options",
-  "config = launch_options(headless=True, locale='ru-RU', block_webrtc=True)",
-  "open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps(config))",
-].join("; ");
+export const CAMOUFOX_CONFIG_CODE = `import json, os, sys
+from camoufox.utils import launch_options
+saved = json.load(open(sys.argv[3], encoding='utf-8')) if sys.argv[3] and os.path.isfile(sys.argv[3]) else None
+# Old JS serialization rounded GL_MAX_SERVER_WAIT_TIMEOUT past uint64.
+if saved and saved.get('webGl2:parameters', {}).get('37137') == 18446744073709552000:
+    saved['webGl2:parameters']['37137'] = 18446744073709551615
+    repaired_path = sys.argv[3] + '.tmp-' + str(os.getpid())
+    with open(repaired_path, 'w', encoding='utf-8') as repaired:
+        json.dump(saved, repaired)
+    os.chmod(repaired_path, 0o600)
+    os.replace(repaired_path, sys.argv[3])
+config = launch_options(config=saved, headless=sys.argv[2] == '1', locale='ru-RU', block_webrtc=True, i_know_what_im_doing=bool(saved))
+with open(sys.argv[1], 'w', encoding='utf-8') as output:
+    json.dump(config, output)
+`;
+
 
 let installPromise = null;
 let installState = { phase: "idle", message: "" };
@@ -57,21 +69,47 @@ function run(command, args, { timeoutMs = 10 * 60_000, onOutput } = {}) {
   });
 }
 
-async function findPython() {
-  const configured = String(process.env.AI_FREE_CAMOUFOX_PYTHON || "").trim();
+export async function findPython({ execute = run, platform = process.platform,
+  configured = String(process.env.AI_FREE_CAMOUFOX_PYTHON || "").trim() } = {}) {
   const candidates = configured
     ? [[configured, []]]
-    : process.platform === "win32"
+    : platform === "win32"
       ? [["py", ["-3"]], ["python", []]]
       : [["python3", []], ["python", []]];
 
   for (const [command, prefix] of candidates) {
     try {
-      await run(command, [...prefix, "--version"], { timeoutMs: 10_000 });
-      return { command, prefix };
+      const { output } = await execute(command, [...prefix, "--version"], { timeoutMs: 10_000 });
+      const version = /Python\s+(\d+)\.(\d+)/i.exec(output || '');
+      if (version && Number(version[1]) === 3 && Number(version[2]) >= 10) return { command, prefix };
     } catch {}
   }
-  throw new Error("Для Camoufox нужен Python 3. Установите Python и перезапустите AI Free.");
+  throw Object.assign(new Error('Для входа нужен Python 3.10 или новее (Python 3). Установите его с python.org, затем полностью перезапустите IDE.'), {
+    code: 'CAMOUFOX_PYTHON_REQUIRED', userMessage: 'Для входа нужен Python 3.10 или новее (Python 3). Установите его с python.org, затем полностью перезапустите IDE.', delivery: 'not_sent',
+  });
+}
+
+export function browserSetupError(phase, cause) {
+  if (cause?.userMessage && /^CAMOUFOX_/.test(cause.code || '')) return cause;
+  const messages = {
+    runtime: 'Не удалось подготовить Python-окружение браузера. Проверьте права записи и работу Python 3.10+, затем повторите подключение.',
+    package: 'Не удалось установить Camoufox. Проверьте доступ к pypi.org, настройки сети/VPN и повторите подключение.',
+    browser: 'Не удалось скачать браузер Camoufox. Проверьте сеть/VPN и доступ к загрузкам GitHub, затем повторите подключение.',
+    launch: 'Не удалось запустить браузер входа. Проверьте, не блокирует ли его система, и закройте прежнее окно этого аккаунта перед повтором.',
+  };
+  const message = messages[phase] || 'Не удалось подготовить браузер входа. Повторите подключение.';
+  return Object.assign(new Error(message), { code: 'CAMOUFOX_' + phase.toUpperCase() + '_FAILED', userMessage: message, delivery: 'not_sent', cause });
+}
+
+export function getBrowserLoginProgress(login, setup = getCamoufoxInstallState()) {
+  if (login.state !== 'running') return login;
+  if (['python', 'runtime', 'package', 'browser'].includes(setup.phase)) return { ...login, phase: setup.phase, message: setup.message };
+  return { ...login, phase: login.phase || 'login', message: login.message || 'Открываем браузер входа или ожидаем завершения авторизации…' };
+}
+
+async function setupStep(phase, message, work) {
+  installState = { phase, message };
+  try { return await work(); } catch (cause) { throw browserSetupError(phase, cause); }
 }
 
 async function getRuntimePython() {
@@ -102,35 +140,74 @@ export function getCamoufoxInstallState() {
   return { ...installState, runtimeRoot: CAMOUFOX_RUNTIME_ROOT, version: CAMOUFOX_PACKAGE_VERSION };
 }
 
+export function buildCamoufoxContextOptions({
+  viewport = { width: 580, height: 900 },
+  storageStatePath = CAMOUFOX_STORAGE_STATE,
+} = {}) {
+  const options = { viewport, locale: "ru-RU", reducedMotion: "reduce" };
+  if (storageStatePath && fs.existsSync(storageStatePath)) {
+    options.storageState = storageStatePath;
+  }
+  return options;
+}
+
+export function saveCamoufoxFingerprint(raw, fingerprintStatePath) {
+  if (!fingerprintStatePath || fs.existsSync(fingerprintStatePath)) return;
+  const chunks = Object.entries(raw?.env || {})
+    .filter(([key]) => /^CAMOU_CONFIG_\d+$/.test(key))
+    .sort(([left], [right]) => Number(left.slice(13)) - Number(right.slice(13)))
+    .map(([, value]) => value);
+  if (!chunks.length) throw new Error("Camoufox did not provide a browser fingerprint");
+  const fingerprint = chunks.join("");
+  JSON.parse(fingerprint);
+  fs.mkdirSync(path.dirname(fingerprintStatePath), { recursive: true });
+  try {
+    fs.writeFileSync(fingerprintStatePath, fingerprint, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+}
+
 export async function ensureCamoufoxInstalled() {
   if (await probeInstalled()) {
     installState = { phase: "ready", message: `Camoufox ${CAMOUFOX_PACKAGE_VERSION} готов` };
     return VENV_PYTHON;
   }
   if (process.env.AI_FREE_CAMOUFOX_AUTO_INSTALL === "0") {
-    throw new Error("Camoufox не установлен, а автоматическая установка отключена.");
+    const message = "Camoufox не установлен, а автоматическая установка отключена (AI_FREE_CAMOUFOX_AUTO_INSTALL=0). Разрешите установку и повторите подключение.";
+    throw Object.assign(new Error(message), { code: 'CAMOUFOX_INSTALL_DISABLED', userMessage: message, delivery: 'not_sent' });
   }
   if (installPromise) return installPromise;
 
   installPromise = (async () => {
-    fs.mkdirSync(CAMOUFOX_RUNTIME_ROOT, { recursive: true });
+    await setupStep('runtime', 'Подготавливаем папку браузера…', () => fs.mkdirSync(CAMOUFOX_RUNTIME_ROOT, { recursive: true }));
+    installState = { phase: 'python', message: 'Проверяем Python 3.10+ для браузера входа…' };
     const python = await findPython();
-    if (!fs.existsSync(VENV_PYTHON)) {
-      installState = { phase: "runtime", message: "Подготовка Python runtime для Camoufox…" };
-      await run(python.command, [...python.prefix, "-m", "venv", VENV_DIR], { timeoutMs: 2 * 60_000 });
+    if (fs.existsSync(VENV_PYTHON)) {
+      await setupStep('runtime', 'Проверяем совместимость сохранённого окружения браузера…', async () => {
+        try { await findPython({ configured: VENV_PYTHON }); return; } catch {}
+        // Replace only the generated Python environment; account profiles stay in place.
+        fs.renameSync(VENV_DIR, path.join(CAMOUFOX_RUNTIME_ROOT, 'venv-backup-' + Date.now()));
+      });
     }
-    const runtimePython = await getRuntimePython();
-    installState = { phase: "package", message: "Установка Camoufox…" };
-    await run(runtimePython, [
+    if (!fs.existsSync(VENV_PYTHON)) {
+      await setupStep('runtime', 'Подготавливаем Python-окружение браузера…', () => run(python.command, [...python.prefix, '-m', 'venv', VENV_DIR], { timeoutMs: 2 * 60_000 }));
+    }
+    const runtimePython = await setupStep('runtime', 'Проверяем окружение браузера…', async () => {
+      const python = await getRuntimePython();
+      try { await run(python, ['-m', 'pip', '--version'], { timeoutMs: 30_000 }); }
+      catch { await run(python, ['-m', 'ensurepip', '--upgrade'], { timeoutMs: 120_000 }); }
+      return python;
+    });
+    await setupStep('package', 'Устанавливаем Camoufox. При первом входе это может занять несколько минут…', () => run(runtimePython, [
       "-m", "pip", "install", "--disable-pip-version-check", "--no-input",
       `camoufox==${CAMOUFOX_PACKAGE_VERSION}`,
-    ]);
-    installState = { phase: "browser", message: "Загрузка браузера Camoufox (один раз)…" };
-    await run(runtimePython, ["-m", "camoufox", "fetch"]);
+    ], { timeoutMs: 180_000 }));
+    await setupStep('browser', 'Скачиваем браузер Camoufox (один раз). Дождитесь завершения загрузки…', () => run(runtimePython, ['-m', 'camoufox', 'fetch'], { timeoutMs: 300_000 }));
     installState = { phase: "ready", message: `Camoufox ${CAMOUFOX_PACKAGE_VERSION} готов` };
     return runtimePython;
   })().catch((error) => {
-    installState = { phase: "error", message: error.message };
+    installState = { phase: "error", message: error.userMessage || error.message, code: error.code };
     throw error;
   }).finally(() => {
     installPromise = null;
@@ -138,56 +215,108 @@ export async function ensureCamoufoxInstalled() {
   return installPromise;
 }
 
-export async function launchCamoufoxSession({ viewport = { width: 580, height: 900 } } = {}) {
+export async function launchCamoufoxSession({
+  viewport = { width: 580, height: 900 },
+  storageStatePath = CAMOUFOX_STORAGE_STATE,
+  fingerprintStatePath = null,
+  profileDir = null,
+  headless = true,
+} = {}) {
+  if (!headless && process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    const message = 'Нельзя открыть окно входа: в этой Linux/WSL/SSH-среде нет графического экрана. Используйте локальное окно IDE или настройте графическую среду (WSLg/X11).';
+    throw Object.assign(new Error(message), { code: 'CAMOUFOX_DISPLAY_REQUIRED', userMessage: message, delivery: 'not_sent' });
+  }
   await ensureCamoufoxInstalled();
   const python = await getRuntimePython();
   const configPath = path.join(os.tmpdir(), `ai-free-camoufox-${process.pid}-${Date.now()}.json`);
   let raw;
   try {
-    await run(python, ["-c", CONFIG_CODE, configPath], { timeoutMs: 45_000 });
+    await run(python, ["-c", CAMOUFOX_CONFIG_CODE, configPath, headless ? "1" : "0", fingerprintStatePath || ""], { timeoutMs: 45_000 });
     raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    saveCamoufoxFingerprint(raw, fingerprintStatePath);
+  } catch (cause) {
+    throw browserSetupError('launch', cause);
   } finally {
     try { fs.unlinkSync(configPath); } catch {}
   }
   const { firefox } = await import("playwright");
-  const browser = await firefox.launch({
+  const launchOptions = {
     executablePath: raw.executable_path,
     args: raw.args,
     env: raw.env,
     firefoxUserPrefs: raw.firefox_user_prefs,
     headless: raw.headless,
-  });
-  const contextOptions = { viewport, locale: "ru-RU", reducedMotion: "reduce" };
-  if (fs.existsSync(CAMOUFOX_STORAGE_STATE)) {
-    contextOptions.storageState = CAMOUFOX_STORAGE_STATE;
+  };
+  const contextOptions = buildCamoufoxContextOptions({ viewport, storageStatePath: profileDir ? null : storageStatePath });
+  const initialStorageState = readInitialStorageState(profileDir, storageStatePath);
+  if (profileDir) fs.mkdirSync(profileDir, { recursive: true });
+  let browser = null, context;
+  try {
+    browser = profileDir ? null : await firefox.launch(launchOptions);
+    context = profileDir
+      ? await firefox.launchPersistentContext(profileDir, { ...launchOptions, ...contextOptions })
+      : await browser.newContext(contextOptions);
+  } catch (cause) {
+    await browser?.close().catch(() => {});
+    throw browserSetupError('launch', cause);
   }
-  const context = await browser.newContext(contextOptions);
+  try {
+    await restoreInitialStorageState(context, initialStorageState);
+  } catch (error) {
+    await context.close().catch(() => {});
+    throw error;
+  }
   const page = await context.newPage();
   let closed = false;
-  let checkpointRunning = false;
-  const persistStorageState = async () => {
-    if (closed || checkpointRunning) return;
-    checkpointRunning = true;
+  let closing = false, closePromise = null, checkpointPromise = null;
+  const bounded = async (work, timeoutMs) => {
+    let timer;
     try {
-      fs.mkdirSync(CAMOUFOX_RUNTIME_ROOT, { recursive: true });
-      await context.storageState({ path: CAMOUFOX_STORAGE_STATE });
-    } catch {
-      // The context can disappear during application shutdown.
-    } finally {
-      checkpointRunning = false;
-    }
+      return await Promise.race([Promise.resolve().then(work), new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const message = 'Не удалось завершить закрытие браузера аккаунта. Перезапустите SYNVOX и повторите подключение. Сохранённые данные входа не удалены.';
+          reject(Object.assign(new Error(message), { code: 'CAMOUFOX_CLOSE_TIMEOUT', userMessage: message }));
+        }, timeoutMs);
+      })]);
+    } finally { clearTimeout(timer); }
+  };
+  const persistStorageState = () => {
+    if (closed || closing) return Promise.resolve();
+    if (checkpointPromise) return checkpointPromise;
+    checkpointPromise = (async () => {
+      try {
+        const state = await bounded(() => context.storageState(), 5000);
+        writeAtomicJsonSync(storageStatePath, state);
+      } catch {
+        // Keep the previous snapshot if the page is stuck or already gone.
+        console.warn('[camoufox] Снимок сессии не обновлён; сохранён предыдущий.');
+      } finally { checkpointPromise = null; }
+    })();
+    return checkpointPromise;
   };
   const checkpointTimer = setInterval(() => {
     persistStorageState().catch(() => {});
   }, 30_000);
   checkpointTimer.unref?.();
-  const close = async () => {
-    if (closed) return;
+  const close = () => {
+    if (closed) return Promise.resolve();
+    if (closePromise) return closePromise;
     clearInterval(checkpointTimer);
-    await persistStorageState();
-    closed = true;
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    const finalSnapshot = persistStorageState();
+    closing = true;
+    closePromise = (async () => {
+      await finalSnapshot;
+      const ownedBrowser = browser || context.browser?.();
+      try { await bounded(() => context.close(), 5000); }
+      catch (error) { if (!ownedBrowser) throw error; }
+      if (ownedBrowser) await bounded(() => ownedBrowser.close(), 35_000);
+      closed = true;
+    })().catch(error => {
+      closing = false;
+      closePromise = null;
+      throw error;
+    });
+    return closePromise;
   };
   return { browser, context, page, close, persistStorageState, mode: "camoufox" };
 }

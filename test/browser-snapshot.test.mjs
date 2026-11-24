@@ -58,6 +58,13 @@ describe("embed browser ui", () => {
     assert.match(html, /CHATGPT_LIVE/);
   });
 
+  it("keeps workspace files out of the browser tabs", () => {
+    const html = renderEmbedBrowserHtml({ defaultTab: "files" });
+    assert.doesNotMatch(html, /tabFiles|data-tab="files"|📁 Файлы|\/embed\/workspace/);
+    assert.doesNotMatch(html, /\["web", "chatgpt", "files"\]/);
+    assert.match(html, /let currentTab = "chatgpt"/);
+  });
+
   it("renders app browser live with url bar and warm endpoint", () => {
     const html = renderEmbedAppBrowserLiveHtml();
     assert.match(html, /\/api\/browser\/live-stream/);

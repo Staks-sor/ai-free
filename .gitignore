@@ -1,4 +1,7 @@
 node_modules/
+.synvox-updates/
+.synvox-update.lock
+website/static/downloads/
 plugin-for-vscode/packages/
 .env
 .DS_Store
@@ -22,3 +25,11 @@ api/README.md
 .kilo/
 package-lock.json
 !plugin-for-vscode/package-lock.json
+
+# Generated browser/release artifacts
+.playwright-cli/
+output/
+*.zip
+*.tar.gz
+*.jar
+!plugin-for-jetbrains/gradle/wrapper/gradle-wrapper.jar

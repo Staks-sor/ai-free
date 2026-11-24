@@ -19,6 +19,7 @@ const requiredPaths = [
   "src/window-app/server.mjs",
   "src/window-app/diagnostics.mjs",
   "src/window-app/ui-html.mjs",
+  "src/window-app/assets/synvox-watermark.png",
   "api/models.mjs",
   "api/openai-handler.mjs",
   "packages/core/src/index.mjs",

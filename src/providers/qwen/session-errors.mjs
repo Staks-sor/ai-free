@@ -74,6 +74,8 @@ export function isQwenSessionExpiredText(text = "") {
   const source = String(text || "");
   const blob = source.toLowerCase();
   if (!blob) return false;
+  if (isQwenChallengeResponse(source)) return false;
+  // Login-page HTML is authoritative regardless of length.
   if (/<!doctype html|<html[\s>]/i.test(blob) && /login|sign.?in|auth/i.test(blob)) return true;
   const looksLikeAssistantProse = source.length > 300 || /\n/.test(source.slice(0, 300));
   if (!looksLikeAssistantProse && /unauthorized|not logged|login required|token expired|session expired|invalid token/i.test(blob)) {
@@ -88,7 +90,7 @@ export function isQwenSessionExpiredError(error) {
   if (error.isQwenReloginFailed) return false;
   if (error.isQwenSessionExpired) return true;
   const status = error.status || error.httpStatus;
-  if (status === 401 || status === 403) return true;
+  if (status === 401) return true;
   return isQwenSessionExpiredText(error.message);
 }
 
@@ -115,20 +117,19 @@ export function createQwenSessionExpiredError({ code = "", details = "", context
 }
 
 export function throwIfQwenSessionExpiredFromHttp(status, text, context) {
-  if (status === 401 || status === 403) {
+  const body = String(text || "");
+  if (isQwenChallengeResponse(body)) {
+    throw Object.assign(new Error('Qwen требует проверку браузерной сессии.'), { code: 'QWEN_ANTIBOT_PUNISH', status });
+  }
+  if (status === 401 || isQwenSessionExpiredText(body)) {
     throw createQwenSessionExpiredError({
       code: String(status),
       details: String(text || "").slice(0, 300),
       context,
     });
   }
-  const body = String(text || "");
   if (/<!doctype html|<html[\s>]/i.test(body)) {
-    throw createQwenSessionExpiredError({
-      code: "html_response",
-      details: "chat.qwen.ai вернул HTML вместо API — обычно это страница логина или WAF",
-      context,
-    });
+    throw Object.assign(new Error('Qwen вернул HTML вместо API. Причина не подтверждена; повторный вход пока не требуется.'), { code: 'QWEN_UNEXPECTED_RESPONSE', status });
   }
   try {
     const json = JSON.parse(body);
@@ -146,6 +147,13 @@ export function throwIfQwenSessionExpiredFromHttp(status, text, context) {
       context,
     });
   }
+}
+
+export function isQwenChallengeResponse(text = '') {
+  const body = String(text);
+  return /_____tmd_____\/punish/.test(body)
+    || (/<!doctype html|<html[\s>]/i.test(body)
+      && /baxia|captcha|turnstile|cf-chl|verify you are human|security check/i.test(body));
 }
 
 export function throwIfQwenSessionExpiredFromAssistantText(text, context = "") {

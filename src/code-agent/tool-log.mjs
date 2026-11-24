@@ -6,6 +6,11 @@ export function formatToolLog(call, result) {
   const target = call.path || call.cmd || "";
   const header = `[tool] ${call.tool} ${target}`.trim();
 
+  if (call.tool === "verify_task" && result.verification) {
+    return [header, `verification: ${result.verification}`,
+      ...result.checks.map(check => `${check.name}: ${check.ok ? "passed" : "failed"}; status: ${check.status ?? "unknown"}${check.timedOut ? " (timed out)" : ""}`)].join("\n");
+  }
+
   if (call.tool === "list_files") {
     const lines = [header];
     if (result.error) {

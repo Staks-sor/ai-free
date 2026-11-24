@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "product": "synvox",
+  "paymentEnabled": false,
+  "paymentState": "free",
+  "accessMode": "free",
+  "legalVersion": "2026-09-07",
+  "websiteUrl": "https://synvox.pro/",
+  "documentsUrl": "https://synvox.pro/documents/"
+}

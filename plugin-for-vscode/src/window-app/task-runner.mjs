@@ -16,6 +16,7 @@ import { createTaskTrace } from "../logging/task-trace.mjs";
 
 const DEFAULT_STALE_TASK_MS = 20 * 60 * 1000;
 const runningTasks = new Map(); // conversationId → { startedAt, kind, label, staleAfterMs }
+let acceptingTasks = true;
 const taskLogger = createFileLogger({ component: "task-runner" });
 
 function resolveStaleTaskMs(value) {
@@ -33,24 +34,36 @@ function getFreshTask(conversationId) {
   const task = runningTasks.get(conversationId);
   if (!task) return null;
   if (isTaskStale(task)) {
-    taskLogger.warn("background_task.stale", {
-      conversationId,
-      kind: task.kind,
-      durationMs: Date.now() - task.startedAt,
-    });
-    console.warn(
-      `[task-runner] clearing stale task ${task.kind} for ${conversationId} after ${Date.now() - task.startedAt}ms`,
-    );
-    runningTasks.delete(conversationId);
-    return null;
+    if (!task.staleDetected) {
+      task.staleDetected = true;
+      taskLogger.warn("background_task.stale", {
+        conversationId,
+        kind: task.kind,
+        durationMs: Date.now() - task.startedAt,
+      });
+      console.warn(
+        `[task-runner] aborting stale task ${task.kind} for ${conversationId} after ${Date.now() - task.startedAt}ms`,
+      );
+      task.controller.abort();
+    }
   }
   return task;
+}
+
+// A confirmed provider wait is active work, not an abandoned task. Keep its
+// cancellation controller reachable through the existing Stop button.
+export function extendTaskWait(conversationId, waitMs) {
+  const task = runningTasks.get(conversationId);
+  if (!task) return false;
+  task.staleAfterMs = Math.max(task.staleAfterMs, Date.now() - task.startedAt + waitMs + DEFAULT_STALE_TASK_MS);
+  return true;
 }
 
 // Запускает задачу в фоне. Если задача для этого conversationId уже идёт — бросает.
 // taskFn получает AbortSignal — задача должна проверять signal.aborted и корректно
 // завершаться при отмене (кнопка «Стоп»).
 export function startTask(conversationId, kind, taskFn, label = "", traceContext = {}) {
+  if (!acceptingTasks) throw Object.assign(new Error("Программа завершает работу; новые задачи не принимаются."), { code: "APP_SHUTTING_DOWN" });
   const existing = getFreshTask(conversationId);
   if (existing) {
     throw new Error(`Task ${existing.kind} already running for ${conversationId}`);
@@ -68,7 +81,7 @@ export function startTask(conversationId, kind, taskFn, label = "", traceContext
     startedAt,
     kind,
     label,
-    staleAfterMs: resolveStaleTaskMs(),
+    staleAfterMs: resolveStaleTaskMs(traceContext.staleAfterMs),
     controller,
     trace,
   };
@@ -77,7 +90,7 @@ export function startTask(conversationId, kind, taskFn, label = "", traceContext
   trace.record("task_started", { kind, label });
 
   // Fire-and-forget. .finally() гарантирует очистку даже при throw.
-  Promise.resolve()
+  task.completion = Promise.resolve()
     .then(() => taskFn(controller.signal))
     .then(() => {
       trace.finish(controller.signal.aborted ? "cancelled" : "success");
@@ -107,19 +120,20 @@ export function startTask(conversationId, kind, taskFn, label = "", traceContext
     });
 }
 
-// Останавливает задачу: посылает abort и снимает её из списка активных.
+// Останавливает задачу: посылает abort. Слот освобождается после завершения taskFn.
 // Возвращает true, если задача была и её отменили.
 export function stopTask(conversationId) {
   const task = runningTasks.get(conversationId);
   if (!task) return false;
-  try { task.controller?.abort(); } catch {}
-  task.trace?.finish("cancelled");
-  taskLogger.info("background_task.stop", {
-    conversationId,
-    kind: task.kind,
-    durationMs: Date.now() - task.startedAt,
-  });
-  runningTasks.delete(conversationId);
+  if (!task.cancelRequested) {
+    task.cancelRequested = true;
+    try { task.controller?.abort(); } catch {}
+    taskLogger.info("background_task.stop", {
+      conversationId,
+      kind: task.kind,
+      durationMs: Date.now() - task.startedAt,
+    });
+  }
   return true;
 }
 
@@ -143,10 +157,23 @@ export function getRunningIds() {
   return [...runningTasks.keys()].filter((id) => Boolean(getFreshTask(id)));
 }
 
-export function stopAllTasks() {
+export function stopAllTasks({ shutdown = false } = {}) {
+  if (shutdown) acceptingTasks = false;
   let count = 0;
   for (const id of [...runningTasks.keys()]) {
     if (stopTask(id)) count += 1;
   }
   return count;
+}
+
+export async function waitForAllTasks({ timeoutMs = 5000 } = {}) {
+  const completions = [...runningTasks.values()].map(task => task.completion);
+  if (!completions.length) return true;
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.allSettled(completions).then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+    ]);
+  } finally { clearTimeout(timer); }
 }

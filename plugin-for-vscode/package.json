@@ -1,8 +1,8 @@
 {
   "name": "ai-free-vscode",
-  "displayName": "AI Free Chat & Agent",
-  "description": "AI chat and coding agents for DeepSeek, Qwen and ChatGPT in the VS Code sidebar",
-  "version": "0.4.25",
+  "displayName": "SYNVOX — AI Chat & Agent",
+  "description": "SYNVOX: AI chat, coding agents, project memory and Qwen account switching. Free for personal use. Provider accounts and limits apply.",
+  "version": "0.5.65",
   "publisher": "developers-daily-life",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/marketplace-icon.png",
@@ -29,6 +29,8 @@
     "deepseek",
     "qwen",
     "chatgpt",
+    "google-ai",
+    "glm",
     "openai-compatible-api",
     "local-ai",
     "vscode-extension",
@@ -40,7 +42,7 @@
       "activitybar": [
         {
           "id": "ai-free-sidebar",
-          "title": "AI Free",
+          "title": "SYNVOX",
           "icon": "media/icon.svg"
         }
       ]
@@ -50,7 +52,7 @@
         {
           "type": "webview",
           "id": "ai-free-chat",
-          "name": "AI Free Chat & Agent"
+          "name": "SYNVOX — AI Chat & Agent"
         }
       ]
     }
@@ -61,6 +63,11 @@
   },
   "dependencies": {
     "patchright": "^1.60.2",
-    "playwright": "^1.60.0"
+    "playwright": "^1.60.0",
+    "pngjs": "7.0.0"
+  },
+  "homepage": "https://synvox.pro/",
+  "optionalDependencies": {
+    "@jitsi/robotjs": "0.6.24"
   }
 }

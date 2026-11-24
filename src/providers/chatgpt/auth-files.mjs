@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
+import { writeAtomicJsonSync } from "../../state/state-writer.mjs";
 import { CHATGPT_BASE_URL } from "./config.mjs";
 
 export function readChatGPTAuth(file) {
@@ -15,6 +15,7 @@ export function readChatGPTAuth(file) {
       cookies,
       profileDir: raw.profileDir || "",
       userAgent: raw.userAgent || "",
+      accountIdentity: typeof raw.accountIdentity === "string" ? raw.accountIdentity.slice(0, 256) : "",
       source: file,
     };
   } catch {
@@ -25,25 +26,30 @@ export function readChatGPTAuth(file) {
 export function isChatGPTAuthUsable(auth) {
   if (!auth) return false;
   // JWT accessToken у ChatGPT живёт недолго; долгая сессия — в session-token cookie.
-  const hasSessionCookie = Boolean(
-    auth.sessionToken
-    || auth.cookies?.some((c) => {
-      const name = String(c?.name || "");
-      return /^(?:__Secure-)?(?:next-auth|authjs)\.session-token(?:\.\d+)?$/.test(name);
-    }),
-  );
-  if (hasSessionCookie) return true;
+  if (getChatGPTSessionToken(auth.cookies)) return true;
+  const storedSessionCookies = auth.cookies?.filter((cookie) =>
+    /^(?:__Secure-)?(?:next-auth|authjs)\.session-token(?:\.\d+)?$/.test(String(cookie?.name || "")),
+  ) || [];
+  if (storedSessionCookies.length) return false;
+  if (auth.sessionToken) return true;
   // Opaque tokens remain usable; JWT tokens must not be expired.
   return Boolean(auth.accessToken) && !isJwtExpired(auth.accessToken, 60);
 }
 
 export function getChatGPTSessionToken(cookies) {
   const clean = sanitizeCookiesForStorage(cookies);
-  return clean.find((cookie) => /^(?:__Secure-)?(?:next-auth|authjs)\.session-token$/.test(String(cookie?.name || "")))?.value || "";
+  return clean.find((cookie) =>
+    /^(?:__Secure-)?(?:next-auth|authjs)\.session-token$/.test(String(cookie?.name || ""))
+    && !isChatGPTCookieExpired(cookie),
+  )?.value || "";
 }
 
-export function writeChatGPTAuth(file, { cookies, accessToken, sessionToken, profileDir, userAgent }) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+function isChatGPTCookieExpired(cookie) {
+  const expires = Number(cookie?.expires ?? cookie?.expirationDate);
+  return Number.isFinite(expires) && expires > 0 && expires <= Math.floor(Date.now() / 1000);
+}
+
+export function writeChatGPTAuth(file, { cookies, accessToken, sessionToken, profileDir, userAgent, accountIdentity = "" }) {
   const cleanCookies = pickEssentialChatGPTCookies(sanitizeCookiesForStorage(cookies));
   const payload = {
     version: 1,
@@ -53,10 +59,10 @@ export function writeChatGPTAuth(file, { cookies, accessToken, sessionToken, pro
     accessToken,
     sessionToken,
     userAgent,
+    accountIdentity: String(accountIdentity || "").slice(0, 256),
     cookies: cleanCookies,
   };
-  fs.writeFileSync(file, JSON.stringify(payload, null, 2), { mode: 0o600 });
-  try { fs.chmodSync(file, 0o600); } catch {}
+  writeAtomicJsonSync(file, payload);
 }
 
 export function chatGPTCookieHeaderFromArray(parsed) {
@@ -151,6 +157,15 @@ export async function applyCookiesToContext(context, cookies) {
   if (!normalized.length) return 0;
   await context.addCookies(normalized);
   return normalized.length;
+}
+
+export async function restoreSavedChatGPTCookiesIfMissing(context, savedCookies) {
+  if (!getChatGPTSessionToken(savedCookies)) return false;
+  // A persistent browser profile may already contain a newer rotated session.
+  // Never clear or overwrite it with the older auth.json snapshot.
+  const browserCookies = await context.cookies();
+  if (getChatGPTSessionToken(browserCookies)) return false;
+  return (await applyCookiesToContext(context, savedCookies)) > 0;
 }
 
 export function dedupeChatGPTCookies(cookies) {

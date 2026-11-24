@@ -1,3 +1,5 @@
+import { uiModelCatalog } from "../providers/model-catalog.mjs";
+import { getHarnessTaskView } from "../harness/task-view.mjs";
 // Огромный HTML-шаблон окна чатов: layout и фронтенд JS.
 // Стили вынесены в ./ui-styles.mjs.
 // Самодостаточный — никаких внешних зависимостей и шаблонизации.
@@ -6,50 +8,46 @@
 // модалки (Settings, New chat, файловый браузер) рендерятся и работают.
 
 import { STYLES } from "./ui-styles.mjs";
+import { WORKSPACE_STYLES } from "./workspace-ui-styles.mjs";
+import { setupWorkspaceUi, setupWorkspaceSidebar, getWorkspaceBoardItems, getWorkspaceProjects } from "./workspace-ui-script.mjs";
 import { AI_FREE_VERSION } from "../config.mjs";
 import { createTranslator, resolveUserLanguage } from "../i18n/index.mjs";
 import { COMMAND_DESCRIPTIONS } from "../i18n/command-descriptions.mjs";
+import { resolveLegalBundle } from "../../packages/core/src/legal/ru.mjs";
+import { createChatDraftStore } from "./chat-drafts.mjs";
+import { setupSupportUi, SUPPORT_STYLES } from './support-ui.mjs';
+import { setupAnnouncementsUi, ANNOUNCEMENTS_STYLES } from './announcements-ui.mjs';
 
 export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } = {}) {
   const { language, messages, t } = createTranslator(resolveUserLanguage(requestedLanguage));
+  const w = (ru, en) => language.code === "ru" ? ru : en;
   const i18nPayload = JSON.stringify({ language, messages, ui, commandDescriptions: COMMAND_DESCRIPTIONS });
+  const legalPayload = JSON.stringify(resolveLegalBundle({
+    name: process.env.SYNVOX_LEGAL_NAME,
+    status: process.env.SYNVOX_LEGAL_STATUS,
+    inn: process.env.SYNVOX_LEGAL_INN,
+    ogrn: process.env.SYNVOX_LEGAL_OGRN,
+    address: process.env.SYNVOX_LEGAL_ADDRESS,
+    email: process.env.SYNVOX_LEGAL_EMAIL,
+  }));
   return `<!doctype html>
 <html lang="${language.code}" dir="${language.dir}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Free v${AI_FREE_VERSION}</title>
-  <style>${STYLES}</style>
+  <title>SYNVOX v${AI_FREE_VERSION}</title>
+  <link rel="icon" href="/assets/synvox-mark.png"><style>${STYLES}
+${WORKSPACE_STYLES}
+${SUPPORT_STYLES}
+${ANNOUNCEMENTS_STYLES}</style>
 </head>
-<body>
+<body class="workspaceShell" data-workspace-tab="chat">
   <div class="app">
-    <aside class="sidebar">
-      <nav class="sidebarMenu" aria-label="${t("sidebar.menu")}">
-        <button type="button" id="sidebarMenuPlugins" class="sidebarMenuBtn">${t("sidebar.plugins")}</button>
-        <button type="button" id="sidebarMenuTelegram" class="sidebarMenuBtn">${t("sidebar.telegram")}</button>
-      </nav>
-      <div class="sideHead">
-        <div class="brand">${t("app.workspace")}</div>
-        <button id="refreshBtn" class="iconBtn" title="${t("app.refresh")}">↻</button>
-      </div>
+    <aside id="workspaceSidebar" class="sidebar">
+      <div class="workspaceBrand"><img src="/assets/synvox-mark.png" alt="SYNVOX" width="32" height="32"><strong>SYNVOX</strong><small>v${AI_FREE_VERSION}</small><button id="workspaceSidebarCollapse" type="button" aria-label="${w('Свернуть меню', 'Collapse sidebar')}" title="${w('Свернуть меню', 'Collapse sidebar')}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button></div>
       <button id="openNewChat" class="iconBtn newChatBtn" type="button">${t("app.newChat")}</button>
-      <div class="sidebarPromos" aria-label="Project links">
-        <a class="sidebarPromo sidebarPromoGithub" href="https://github.com/Staks-sor/ai-free" target="_blank" rel="noreferrer">
-          <span class="sidebarPromoMark">★</span>
-          <span class="sidebarPromoText">
-            <strong>AI Free на GitHub</strong>
-            <small>Поставить звезду и поддержать проект</small>
-          </span>
-        </a>
-        <a class="sidebarPromo sidebarPromoAd" href="https://t.me/Staks_sor" target="_blank" rel="noreferrer" aria-label="Разместить рекламу в AI Free — написать @Staks_sor в Telegram">
-          <span class="sidebarPromoMark">AD</span>
-          <span class="sidebarPromoText">
-            <strong>Разместить рекламу</strong>
-            <small>Написать @Staks_sor в Telegram</small>
-          </span>
-        </a>
-      </div>
-
+      <div class="workspaceSideLabel">${w("Проекты", "Projects")}</div><div id="workspaceProjectList"></div>
+      <div class="workspaceSideLabel">${w("Чаты проекта", "Project chats")}</div>
       <div id="newChatOverlay" class="settingsOverlay hidden" aria-hidden="true">
         <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="newChatTitle">
           <div class="settingsHead">
@@ -57,6 +55,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
              <button id="newChatClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
           </div>
           <form id="newForm" class="newForm" autocomplete="off">
+            <p id="newHandoffNote" class="modeHint hidden">Передача создаёт новый чат в том же проекте. Выберите AI и роль; запрос не отправится автоматически.</p>
+            <label class="formField"><span>Роль агента</span><select id="newRole" aria-label="Роль нового агента"></select></label>
             <div class="formField">
               <span>${t("newChat.provider")}</span>
               <div class="providerPicker" id="newChatProvider">
@@ -161,26 +161,46 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         <button id="updateToastDownload" class="updateToastDownload" type="button">Скачать</button>
       </div>
       <div id="chatList" class="chatList"></div>
-    </aside>
-      <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
-    <main class="main">
-      <header class="topbar">
-        <div id="activeTitleRow" class="titleRow topbarTitle">
-          <div id="activeTitle" class="title">${t("app.noChat")}</div>
-          <div id="workspace" class="workspace"></div>
-        </div>
-        <div class="topbarControls">
-          <span id="activeMode" class="modeBadge hidden"></span>
-          <select id="modelPicker" class="modelPicker hidden" title="${t("topbar.model")}"></select>
-          <select id="rolePicker" class="rolePicker hidden" title="${t("topbar.role")}"></select>
-          <button id="agentDrawerBtn" class="iconBtn agentDrawerBtn" type="button" title="${t("agentDrawer.title")}">🧠</button>
-          <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="${t("topbar.flowTitle")}">${t("topbar.flow")}</button>
-        </div>
+      <div class="sidebarFooter">
+        <div class="workspaceFooterTools"><details id="workspaceFooterMenu"><summary>${w('Ещё', 'More')}</summary><div class="workspaceFooterMenuPanel"><nav class="workspaceFooterLinks" aria-label="${t('sidebar.menu')}">
+          <button type="button" id="sidebarMenuPlugins">${t('sidebar.plugins')}</button>
+          <button type="button" id="sidebarMenuTelegram">${t('sidebar.telegram')}</button>
+        </nav>
+        <a class="workspaceFooterAd" href="https://t.me/Staks_sor" target="_blank" rel="noreferrer" aria-label="${w('Разместить рекламу — написать @Staks_sor в Telegram', 'Advertise — contact @Staks_sor on Telegram')}">${w('Разместить рекламу', 'Advertise')} <span aria-hidden="true">↗</span></a></div></details>
         <div class="topbarActions">
           <button id="themeBtn" class="iconBtn themeBtn" type="button" title="${t("topbar.theme")}">◐</button>
           <button id="settingsBtn" class="iconBtn settingsBtn" type="button" title="${t("topbar.settings")}">⚙</button>
           <button id="quitBtn" class="iconBtn quitBtn" type="button" title="${t("topbar.quit")}">⏻</button>
         </div>
+        </div>
+      </div>
+    </aside>
+      <div id="sidebarResizer" class="sidebarResizer" title="${t("app.resizeChats")}"></div>
+    <main class="main">
+      <header class="topbar">
+        <button id="workspaceMobileMenu" class="iconBtn workspaceMobileMenu" type="button" aria-controls="workspaceSidebar" aria-expanded="true" aria-label="${w("Показать или скрыть меню", "Toggle sidebar")}" title="${w('Показать или скрыть меню', 'Toggle sidebar')}">☰</button>
+        <div class="workspaceProjectCrumb"><span id="workspaceProjectName"></span></div>
+        <nav class="workspaceTabs" aria-label="${w("Вкладки проекта", "Project tabs")}">
+          <button type="button" data-workspace-tab="chat" class="active" aria-selected="true">${w("Чат", "Chat")}</button>
+          <button type="button" data-workspace-tab="tasks" aria-selected="false">${w("Задачи", "Tasks")} <span id="workspaceTaskCount">0</span></button>
+          <button type="button" data-workspace-tab="files" aria-selected="false">${w("Файлы", "Files")}</button>
+        </nav>
+        <details class="workspaceAdvancedControls"><summary>${w("Ещё", "More")}</summary>
+        <div class="topbarControls">
+          <span id="activeMode" class="modeBadge hidden"></span>
+
+          <select id="rolePicker" class="rolePicker hidden" title="${t("topbar.role")}"></select>
+          <div id="modelCapabilities" class="modelCapabilities" aria-label="${t("media.capabilities")}"></div>
+          <button id="agentDrawerBtn" class="iconBtn agentDrawerBtn hidden" type="button" tabindex="-1" aria-hidden="true">🧠</button>
+          <button id="agentBrowserBtn" class="iconBtn agentBrowserBtn" type="button" title="${t("agentDrawer.tabBrowser")}">${t("agentDrawer.browserButton")}</button>
+          <button id="taskPanelBtn" class="iconBtn" type="button">${t("tasks.title")}</button>
+          <button id="handoffTaskBtn" class="iconBtn" type="button" title="Передать краткий контекст другому AI">Передать задачу</button>
+          <button id="pipelinePanelBtn" class="iconBtn pipelinePanelBtn" type="button" title="${t("topbar.flowTitle")}">${t("topbar.flow")}</button>
+        </div>
+        <button id="tourBtn" class="iconBtn tourBtn" type="button">${w("Обучение", "Tutorial")}</button>
+        </details>
+        <button id="announcementsButton" class="iconBtn announcementsButton" type="button" aria-label="${w('Объявления', 'Announcements')}" title="${w('Объявления', 'Announcements')}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></button>
+        <button id="workspaceInspectorToggle" class="iconBtn workspaceInspectorToggle" type="button" aria-label="${w("Показать ход работы", "Show task progress")}" aria-expanded="true">◫</button>
       </header>
 
       <div id="shutdownOverlay" class="shutdownOverlay hidden" aria-hidden="true">
@@ -199,16 +219,21 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           <div id="settingsBody" class="settingsBody">${t("app.loading")}</div>
         </div>
       </div>
-      <div id="pipelinePanel" class="pipelinePanel hidden" aria-hidden="true">
+      <div id="taskPanelOverlay" class="settingsOverlay hidden" aria-hidden="true">
+        <div class="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="taskPanelTitle">
+          <div class="settingsHead"><h2 id="taskPanelTitle">${t("tasks.title")}</h2><button id="taskPanelClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button></div>
+          <div class="taskPanelContent"><p class="taskMeta">${t("tasks.help")}</p><button id="taskPanelCreate" class="iconBtn primaryBtn" type="button">${t("tasks.createAgent")}</button><div id="taskPanelBody" class="taskCards"></div></div>
+        </div>
+      </div>
+      <div id="pipelinePanel" class="pipelinePanel hidden" role="dialog" aria-hidden="true" aria-labelledby="pipelineTitle">
         <div class="pipelineHead">
           <div>
-            <div class="pipelineTitle">${t("pipeline.title")}</div>
+            <div id="pipelineTitle" class="pipelineTitle">${t("pipeline.title")}</div>
             <div class="pipelineSub">${t("pipeline.sub")}</div>
           </div>
           <button id="pipelineClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
         </div>
         <div class="pipelineTeamActions">
-          <button id="pipelineMakeLeader" class="iconBtn" type="button">${t("pipeline.makeLeader")}</button>
           <button id="pipelineAddAgent" class="iconBtn primaryBtn" type="button">${t("pipeline.addAgent")}</button>
         </div>
         <div id="pipelineBody" class="pipelineBody"></div>
@@ -218,43 +243,29 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         <div id="agentDrawerResize" class="agentDrawerResize" role="separator" aria-orientation="vertical" aria-label="Изменить ширину панели" title="Потяните, чтобы изменить ширину"></div>
         <div class="agentDrawerHead">
           <div>
-            <div class="agentDrawerTitle">${t("agentDrawer.title")}</div>
-            <div class="agentDrawerSub">${t("agentDrawer.sub")}</div>
+            <div id="agentDrawerTitle" class="agentDrawerTitle">${t("agentDrawer.title")}</div>
+            <div id="agentDrawerSub" class="agentDrawerSub">${t("agentDrawer.sub")}</div>
           </div>
           <button id="agentDrawerClose" class="iconBtn" type="button" aria-label="${t("app.close")}">✕</button>
         </div>
-        <div class="agentDrawerTabs">
-          <button type="button" class="agentDrawerTab active" data-tab="controls">${t("agentDrawer.tabAgent")}</button>
-          <button type="button" class="agentDrawerTab" data-tab="browser">${t("agentDrawer.tabBrowser")}</button>
-        </div>
         <div class="agentDrawerBody">
           <div class="agentDrawerPanel active" data-panel="controls">
-            <div id="agentDrawerControls" class="agentDrawerControls">
-              <div class="agentDrawerSection">
-                <h4>${t("agentDrawer.modes")}</h4>
-                <div class="agentDrawerRow">
-                  <button id="coderToggle" class="coderToggle hidden" type="button" title="${t("topbar.coderTitle")}">🛠 Coder</button>
-                  <button id="hardwareToggle" class="coderToggle hardwareToggle hidden" type="button" title="${t("topbar.hardwareTitle")}">ESP</button>
-                  <button id="pipelineToggle" class="coderToggle pipelineToggle hidden" type="button" title="${t("topbar.pipelineTitle")}">${t("topbar.pipeline")}</button>
-                </div>
-              </div>
-              <div class="agentDrawerSection">
-                <h4>${t("agentDrawer.memorySkills")}</h4>
-                <div class="agentDrawerRow">
-                  <button id="memoryToggle" class="coderToggle memoryToggle hidden" type="button" title="${t("topbar.memoryTitle")}">${t("topbar.memory")}</button>
-                  <button id="autoSkillToggle" class="coderToggle autoSkillToggle hidden" type="button" title="${t("topbar.autoSkillTitle")}">${t("topbar.autoSkill")}</button>
-                </div>
-                <select id="skillPicker" class="skillPicker hidden" title="${t("topbar.skillTitle")}"></select>
-                <div id="agentDrawerMemoryList" class="agentMiniList"></div>
-              </div>
-              <div class="agentDrawerHint">${t("agentDrawer.hint")}</div>
+            <div class="agentMemoryToolbar">
+              <button id="agentDrawerSettingsBtn" class="iconBtn" type="button">${t("agentDrawer.settings")}</button>
             </div>
+            <div id="agentDrawerMemoryList" class="agentMiniList"></div>
           </div>
           <div class="agentDrawerPanel" data-panel="browser">
             <iframe id="agentBrowserFrame" class="agentBrowserFrame" tabindex="-1" title="${t("agentDrawer.tabBrowser")}"></iframe>
           </div>
         </div>
       </aside>
+      <div class="workspaceBody"><div class="workspaceChatPane">
+        <div id="activeTitleRow" class="titleRow topbarTitle">
+          <div id="activeTitle" class="title">${t("app.noChat")}</div>
+          <div id="workspace" class="workspace"></div>
+        </div>
+
       <section id="messages" class="messages">
         <div class="empty">${t("app.createChatHint")}</div>
       </section>
@@ -265,10 +276,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           <textarea id="messageInput" placeholder="${t("composer.chooseChat")}" disabled></textarea>
           <input type="file" id="fileInput" multiple style="display:none">
           <div class="composerControls">
-            <button type="button" id="toggleThinking" class="togglePill" title="${t("composer.thinkingTitle")}">${t("composer.thinking")}</button>
-            <button type="button" id="toggleSearch" class="togglePill" title="${t("composer.searchTitle")}">${t("composer.search")}</button>
+            <div class="workspaceModeSwitch" aria-label="${w("Режим работы", "Work mode")}"><button type="button" id="workspaceDiscuss" aria-pressed="false">${w("Обсудить", "Discuss")}</button><button type="button" id="workspaceExecute" aria-pressed="true">${w("Выполнить", "Execute")}</button></div>
+            <select id="accessModePicker" class="modelPicker accessModePicker" aria-label="${w("Доступ текущего чата", "Current chat access")}" title="${w("Компьютер может запускать любые программы, читать, изменять и удалять файлы вне проекта и управлять рабочим столом с учётом разрешений операционной системы.", "Computer access can run any programs, read, change, or delete files outside the project, and control the desktop subject to operating system permissions.")}"><option value="project">${w("Проект", "Project")}</option><option value="computer">${w("Компьютер", "Computer")}</option></select>
+            <select id="modelPicker" class="modelPicker hidden" title="${t("topbar.model")}"></select>
             <button type="button" id="attachBtn" class="togglePill attachBtn" title="${t("composer.attachTitle")}">${t("composer.attach")}</button>
+            <details class="workspaceComposerMore"><summary aria-label="${w("Мышление, поиск и голос", "Thinking, search and voice")}">⋯</summary><div class="workspaceComposerMorePanel">            <button type="button" id="toggleThinking" class="togglePill hidden" title="${t("composer.thinkingTitle")}">${t("composer.thinking")}</button>
+            <button type="button" id="toggleSearch" class="togglePill hidden" title="${t("composer.searchTitle")}">${t("composer.search")}</button>
+
             <button type="button" id="voiceBtn" class="togglePill voiceBtn" title="${t("composer.voiceTitle")}">${t("composer.voice")}</button>
+</div></details>
             <div class="composerSpacer"></div>
             <button type="button" id="stopBtn" class="stopBtn hidden" title="${t("composer.stopTitle")}">${t("composer.stop")}</button>
             <button id="sendBtn" class="sendBtn" type="submit" disabled>↑</button>
@@ -276,11 +292,24 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         </form>
         <div id="status" class="status"></div>
       </div>
+      </div>
+      <aside id="workspaceInspector" class="workspaceInspector" aria-label="${w("Ход задачи", "Task progress")}"></aside>
+      <section id="workspaceBoard" class="workspaceBoard" aria-label="${w("Доска задач", "Task board")}">
+        <div class="workspaceBoardToolbar"><h1>${w("Задачи проекта", "Project tasks")}</h1><input id="workspaceTaskSearch" placeholder="${w("Найти задачу", "Find a task")}" aria-label="${w("Поиск задач", "Search tasks")}"><button id="workspaceBoardNew" class="iconBtn" type="button">+ ${w("Новая задача", "New task")}</button></div>
+        <div id="workspaceBoardColumns" class="workspaceBoardColumns"></div>
+      </section>
+      <section id="workspaceFiles" class="workspaceFiles" aria-label="${w("Файлы проекта", "Project files")}">
+        <div class="workspaceBoardToolbar"><h1>${w("Файлы проекта", "Project files")}</h1><button id="workspaceFilesRefresh" class="iconBtn" type="button">${w("Обновить", "Refresh")}</button></div>
+        <div class="workspaceFileLayout"><div id="workspaceFileTree" class="workspaceFileTree"></div><div class="workspaceFileEditor"><h2 id="workspaceFileName">${w("Только чтение", "Read only")}</h2><pre id="workspaceFilePreview" class="workspaceFilePreview"></pre></div></div>
+      </section>
+      </div>
     </main>
   </div>
 
   <script>
     const I18N = ${i18nPayload};
+    const LEGAL = ${legalPayload};
+    const APP_VERSION = ${JSON.stringify(AI_FREE_VERSION)};
     function t(key, vars = {}) {
       const template = (I18N.messages && I18N.messages[key]) || key;
       return String(template).replace(/\\{([a-zA-Z0-9_]+)\\}/g, (match, name) => (
@@ -318,8 +347,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const localStorage = safeStorage;
 
     let appState = { conversations: [], activeConversationId: null, workspaceRoot: "" };
+    const completedChatIds = new Set();
     let activeConversation = null;
-    let sending = false;
+    let selectionGeneration = 0;
+    let workspaceUi = null;
+    const chatDrafts = (${createChatDraftStore.toString()})();
+    let qwenCaptchaOverlay = null;
+    let shownQwenCaptchaKey = null;
     const typewriterTimers = new Set();
     const progressiveTextState = new Map();
 
@@ -351,7 +385,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const pipelineBody = document.getElementById("pipelineBody");
     const pipelinePanelBtn = document.getElementById("pipelinePanelBtn");
     const pipelineClose = document.getElementById("pipelineClose");
-    const pipelineMakeLeader = document.getElementById("pipelineMakeLeader");
     const pipelineAddAgent = document.getElementById("pipelineAddAgent");
     const SIDEBAR_WIDTH_KEY = "deepseek.sidebarWidth";
     const COMPOSER_HEIGHT_KEY = "deepseek.composerHeight";
@@ -363,6 +396,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       { id: "contrast", label: t("theme.contrast"), icon: "◑" },
     ];
     let availableUpdateCheck = null;
+    let accountsPollTimer = null;
 
     function isMessagesNearBottom() {
       return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 80;
@@ -377,6 +411,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       chatAutoFollow = isMessagesNearBottom();
     }, { passive: true });
 
+    const supportUi = (${setupSupportUi.toString()})({ api, language: I18N.language?.code,
+      getContext: () => ({ provider: activeConversation?.provider || '', model: activeConversation?.model || '' }) });
+    const announcementsUi = (${setupAnnouncementsUi.toString()})({ api, language: I18N.language?.code,
+      button: document.getElementById('announcementsButton'),
+      canShow: () => !document.querySelector('dialog[open], .settingsOverlay:not(.hidden)') });
     setupTheme();
     applySavedSidebarWidth();
     setupSidebarResize();
@@ -388,7 +427,6 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     // window-level overlay instead of being clipped by the sidebar.
     document.body.appendChild(updateConfirmOverlay);
 
-    document.getElementById("refreshBtn").addEventListener("click", loadState);
     updateToastDismiss.addEventListener("click", () => {
       updateToast.classList.add("hidden");
       updateToast.setAttribute("aria-hidden", "true");
@@ -469,6 +507,107 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
     });
 
+    // ---- Saved agents and Harness tasks ----
+    const getHarnessTaskView = ${getHarnessTaskView.toString()};
+    const taskPanelOverlay = document.getElementById("taskPanelOverlay");
+    const taskPanelBody = document.getElementById("taskPanelBody");
+    const taskPanelBtn = document.getElementById("taskPanelBtn");
+    function closeTaskPanel() {
+      taskPanelBtn.focus();
+      taskPanelOverlay.classList.add("hidden");
+      taskPanelOverlay.setAttribute("aria-hidden", "true");
+    }
+    document.getElementById("taskPanelClose").addEventListener("click", closeTaskPanel);
+    taskPanelOverlay.addEventListener("click", event => { if (event.target === taskPanelOverlay) closeTaskPanel(); });
+    taskPanelBtn.addEventListener("click", () => {
+      taskPanelOverlay.classList.remove("hidden");
+      taskPanelOverlay.setAttribute("aria-hidden", "false");
+      renderTaskPanel();
+      document.getElementById("taskPanelClose").focus();
+    });
+    document.getElementById("taskPanelCreate").addEventListener("click", async () => {
+      closeTaskPanel();
+      try { await openNewChatModal(); newRoleSelect.value = "developer"; }
+      catch (error) { setStatus(error.message, true); }
+    });
+    async function continueTaskFromPanel(id, taskId, button) {
+      if (chatDrafts.isSending(id)) return;
+      button.disabled = true;
+      chatDrafts.startSend(id);
+      try {
+        const data = await api("/api/conversations/" + id);
+        const view = getHarnessTaskView(data.conversation, { running: (appState.runningTaskIds || []).includes(id) });
+        if (!view?.canResume || view.id !== taskId) throw new Error(t("tasks.resumeUnavailable"));
+        closeTaskPanel();
+        await loadState(id);
+        await postStreamingMessage(id, { content: "продолжи", resumeTaskId: view.id }, data.conversation.provider, data.conversation);
+      } catch (error) { setStatus(error.message, true); }
+      finally {
+        chatDrafts.finishSend(id);
+        button.disabled = false;
+        await loadState(activeConversation?.id).catch(() => {});
+      }
+    }
+    async function stopTaskFromPanel(id, button) {
+      button.disabled = true;
+      try {
+        await api("/api/conversations/" + id + "/stop", { method: "POST" });
+        await loadState(activeConversation?.id);
+      } catch (error) { setStatus(error.message, true); }
+      finally { button.disabled = false; }
+    }
+    function renderTaskPanel() {
+      if (taskPanelOverlay.classList.contains("hidden")) return;
+      taskPanelBody.replaceChildren();
+      const running = new Set(appState.runningTaskIds || []);
+      const saved = (appState.conversations || []).filter(summary => summary.roleId !== "assistant" || summary.taskView || summary.pipelineAgents?.length);
+      if (!saved.length) {
+        const empty = document.createElement("p"); empty.textContent = t("tasks.empty"); taskPanelBody.appendChild(empty); return;
+      }
+      for (const summary of saved) {
+        const view = summary.taskView;
+        const busy = running.has(summary.id) || view?.canStop;
+        const card = document.createElement("article"); card.className = "taskCard";
+        const title = document.createElement("h3"); title.textContent = summary.title || t("tasks.agent");
+        const meta = document.createElement("p"); meta.className = "taskMeta";
+        meta.textContent = [(PROVIDER_INFO[summary.provider]?.label || summary.provider), roleLabel(summary.roleId), summary.model, summary.skillId].filter(Boolean).join(" · ");
+        const project = document.createElement("p"); project.className = "taskMeta"; project.textContent = summary.workspace || "";
+        const status = document.createElement("p"); status.className = "taskStatus";
+        status.textContent = t("tasks.status." + (view?.status || (busy ? "running" : "ready")));
+        card.append(title, meta, project, status);
+        if (view) {
+          const goal = document.createElement("p"); goal.textContent = view.goal; card.appendChild(goal);
+          const verification = document.createElement("p"); verification.className = "taskVerification";
+          verification.dataset.result = view.verification; verification.textContent = t("tasks.verification." + view.verification); card.appendChild(verification);
+          if (view.nextResumeAt) {
+            const next = document.createElement("p"); next.className = "taskMeta";
+            const deadline = new Date(view.nextResumeAt); next.textContent = t("tasks.nextResume", { time: Number.isNaN(deadline.getTime()) ? "—" : deadline.toLocaleString() }); card.appendChild(next);
+          }
+          if (view.resumeReason && !busy && view.status !== "completed") {
+            const reason = document.createElement("p"); reason.className = "taskMeta"; reason.textContent = t("tasks.reason." + view.resumeReason); card.appendChild(reason);
+          }
+          if (view.checks.length || view.changedFiles.length) {
+            const details = document.createElement("details"); const label = document.createElement("summary"); label.textContent = t("tasks.evidence"); details.appendChild(label);
+            const list = document.createElement("ul");
+            for (const check of view.checks) { const item = document.createElement("li"); item.textContent = (check.ok ? "✓ " : "✗ ") + check.name + " · exit " + (check.status ?? "?"); list.appendChild(item); }
+            for (const file of view.changedFiles) { const item = document.createElement("li"); item.textContent = file; list.appendChild(item); }
+            details.appendChild(list); card.appendChild(details);
+          }
+        }
+        const actions = document.createElement("div"); actions.className = "taskActions";
+        const open = document.createElement("button"); open.type = "button"; open.className = "iconBtn"; open.textContent = t("tasks.open");
+        open.addEventListener("click", () => { closeTaskPanel(); loadState(summary.id).catch(error => setStatus(error.message, true)); }); actions.appendChild(open);
+        if (busy) {
+          const stop = document.createElement("button"); stop.type = "button"; stop.className = "iconBtn"; stop.textContent = t("tasks.stop");
+          stop.addEventListener("click", () => stopTaskFromPanel(summary.id, stop)); actions.appendChild(stop);
+        } else if (view && ["paused", "interrupted", "failed", "cancelled"].includes(view.status)) {
+          const resume = document.createElement("button"); resume.type = "button"; resume.className = "iconBtn"; resume.textContent = t("tasks.continue"); resume.disabled = !view.canResume;
+          resume.addEventListener("click", () => continueTaskFromPanel(summary.id, view.id, resume)); actions.appendChild(resume);
+        }
+        card.appendChild(actions); taskPanelBody.appendChild(card);
+      }
+    }
+
     // ---- New chat modal ----
     const newChatOverlay = document.getElementById("newChatOverlay");
     const openNewChatBtn = document.getElementById("openNewChat");
@@ -479,22 +618,41 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const newFormError = document.getElementById("newFormError");
     const recentProjects = document.getElementById("recentProjects");
     let browseDefaultPath = "";
+    let pendingHandoffFrom = null;
+    const newRoleSelect = document.getElementById("newRole");
+    const handoffTaskBtn = document.getElementById("handoffTaskBtn");
+    handoffTaskBtn.addEventListener("click", () => {
+      if (activeConversation) openNewChatModal(activeConversation).catch(e => setStatus(e.message, true));
+    });
 
-    openNewChatBtn.addEventListener("click", openNewChatModal);
+    openNewChatBtn.addEventListener("click", () => openNewChatModal());
     newChatClose.addEventListener("click", closeNewChatModal);
     newChatOverlay.addEventListener("click", (e) => {
       if (e.target === newChatOverlay) closeNewChatModal();
     });
 
-    async function openNewChatModal() {
-      await refreshModelCatalog();
+    async function openNewChatModal(source = null) {
+      pendingHandoffFrom = source?.id || null;
+      newWorkspaceInput.readOnly = Boolean(source);
+      newCreateFolder.disabled = Boolean(source);
+      document.getElementById("browseBtn").disabled = Boolean(source);
+      document.getElementById("newHandoffNote").classList.toggle("hidden", !source);
+      newRoleSelect.innerHTML = "";
+      for (const role of AGENT_ROLES) {
+        const option = document.createElement("option");
+        option.value = role.id; option.textContent = role.label;
+        newRoleSelect.appendChild(option);
+      }
+      newRoleSelect.value = source?.roleId || "assistant";
+      await refreshModelCatalog({ forceQwen: true });
       await refreshAvailableProviders();
       renderProviderPicker();
       renderModePickerForProvider();
       newFormError.classList.add("hidden");
       newFormError.textContent = "";
-      newTitleInput.value = "";
+      newTitleInput.value = source ? "Передача: " + source.title : "";
       newCreateFolder.checked = false;
+      browseSection.classList.add("hidden");
       recentProjects.innerHTML = "";
       newChatOverlay.classList.remove("hidden");
       newChatOverlay.setAttribute("aria-hidden", "false");
@@ -502,8 +660,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       try {
         const data = await api("/api/projects");
         browseDefaultPath = data.defaultWorkspace || data.home || "";
-        newWorkspaceInput.value = browseDefaultPath;
-        for (const project of data.projects || []) {
+        newWorkspaceInput.value = source?.workspace || browseDefaultPath;
+        for (const project of source ? [] : data.projects || []) {
           const chip = document.createElement("button");
           chip.type = "button";
           chip.className = "chip" + (project.exists ? "" : " missing");
@@ -518,6 +676,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       newTitleInput.focus();
     }
     function closeNewChatModal() {
+      pendingHandoffFrom = null;
       newChatOverlay.classList.add("hidden");
       newChatOverlay.setAttribute("aria-hidden", "true");
     }
@@ -608,6 +767,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           method: "POST",
           body: { parent: currentBrowsePath, name },
         });
+        newWorkspaceInput.value = data.path;
         hideCreateFolderRow();
         // Сразу заходим в созданную папку — обычно юзер хочет именно это.
         await navigateBrowse(data.path);
@@ -627,6 +787,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         params.set("hidden", browseShowHidden.checked ? "1" : "0");
         const data = await api("/api/browse?" + params.toString());
         currentBrowsePath = data.path;
+        newWorkspaceInput.value = data.path;
         currentBrowseParent = data.parent;
         browseHome_ = data.home;
         if (data.defaultWorkspace && !browseDefaultPath) {
@@ -680,21 +841,31 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       newFormError.textContent = "";
       setStatus(t("newChat.creating"));
       try {
+        const selectedProviderInfo = PROVIDER_INFO[newChatSelectedProvider] || PROVIDER_INFO.deepseek;
+        const modeDef = (selectedProviderInfo.modes || []).find((item) => item.id === newChatSelectedMode);
+        const selectedModeProvider = modeDef?.provider || newChatSelectedProvider;
         const data = await api("/api/conversations", {
           method: "POST",
           body: {
             title,
             workspace,
             createFolder,
+            handoffFrom: pendingHandoffFrom,
+            roleId: newRoleSelect.value,
             mode: newChatSelectedMode,
-            provider: newChatSelectedProvider,
-            model: defaultModelForProviderMode(newChatSelectedProvider, newChatSelectedMode),
+            provider: selectedModeProvider,
+            model: modeDef?.model || defaultModelForProviderMode(newChatSelectedProvider, newChatSelectedMode),
           },
         });
         activeConversation = data.conversation;
         await loadState(activeConversation.id);
         renderConversation(activeConversation);
         closeNewChatModal();
+        if (data.conversation.handoff) {
+          messageInput.value = "/code Продолжи переданную задачу. Сначала сверь состояние проекта и результаты предыдущего агента.";
+          chatDrafts.set(activeConversation.id, messageInput.value);
+          autoGrowInput();
+        }
         setStatus("");
       } catch (err) {
         newFormError.textContent = err.message;
@@ -721,6 +892,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     function applyToggleUI() {
       toggleThinking.classList.toggle("active", thinkingActive);
       toggleSearch.classList.toggle("active", searchActive);
+    }
+
+    function supportsThinkingControl(provider, model) {
+      return (provider === "deepseek" || provider === "qwen") && model?.reasoning !== true;
+    }
+
+    function supportsSearchControl(provider, model) {
+      return provider === "deepseek" || (provider === "qwen" && model?.search === true);
     }
     applyToggleUI();
 
@@ -755,6 +934,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     ]);
 
     let attachments = []; // [{ name, size, content }]
+    const attachmentDrafts = new Map();
     const fileInput = document.getElementById("fileInput");
     const attachBtn = document.getElementById("attachBtn");
     const voiceBtn = document.getElementById("voiceBtn");
@@ -778,19 +958,37 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
     });
 
+    async function ensureVoiceRuntime() {
+      let status = await api("/api/voice/status");
+      if (!status.helperAvailable || !status.modelAvailable) {
+        setStatus(t("composer.voiceInstalling"));
+        status = await api("/api/voice/install", { method: "POST" });
+      }
+      if (!status.helperAvailable || !status.modelAvailable) {
+        throw new Error(t("composer.voiceMissing", { path: status.helper || "" }));
+      }
+    }
+
+    async function transcribeAudioBlob(blob) {
+      await ensureVoiceRuntime();
+      setStatus(t("composer.voiceTranscribing"));
+      const result = await api("/api/voice/transcribe", {
+        method: "POST",
+        body: {
+          dataBase64: await blobToBase64(blob),
+          mimeType: blob.type || "audio/wav",
+          language: "auto",
+        },
+      });
+      return String(result.text || "").trim();
+    }
+
     async function startVoiceRecording() {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!navigator.mediaDevices?.getUserMedia || !AudioContextClass) {
         throw new Error(t("composer.voiceUnsupported"));
       }
-      let status = await api("/api/voice/status");
-      if (!status.helperAvailable || !status.modelAvailable) {
-        setStatus(t("composer.voiceInstalling"));
-        status = await api("/api/voice/install", { method: "POST" });
-        if (!status.helperAvailable || !status.modelAvailable) {
-          throw new Error(t("composer.voiceMissing", { path: status.helper || "" }));
-        }
-      }
+      await ensureVoiceRuntime();
       voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       voiceChunks = [];
       voiceAudioContext = new AudioContextClass();
@@ -837,17 +1035,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         setStatus(t("composer.voiceNoSpeech"), true);
         return;
       }
-      setStatus(t("composer.voiceTranscribing"));
-      const dataBase64 = await blobToBase64(blob);
-      const result = await api("/api/voice/transcribe", {
-        method: "POST",
-        body: {
-          dataBase64,
-          mimeType: blob.type || "audio/wav",
-          language: "auto",
-        },
-      });
-      const text = String(result.text || "").trim();
+      const text = await transcribeAudioBlob(blob);
       if (!text) {
         setStatus(t("composer.voiceNoSpeech"), true);
         return;
@@ -941,8 +1129,35 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const fileName = fromClipboard ? clipboardImageName(file, index) : file.name;
         const ext = (fileName.split(".").pop() || "").toLowerCase();
         const visionImageExts = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+        const audioExts = ["mp3", "wav", "ogg", "flac", "m4a", "aac", "webm"];
         const isImage = (file.type.startsWith("image/") && file.type !== "image/svg+xml")
           || visionImageExts.includes(ext);
+        const isAudio = file.type.startsWith("audio/") || (!file.type.startsWith("video/") && audioExts.includes(ext));
+
+        if (isAudio) {
+          if (file.size > 50 * 1024 * 1024) {
+            alert(t("file.audioTooLarge", { name: fileName }));
+            continue;
+          }
+          try {
+            const transcript = await transcribeAudioBlob(file);
+            if (!transcript) {
+              alert(t("file.audioNoSpeech", { name: fileName }));
+              continue;
+            }
+            attachments.push({
+              name: fileName,
+              size: file.size,
+              kind: "text",
+              content: t("file.audioTranscript", { name: fileName, text: transcript }),
+            });
+            added += 1;
+            setStatus("");
+          } catch (err) {
+            alert(t("file.audioFailed", { name: fileName, message: err.message }));
+          }
+          continue;
+        }
 
         if (file.type === "image/svg+xml" || ext === "svg") {
           alert(t("file.svgUnsupported", { name: fileName }));
@@ -1027,6 +1242,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     });
 
     function renderAttachments() {
+      if (activeConversation?.id) attachmentDrafts.set(activeConversation.id, attachments);
       attachmentList.innerHTML = "";
       attachments.forEach((att, index) => {
         const chip = document.createElement("span");
@@ -1072,50 +1288,21 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     // Qwen: выбор модели в picker (см. QWEN_MODELS в config.mjs).
     const PROVIDER_PICK_KEY = "deepseek.newchat.provider";
 
-    let PROVIDER_INFO = {
-      deepseek: {
-        label: "DeepSeek",
-        sub: "chat.deepseek.com",
-        defaultMode: "fast",
-        modes: [
-          { id: "fast", title: "DeepSeek v4 Flash", sub: t("provider.deepseekFast"), model: "deepseek-v4-flash" },
-          { id: "expert", title: "DeepSeek v4 Pro", sub: t("provider.deepseekExpert"), model: "deepseek-v4-pro", reasoning: true },
-          { id: "vision", title: "DeepSeek v4 Vision", sub: t("provider.deepseekVision"), model: "deepseek-v4-vision", vision: true },
-        ],
-        models: [
-          { id: "deepseek-v4-flash", label: "DeepSeek v4 Flash" },
-          { id: "deepseek-v4-pro", label: "DeepSeek v4 Pro", reasoning: true },
-          { id: "deepseek-v4-vision", label: "DeepSeek v4 Vision" },
-        ],
-        defaultModel: "deepseek-v4-flash",
-      },
-      qwen: {
-        label: "Qwen",
-        sub: "chat.qwen.ai",
-        defaultMode: "default",
-        modes: [
-          { id: "default", title: "Qwen Chat", sub: t("provider.qwenDefault"), model: "qwen3.7-plus" },
-        ],
-        models: [
-          { id: "qwen3.7-plus",  label: "Qwen3.7 Plus" },
-          { id: "qwen3.7-max",   label: "Qwen3.7 MAX" },
-          { id: "qwen3.6-plus",  label: "Qwen3.6 Plus" },
-          { id: "qwen3-max",     label: "Qwen3 Max" },
-          { id: "qwen2.5-plus",  label: "Qwen 2.5 Plus" },
-          { id: "qwq-32b",       label: "QwQ-32B (reasoning)" },
-          { id: "qwen-vl-max",   label: "Qwen-VL Max (vision)" },
-        ],
-        defaultModel: "qwen3.7-plus",
-      },
-    };
+    let PROVIDER_INFO = ${JSON.stringify(uiModelCatalog().providers)};
 
-    async function refreshModelCatalog() {
+    async function refreshModelCatalog({ forceQwen = false } = {}) {
       try {
-        const r = await fetch("/api/model-catalog");
+        const r = await fetch(forceQwen ? "/api/model-catalog?refresh=qwen" : "/api/model-catalog");
         if (!r.ok) return;
         const j = await r.json();
         if (j && j.providers && typeof j.providers === "object") {
           PROVIDER_INFO = j.providers;
+          if (newChatSelectedProvider === "codex" && PROVIDER_INFO.chatgpt?.modes?.some((mode) => mode.provider === "codex")) {
+            newChatSelectedProvider = "chatgpt";
+            newChatSelectedMode = "codex";
+            localStorage.setItem(PROVIDER_PICK_KEY, newChatSelectedProvider);
+            localStorage.setItem(NEWCHAT_MODE_KEY, newChatSelectedMode);
+          }
         }
       } catch {}
     }
@@ -1128,7 +1315,35 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     function findModelInfo(providerId, modelId) {
       const info = PROVIDER_INFO[providerId] || PROVIDER_INFO.deepseek;
-      return (info.models || []).find((item) => item.id === modelId) || null;
+      return (info.models || []).find((item) => item.id === (info.modelAliases?.[modelId] || modelId)) || null;
+    }
+
+    function resolveMediaCapabilities(providerId, modelId) {
+      const info = PROVIDER_INFO[providerId] || PROVIDER_INFO.deepseek;
+      const model = findModelInfo(providerId, modelId);
+      const media = { ...(info.media || {}), ...(model?.media || {}) };
+      return {
+        imageInput: media.imageInput === true,
+        imageOutput: media.imageOutput === true,
+        audioInput: media.audioInput === true || media.audioInput === "transcription",
+        audioOutput: media.audioOutput === true,
+      };
+    }
+
+    function resolveActiveMediaCapabilities() {
+      if (!activeConversation) return resolveMediaCapabilities("deepseek", "deepseek-v4-flash");
+      const providerId = activeConversation.provider || "deepseek";
+      const info = PROVIDER_INFO[providerId] || PROVIDER_INFO.deepseek;
+      return resolveMediaCapabilities(providerId, activeConversation.model || info.defaultModel);
+    }
+
+    function mediaCapabilityLabels(media) {
+      return [
+        media.imageInput ? t("media.imageInput") : "",
+        media.imageOutput ? t("media.imageOutput") : "",
+        media.audioInput ? t("media.audioInput") : "",
+        media.audioOutput ? t("media.audioOutput") : "",
+      ].filter(Boolean);
     }
 
     const newChatProviderPicker = document.getElementById("newChatProvider");
@@ -1136,30 +1351,26 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     let availableProviders = ["deepseek"]; // подтянем с сервера через /api/providers
     let providerLoginStates = new Map();
+    let providerRuntimeStates = new Map();
     let AGENT_ROLES = [
       { id: "assistant", label: t("role.assistant"), description: t("role.assistantDescription") },
     ];
     let newChatSelectedProvider = localStorage.getItem(PROVIDER_PICK_KEY) || "deepseek";
     let newChatSelectedMode = localStorage.getItem(NEWCHAT_MODE_KEY) || "fast";
 
-    async function connectProvider(id, { confirmFirst = true } = {}) {
+    async function connectProvider(id, { preserveSelection = false } = {}) {
       const info = PROVIDER_INFO[id];
       if (!info) return;
       const label = info.label;
       const providerButton = newChatProviderPicker.querySelector('[data-provider="' + id + '"] .reconnectLink');
       if (providerButton?.disabled) return;
-      const confirmKey = id === "chatgpt" ? "provider.chatgptConnectConfirm" : "provider.connectConfirm";
-      if (confirmFirst && !confirm(
-        t(confirmKey, { label }),
-      )) return;
       if (providerButton) providerButton.disabled = true;
       try {
         const r = await fetch("/api/providers/" + id + "/login", { method: "POST" });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
         if (j.embedLogin && id === "chatgpt") {
-          setAgentDrawerTab("browser");
-          openAgentDrawer();
+          openAgentDrawer("browser");
           notifyBrowserTab("chatgpt", { force: true });
           alert(t("provider.chatgptEmbedLogin"));
         }
@@ -1168,26 +1379,33 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             await new Promise((resolve) => setTimeout(resolve, 5000));
             await refreshAvailableProviders();
             const loginStatus = providerLoginStates.get(id);
+            if (loginStatus?.state === "running") setStatus(loginStatus.message || "Ожидаем завершения входа…");
             if (loginStatus?.state === "error") {
               alert(t("provider.connectFailed", { label, message: loginStatus.error || "Browser launch failed" }));
               return;
             }
-            if (availableProviders.includes(id)) {
-              newChatSelectedProvider = id;
-              localStorage.setItem(PROVIDER_PICK_KEY, id);
+            if (availableProviders.includes(id) && (j.embedLogin || loginStatus?.state === "completed")) {
+              if (!preserveSelection) {
+                newChatSelectedProvider = id;
+                localStorage.setItem(PROVIDER_PICK_KEY, id);
+              }
               renderProviderPicker();
               renderModePickerForProvider();
               alert(t("provider.connectedAlert", { label }));
               return;
             }
           }
-          alert(id === "chatgpt" ? t("provider.chatgptEmbedLoginTimeout", { label }) : t("provider.tokenMissing", { id }));
+          const pending = providerLoginStates.get(id);
+          alert(pending?.state === "running" ? (pending.message || "Подготовка или вход продолжается. Откройте Настройки → Аккаунты, чтобы увидеть состояние.")
+            : id === "chatgpt" ? t("provider.chatgptEmbedLoginTimeout", { label }) : (pending?.error || t("provider.tokenMissing", { id })));
           return;
         }
         await refreshAvailableProviders();
         if (availableProviders.includes(id)) {
-          newChatSelectedProvider = id;
-          localStorage.setItem(PROVIDER_PICK_KEY, id);
+          if (!preserveSelection) {
+            newChatSelectedProvider = id;
+            localStorage.setItem(PROVIDER_PICK_KEY, id);
+          }
           renderProviderPicker();
           renderModePickerForProvider();
           alert(t("provider.connectedAlert", { label }));
@@ -1201,6 +1419,31 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
     }
 
+    async function installCodexRuntimeFromUi(actionButton = null) {
+      const installButton = actionButton
+        || newChatModePicker.querySelector('.codexModeAction[data-action="install"]')
+        || newChatProviderPicker.querySelector('[data-provider="codex"] .codexInstallLink');
+      if (installButton?.disabled) return;
+      if (installButton) {
+        installButton.disabled = true;
+        installButton.textContent = "Установка…";
+      }
+      try {
+        const r = await fetch("/api/providers/codex/install", { method: "POST" });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+        await refreshAvailableProviders();
+        renderProviderPicker();
+        renderModePickerForProvider();
+        await connectProvider("codex", { preserveSelection: true });
+      } catch (e) {
+        alert("Codex CLI: " + e.message);
+        await refreshAvailableProviders();
+        renderProviderPicker();
+        renderModePickerForProvider();
+      }
+    }
+
     async function refreshAvailableProviders() {
       try {
         const r = await fetch("/api/providers");
@@ -1209,7 +1452,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           providerLoginStates = new Map((j.providers || []).map((p) => [p.id, {
             state: p.loginState || "idle",
             error: p.loginError || "",
+            message: p.loginMessage || "",
+            code: p.loginCode || null,
           }]));
+          providerRuntimeStates = new Map((j.providers || []).map((p) => [p.id, p.runtime || null]));
           availableProviders = (j.providers || []).filter((p) => p.hasAuth).map((p) => p.id);
         }
       } catch {}
@@ -1219,7 +1465,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       newChatProviderPicker.innerHTML = "";
       for (const id of Object.keys(PROVIDER_INFO)) {
         const info = PROVIDER_INFO[id];
+        if (info.hiddenInProviderPicker) continue;
         const isAuthed = availableProviders.includes(id);
+        const runtime = providerRuntimeStates.get(id);
+        const codexRuntimeMissing = id === "codex" && runtime && !runtime?.installed;
         const btn = document.createElement("div");
         btn.setAttribute("role", "button");
         btn.tabIndex = 0;
@@ -1231,11 +1480,18 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         btn.innerHTML =
           '<div class="providerOptionTitle"></div>' +
           '<div class="providerOptionSub"></div>' +
-          (isAuthed 
-            ? '<button type="button" class="reconnectLink success" title="' + t("provider.connectedTitle") + '">' + t("provider.connected") + '</button>'
-            : '<button type="button" class="reconnectLink danger" title="' + t("provider.authorizeTitle") + '">' + t("provider.authorize") + '</button>');
+          (codexRuntimeMissing
+            ? '<button type="button" class="codexInstallLink danger">Установить CLI</button>'
+            : (isAuthed
+              ? '<button type="button" class="reconnectLink success" title="' + t("provider.connectedTitle") + '">' + t("provider.connected") + '</button>'
+              : '<button type="button" class="reconnectLink danger" title="' + t("provider.authorizeTitle") + '">' + t("provider.authorize") + '</button>'));
         btn.querySelector(".providerOptionTitle").textContent = info.icon ? (info.icon + " " + info.label) : info.label;
-        btn.querySelector(".providerOptionSub").textContent = info.sub;
+        const runtimeText = id === "codex"
+          ? (runtime?.installed
+            ? ("CLI: " + (runtime?.version || "готов") + (runtime?.source ? " · " + runtime.source : ""))
+            : "CLI: не установлен")
+          : info.sub;
+        btn.querySelector(".providerOptionSub").textContent = runtimeText;
         newChatProviderPicker.appendChild(btn);
       }
     }
@@ -1267,8 +1523,26 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         btn.innerHTML =
           '<div class="modeOptionTitle"></div><div class="modeOptionSub"></div>';
         btn.querySelector(".modeOptionTitle").textContent = m.title;
-        btn.querySelector(".modeOptionSub").textContent = m.sub;
+        const modeProvider = m.provider || newChatSelectedProvider;
+        const media = resolveMediaCapabilities(modeProvider, m.model);
+        const mediaLabels = mediaCapabilityLabels(media);
+        btn.querySelector(".modeOptionSub").textContent = [m.sub, mediaLabels.join(" · ")].filter(Boolean).join(" · ");
         newChatModePicker.appendChild(btn);
+
+        if (modeProvider === "codex") {
+          const runtime = providerRuntimeStates.get("codex");
+          const codexAuthed = availableProviders.includes("codex");
+          const actions = document.createElement("div");
+          actions.className = "codexModeActions";
+          if (runtime && !runtime.installed) {
+            actions.innerHTML = '<button type="button" class="codexModeAction danger" data-action="install">Установить CLI</button>';
+          } else if (!codexAuthed) {
+            actions.innerHTML = '<button type="button" class="codexModeAction danger" data-action="login">Войти через ChatGPT</button>';
+          } else {
+            actions.innerHTML = '<span class="codexModeStatus success">✓ Codex CLI подключён</span>';
+          }
+          newChatModePicker.appendChild(actions);
+        }
       }
     }
 
@@ -1276,6 +1550,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const opt = event.target.closest(".providerOption");
       if (!opt) return;
       const id = opt.dataset.provider;
+
+      const installCodexBtn = event.target.closest(".codexInstallLink");
+      if (installCodexBtn && id === "codex") {
+        event.stopPropagation();
+        await installCodexRuntimeFromUi();
+        return;
+      }
 
       // Запускаем авторизацию ТОЛЬКО если кликнули по кнопке НЕавторизованного провайдера.
       // Если провайдер уже подключен, клик по зеленому бейджу просто выбирает его!
@@ -1300,7 +1581,18 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       opt.click();
     });
 
-    newChatModePicker.addEventListener("click", (event) => {
+    newChatModePicker.addEventListener("click", async (event) => {
+      const codexAction = event.target.closest(".codexModeAction");
+      if (codexAction) {
+        event.stopPropagation();
+        if (codexAction.dataset.action === "install") {
+          await installCodexRuntimeFromUi(codexAction);
+        } else if (codexAction.dataset.action === "login") {
+          await connectProvider("codex", { preserveSelection: true });
+        }
+        return;
+      }
+
       const opt = event.target.closest(".modeOption");
       if (!opt) return;
       newChatSelectedMode = opt.dataset.mode;
@@ -1321,12 +1613,18 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     document.getElementById("composer").addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (!activeConversation || sending) return;
+      if (!activeConversation || chatDrafts.isSending(activeConversation.id)) return;
+      const sentConversation = activeConversation;
+      const sentConvId = sentConversation.id;
       const rawUserMessage = messageInput.value.trim();
       if (!rawUserMessage && !attachments.length) return;
 
       const textFiles = attachments.filter((a) => a.kind === "text");
       const imageFiles = attachments.filter((a) => a.kind === "image");
+      if (imageFiles.length && !resolveActiveMediaCapabilities().imageInput) {
+        setStatus(t("file.imageUnsupported", { model: activeConversation.model || activeConversation.provider }), true);
+        return;
+      }
 
       // Если юзер прикрепил картинку, но ничего не написал — подставляем дефолтный
       // промпт. DeepSeek API не принимает пустой prompt, и сам по себе file_id
@@ -1350,7 +1648,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const sentDraftText = messageInput.value;
       const sentAttachments = attachments;
 
-      sending = true;
+      chatDrafts.startSend(sentConvId);
       setComposerEnabled(false);
       setStatus(t("composer.writingStatus"));
 
@@ -1358,66 +1656,44 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         await refreshAvailableProviders();
         if (!availableProviders.includes(sendProvider)) {
           setStatus(t("provider.authorizeTitle"));
-          await connectProvider(sendProvider, { confirmFirst: false });
+          await connectProvider(sendProvider);
           await refreshAvailableProviders();
           if (!availableProviders.includes(sendProvider)) {
-            setStatus(t("provider.tokenMissing", { id: sendProvider }), true);
+            const pending = providerLoginStates.get(sendProvider);
+            if (pending?.state === "running") {
+              setStatus(pending.message || "Подготовка или вход продолжается. Проверьте Настройки → Аккаунты.");
+              return;
+            }
+            setStatus(providerLoginStates.get(sendProvider)?.error || t("provider.tokenMissing", { id: sendProvider }), true);
             return;
           }
           setStatus("");
         }
 
-        if (sendProvider === "qwen" && imageFiles.length) {
-          throw new Error(t("file.qwenImageUnsupported"));
-        }
-
-        messageInput.value = "";
+        chatDrafts.clear(sentConvId);
+        if (activeConversation?.id === sentConvId) messageInput.value = "";
         // Сбросить авто-рост на исходную высоту (но если юзер тянул руками — оставить).
         if (!userResizedInput) messageInput.style.height = "";
-        attachments = [];
-        renderAttachments();
-        activeConversation.messages.push({
+        attachmentDrafts.delete(sentConvId);
+        if (activeConversation?.id === sentConvId) {
+          attachments = [];
+          renderAttachments();
+        }
+        sentConversation.messages.push({
           role: "user",
           content: displayForChat,
           ...(imageFiles.length ? {
             images: imageFiles.map((image) => "data:" + image.mimeType + ";base64," + image.dataBase64),
           } : {}),
         });
-        renderConversation(activeConversation);
+        if (activeConversation?.id === sentConvId) renderConversation(sentConversation);
 
-        // ChatGPT получает картинки inline. DeepSeek загружает их и передаёт
-        // полученные file_id в vision-completion.
         const refFileIds = [];
-        let inlineImages = [];
-        if (imageFiles.length) {
-          if (sendProvider === "chatgpt") {
-            inlineImages = imageFiles.map((img) => ({
-              name: img.name,
-              mimeType: img.mimeType,
-              dataBase64: img.dataBase64,
-            }));
-          } else {
-            for (let i = 0; i < imageFiles.length; i += 1) {
-              const img = imageFiles[i];
-              const num = imageFiles.length > 1 ? \` (\${i + 1}/\${imageFiles.length})\` : "";
-              setStatus(t("composer.uploadingImage", { num, name: img.name }));
-              const result = await api("/api/upload", {
-                method: "POST",
-                body: {
-                  name: img.name,
-                  mimeType: img.mimeType,
-                  dataBase64: img.dataBase64,
-                  chatSessionId: activeConversation.sessionId,
-                },
-              });
-              if (!result.fileId) throw new Error(t("file.uploadMissingId"));
-              refFileIds.push(result.fileId);
-            }
-          }
-        }
+        const inlineImages = imageFiles.map((image) => ({
+          name: image.name, mimeType: image.mimeType, dataBase64: image.dataBase64,
+        }));
 
         setStatus(t("composer.writingStatus"));
-        const sentConvId = activeConversation.id;
         const messageBody = {
           content: contentForApi,
           thinking: thinkingActive,
@@ -1431,8 +1707,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           })),
         };
 
-        if (["qwen", "chatgpt", "deepseek"].includes(sendProvider)) {
-          await postStreamingMessage(sentConvId, messageBody, sendProvider);
+        if (["qwen", "chatgpt", "deepseek", "googleai", "glm"].includes(sendProvider)) {
+          await postStreamingMessage(sentConvId, messageBody, sendProvider, sentConversation);
           return;
         }
 
@@ -1444,10 +1720,12 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         // Если сервер вернул running:true — это /code в фоне. Отпускаем UI,
         // даём юзеру переключаться по чатам. Polling сам подхватит результат.
         if (data.running) {
-          activeConversation = data.conversation;
-          await loadState(activeConversation.id);
-          renderConversation(activeConversation);
-          setStatus(t("composer.backgroundTask"));
+          if (activeConversation?.id === sentConvId) {
+            activeConversation = data.conversation;
+            await loadState(sentConvId);
+            renderConversation(activeConversation);
+            setStatus(t("composer.backgroundTask"));
+          }
           ensurePolling();
           return; // sending снимет в finally, polling завершит UI
         }
@@ -1455,30 +1733,36 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         if (data.needsChatGPTLogin) {
           activeConversation = data.conversation;
           renderConversation(activeConversation);
-          setAgentDrawerTab("browser");
+          openAgentDrawer("browser");
           ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
           notifyBrowserTab("chatgpt", { force: true });
           setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
           return;
         }
 
-        activeConversation = data.conversation;
-        await loadState(activeConversation.id);
-        renderConversation(activeConversation, { animateLastAssistant: true });
-        setStatus("");
+        if (activeConversation?.id === sentConvId) {
+          activeConversation = data.conversation;
+          await loadState(sentConvId);
+          renderConversation(activeConversation, { animateLastAssistant: true });
+          setStatus("");
+        }
       } catch (error) {
-        if (!messageInput.value.trim()) {
+        chatDrafts.set(sentConvId, sentDraftText);
+        if (activeConversation?.id === sentConvId && !messageInput.value.trim()) {
           messageInput.value = sentDraftText;
           autoGrowInput();
         }
         // Возвращаем файлы юзеру — иначе он не поймёт, что они пропали.
-        attachments = sentAttachments;
-        renderAttachments();
-        setStatus(error.message, true);
+        attachmentDrafts.set(sentConvId, sentAttachments);
+        if (activeConversation?.id === sentConvId) {
+          attachments = sentAttachments;
+          renderAttachments();
+        }
+        if (activeConversation?.id === sentConvId) setStatus(error.message, true);
       } finally {
-        sending = false;
+        chatDrafts.finishSend(sentConvId);
         setComposerEnabled(true);
-        messageInput.focus();
+        if (activeConversation?.id === sentConvId) messageInput.focus();
       }
     });
 
@@ -1500,7 +1784,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const next = Math.min(messageInput.scrollHeight, maxPx);
       messageInput.style.height = next + "px";
     };
-    messageInput.addEventListener("input", autoGrowInput);
+    messageInput.addEventListener("input", () => {
+      chatDrafts.set(activeConversation?.id, messageInput.value);
+      autoGrowInput();
+    });
     // Если пользователь сам потянул за уголок — запоминаем и не трогаем.
     messageInput.addEventListener("mousedown", (e) => {
       const rect = messageInput.getBoundingClientRect();
@@ -1511,11 +1798,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     });
 
     async function loadState(nextActiveId = null) {
-      appState = await api("/api/state");
+      const generation = ++selectionGeneration;
+      const nextState = await api("/api/state");
+      if (generation !== selectionGeneration) return;
+      appState = nextState;
       if (nextActiveId) appState.activeConversationId = nextActiveId;
       renderList();
       if (appState.activeConversationId) {
         const data = await api("/api/conversations/" + appState.activeConversationId);
+        if (generation !== selectionGeneration) return;
         activeConversation = data.conversation;
         renderConversation(activeConversation);
       } else {
@@ -1556,28 +1847,42 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     function runningIdsChanged(prev = [], next = []) {
       return prev.length !== next.length || prev.some((id, index) => id !== next[index]);
     }
+    function markCompletedChats(nextRunningIds = []) {
+      const nextRunning = new Set(nextRunningIds);
+      for (const id of appState.runningTaskIds || []) {
+        if (!nextRunning.has(id) && id !== appState.activeConversationId) completedChatIds.add(id);
+      }
+    }
     async function refreshExternalState() {
-      if (externalStateRefreshing || sending || shutdownStarted) return;
+      if (externalStateRefreshing || shutdownStarted) return;
       externalStateRefreshing = true;
+      const generation = selectionGeneration;
       try {
         const nextState = await api("/api/state");
+        if (generation !== selectionGeneration) return;
         const previousActiveId = appState.activeConversationId;
         const activeId = activeConversation?.id || previousActiveId;
         const previousActiveSummary = (appState.conversations || []).find((item) => item.id === activeId);
         const nextActiveSummary = (nextState.conversations || []).find((item) => item.id === activeId);
         const listChanged = runningIdsChanged(appState.runningTaskIds || [], nextState.runningTaskIds || [])
-          || (appState.conversations || []).length !== (nextState.conversations || []).length
+          || JSON.stringify(appState.conversations || []) !== JSON.stringify(nextState.conversations || [])
           || conversationSummaryChanged(previousActiveSummary, nextActiveSummary);
+        markCompletedChats(nextState.runningTaskIds);
         appState = {
           ...nextState,
-          activeConversationId: previousActiveId,
+          activeConversationId: nextState.conversations.some(item => item.id === previousActiveId) ? previousActiveId : null,
         };
         if (listChanged) {
           renderList();
           updateStopButton();
         }
-        if (activeConversation && conversationSummaryChanged(previousActiveSummary, nextActiveSummary)) {
-          const data = await api("/api/conversations/" + activeConversation.id);
+        if (activeConversation && !nextActiveSummary) {
+          activeConversation = null;
+          renderNoConversation();
+        } else if (activeConversation && conversationSummaryChanged(previousActiveSummary, nextActiveSummary)) {
+          const conversationId = activeConversation.id;
+          const data = await api("/api/conversations/" + conversationId);
+          if (generation !== selectionGeneration || activeConversation?.id !== conversationId) return;
           activeConversation = data.conversation;
           renderConversation(activeConversation);
         }
@@ -1600,8 +1905,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     }
     async function installPollTick() {
       if (!activeConversation) return stopInstallPolling();
+      const conversationId = activeConversation.id;
+      const generation = selectionGeneration;
       try {
-        const data = await api("/api/conversations/" + activeConversation.id);
+        const data = await api("/api/conversations/" + conversationId);
+        if (generation !== selectionGeneration || activeConversation?.id !== conversationId) return;
         activeConversation = data.conversation;
         renderConversation(activeConversation);
         const status = activeConversation.pendingInstallRequest?.status;
@@ -1620,14 +1928,17 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     }
 
     async function pollTick() {
+      const generation = selectionGeneration;
       let nextState;
       try {
         nextState = await api("/api/state");
       } catch {
         return; // сетевая ошибка — попробуем на следующем тике
       }
+      if (generation !== selectionGeneration) return;
       const prevRunning = new Set(appState.runningTaskIds || []);
       const nextRunning = new Set(nextState.runningTaskIds || []);
+      markCompletedChats(nextState.runningTaskIds);
       appState.conversations = nextState.conversations;
       appState.runningTaskIds = nextState.runningTaskIds;
       renderList();
@@ -1637,7 +1948,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       // (могут добавляться tool-логи во время /code).
       if (activeConversation && nextRunning.has(activeConversation.id)) {
         try {
-          const data = await api("/api/conversations/" + activeConversation.id);
+          const conversationId = activeConversation.id;
+          const data = await api("/api/conversations/" + conversationId);
+          if (generation !== selectionGeneration || activeConversation?.id !== conversationId) return;
           activeConversation = data.conversation;
           renderConversation(activeConversation);
         } catch {}
@@ -1646,7 +1959,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       // Если активный чат ТОЛЬКО ЧТО завершился — финальный рендер + сброс статуса.
       if (activeConversation && prevRunning.has(activeConversation.id) && !nextRunning.has(activeConversation.id)) {
         try {
-          const data = await api("/api/conversations/" + activeConversation.id);
+          const conversationId = activeConversation.id;
+          const data = await api("/api/conversations/" + conversationId);
+          if (generation !== selectionGeneration || activeConversation?.id !== conversationId) return;
           activeConversation = data.conversation;
           renderConversation(activeConversation, { animateLastAssistant: true });
           setStatus(formatAgentMetaStatus(activeConversation.lastAgentMeta));
@@ -1657,6 +1972,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     }
 
     function renderList() {
+      renderTaskPanel();
       chatList.innerHTML = "";
       const running = new Set(appState.runningTaskIds || []);
       for (const conversation of appState.conversations) {
@@ -1665,7 +1981,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         button.className =
           "chatItem"
           + (conversation.id === appState.activeConversationId ? " active" : "")
-          + (isRunning ? " running" : "");
+          + (isRunning ? " running" : "")
+          + (completedChatIds.has(conversation.id) ? " completed" : "");
+        button.dataset.conversationId = conversation.id;
         button.tabIndex = 0;
         button.setAttribute("role", "button");
         button.setAttribute("aria-label", conversation.title);
@@ -1716,7 +2034,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           }
         });
         const openConversation = async () => {
+          const generation = ++selectionGeneration;
           const data = await api("/api/conversations/" + conversation.id);
+          if (generation !== selectionGeneration) return;
+          completedChatIds.delete(conversation.id);
           appState.activeConversationId = conversation.id;
           activeConversation = data.conversation;
           renderList();
@@ -1730,17 +2051,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         });
         chatList.appendChild(button);
       }
+      workspaceUi?.update();
     }
 
     const activeModeBadge = document.getElementById("activeMode");
     const modelPickerEl = document.getElementById("modelPicker");
     const rolePickerEl = document.getElementById("rolePicker");
-    const coderToggleEl = document.getElementById("coderToggle");
-    const hardwareToggleEl = document.getElementById("hardwareToggle");
-    const pipelineToggleEl = document.getElementById("pipelineToggle");
-    const memoryToggleEl = document.getElementById("memoryToggle");
-    const autoSkillToggleEl = document.getElementById("autoSkillToggle");
-    const skillPickerEl = document.getElementById("skillPicker");
+    const modelCapabilitiesEl = document.getElementById("modelCapabilities");
     let installedSkills = [];
 
     async function ensureInstalledSkills() {
@@ -1754,48 +2071,30 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return installedSkills;
     }
 
-    function renderSkillPicker(conversation) {
-      const current = conversation.skillId || "";
-      skillPickerEl.innerHTML = "";
-      const none = document.createElement("option");
-      none.value = "";
-      none.textContent = t("topbar.skillNone");
-      if (!current) none.selected = true;
-      skillPickerEl.appendChild(none);
-      for (const skill of installedSkills) {
-        const opt = document.createElement("option");
-        opt.value = skill.id;
-        opt.textContent = skill.name || skill.id;
-        if (skill.id === current) opt.selected = true;
-        skillPickerEl.appendChild(opt);
-      }
-    }
-
     function renderNoConversation() {
       activeTitle.textContent = t("app.noChat");
       workspace.textContent = appState.workspaceRoot || "";
       activeModeBadge.classList.add("hidden");
       modelPickerEl.classList.add("hidden");
       rolePickerEl.classList.add("hidden");
-      coderToggleEl.classList.add("hidden");
-      hardwareToggleEl.classList.add("hidden");
-      pipelineToggleEl.classList.add("hidden");
-      memoryToggleEl.classList.add("hidden");
-      autoSkillToggleEl.classList.add("hidden");
-      skillPickerEl.classList.add("hidden");
-      if (agentDrawerControls) agentDrawerControls.classList.add("disabled");
+      handoffTaskBtn.disabled = true;
+      modelCapabilitiesEl.classList.add("hidden");
       if (agentDrawerMemoryList) agentDrawerMemoryList.innerHTML = "";
       messages.innerHTML = '<div class="empty">' + t("app.createChatHint") + '</div>';
       setComposerEnabled(false);
+      workspaceUi?.update();
     }
 
-    // Patch на сервере: обновить model / coderMode для активного чата.
+    // Patch на сервере: обновить модель и параметры активного чата.
     async function patchActiveConversation(payload) {
       if (!activeConversation) return;
-      const data = await api("/api/conversations/" + activeConversation.id, {
+      const conversationId = activeConversation.id;
+      const generation = selectionGeneration;
+      const data = await api("/api/conversations/" + conversationId, {
         method: "PATCH",
         body: payload,
       });
+      if (generation !== selectionGeneration || activeConversation?.id !== conversationId) return;
       activeConversation = data.conversation;
       renderConversation(activeConversation);
       renderList();
@@ -1804,39 +2103,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     modelPickerEl.addEventListener("change", () => {
       patchActiveConversation({ model: modelPickerEl.value }).catch((e) => setStatus(e.message, true));
     });
+    modelPickerEl.addEventListener("focus", async () => {
+      if (activeConversation?.provider !== "qwen") return;
+      const conversationId = activeConversation.id;
+      await refreshModelCatalog({ forceQwen: true });
+      if (activeConversation?.id === conversationId) renderConversation(activeConversation);
+    });
     rolePickerEl.addEventListener("change", () => {
       patchActiveConversation({ roleId: rolePickerEl.value }).catch((e) => setStatus(e.message, true));
-    });
-    coderToggleEl.addEventListener("click", () => {
-      const next = !(activeConversation && activeConversation.coderMode === true);
-      patchActiveConversation({
-        coderMode: next,
-        hardwareMode: next ? activeConversation?.hardwareMode === true : false,
-      }).catch((e) => setStatus(e.message, true));
-    });
-    hardwareToggleEl.addEventListener("click", () => {
-      const next = !(activeConversation && activeConversation.hardwareMode === true);
-      patchActiveConversation({
-        hardwareMode: next,
-        coderMode: next ? true : activeConversation?.coderMode === true,
-      }).catch((e) => setStatus(e.message, true));
-    });
-    pipelineToggleEl.addEventListener("click", () => {
-      const next = !(activeConversation && activeConversation.pipelineMode === true);
-      patchActiveConversation({ pipelineMode: next }).catch((e) => setStatus(e.message, true));
-    });
-    memoryToggleEl.addEventListener("click", () => {
-      const next = !(activeConversation && activeConversation.memoryEnabled !== false);
-      patchActiveConversation({ memoryEnabled: next }).catch((e) => setStatus(e.message, true));
-      if (activeConversation) setTimeout(() => refreshAgentDrawerMemory(activeConversation), 300);
-    });
-    autoSkillToggleEl.addEventListener("click", () => {
-      const next = !(activeConversation && activeConversation.autoSkill !== false);
-      patchActiveConversation({ autoSkill: next }).catch((e) => setStatus(e.message, true));
-    });
-    skillPickerEl.addEventListener("change", () => {
-      const skillId = skillPickerEl.value || null;
-      patchActiveConversation({ skillId }).catch((e) => setStatus(e.message, true));
     });
     pipelinePanelBtn.addEventListener("click", () => {
       pipelinePanel.classList.remove("hidden");
@@ -1844,6 +2118,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderPipelinePanel();
     });
     pipelineClose.addEventListener("click", () => {
+      pipelinePanelBtn.focus();
       pipelinePanel.classList.add("hidden");
       pipelinePanel.setAttribute("aria-hidden", "true");
     });
@@ -1852,14 +2127,16 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     const AGENT_DRAWER_WIDTH_BROWSER_KEY = "deepseek.agentDrawerWidth.browser";
     const AGENT_DRAWER_WIDTH_CONTROLS_KEY = "deepseek.agentDrawerWidth.controls";
     const agentDrawerBtn = document.getElementById("agentDrawerBtn");
+    const agentBrowserBtn = document.getElementById("agentBrowserBtn");
     const agentDrawer = document.getElementById("agentDrawer");
     const agentDrawerBackdrop = document.getElementById("agentDrawerBackdrop");
     const agentDrawerClose = document.getElementById("agentDrawerClose");
     const agentDrawerResize = document.getElementById("agentDrawerResize");
-    const agentDrawerControls = document.getElementById("agentDrawerControls");
+    const agentDrawerTitle = document.getElementById("agentDrawerTitle");
+    const agentDrawerSub = document.getElementById("agentDrawerSub");
+    const agentDrawerSettingsBtn = document.getElementById("agentDrawerSettingsBtn");
     const agentDrawerMemoryList = document.getElementById("agentDrawerMemoryList");
     const agentBrowserFrame = document.getElementById("agentBrowserFrame");
-    const agentDrawerTabs = agentDrawer.querySelectorAll(".agentDrawerTab");
     const agentDrawerPanels = agentDrawer.querySelectorAll(".agentDrawerPanel");
 
     function syncAgentBrowserDrawerLayout() {
@@ -1950,31 +2227,34 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     });
 
     function setAgentDrawerTab(tabId) {
-      for (const tab of agentDrawerTabs) {
-        tab.classList.toggle("active", tab.dataset.tab === tabId);
-      }
       for (const panel of agentDrawerPanels) {
         panel.classList.toggle("active", panel.dataset.panel === tabId);
       }
       agentDrawer.classList.toggle("browserOpen", tabId === "browser");
+      agentDrawerTitle.textContent = t(tabId === "browser" ? "agentDrawer.tabBrowser" : "agentDrawer.title");
+      agentDrawerSub.textContent = t(tabId === "browser" ? "agentDrawer.browserSub" : "agentDrawer.sub");
+      const open = agentDrawer.classList.contains("open");
+      agentDrawerBtn.classList.toggle("active", open && tabId === "controls");
+      agentBrowserBtn.classList.toggle("active", open && tabId === "browser");
       syncAgentBrowserDrawerLayout();
       if (tabId === "browser") {
         ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
       }
     }
 
-    function openAgentDrawer() {
+    function openAgentDrawer(tabId = "controls") {
+      setAgentDrawerTab(tabId);
       agentDrawer.classList.add("open");
       agentDrawer.setAttribute("aria-hidden", "false");
       agentDrawerBackdrop.classList.add("open");
       agentDrawerBackdrop.setAttribute("aria-hidden", "false");
-      agentDrawerBtn.classList.add("active");
+      agentDrawerBtn.classList.toggle("active", tabId === "controls");
+      agentBrowserBtn.classList.toggle("active", tabId === "browser");
       localStorage.setItem(AGENT_DRAWER_KEY, "1");
       syncAgentBrowserDrawerLayout();
       if (activeConversation) {
-        refreshAgentDrawerMemory(activeConversation);
-        const activeTab = agentDrawer.querySelector(".agentDrawerTab.active")?.dataset?.tab;
-        if (activeTab === "browser") {
+        if (tabId === "controls") refreshAgentDrawerMemory(activeConversation);
+        if (tabId === "browser") {
           ensureAgentBrowserLoaded(activeConversation.workspace || appState.workspaceRoot);
         }
       }
@@ -1986,6 +2266,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       agentDrawerBackdrop.classList.remove("open");
       agentDrawerBackdrop.setAttribute("aria-hidden", "true");
       agentDrawerBtn.classList.remove("active");
+      agentBrowserBtn.classList.remove("active");
       localStorage.setItem(AGENT_DRAWER_KEY, "0");
       syncAgentBrowserDrawerLayout();
     }
@@ -2062,8 +2343,16 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     }
 
     agentDrawerBtn.addEventListener("click", () => {
-      if (agentDrawer.classList.contains("open")) closeAgentDrawer();
-      else openAgentDrawer();
+      if (agentDrawer.classList.contains("open") && !isAgentDrawerBrowserMode()) closeAgentDrawer();
+      else openAgentDrawer("controls");
+    });
+    agentBrowserBtn.addEventListener("click", () => {
+      if (agentDrawer.classList.contains("open") && isAgentDrawerBrowserMode()) closeAgentDrawer();
+      else openAgentDrawer("browser");
+    });
+    agentDrawerSettingsBtn.addEventListener("click", () => {
+      closeAgentDrawer();
+      openSettings("agent");
     });
     agentDrawerClose.addEventListener("click", closeAgentDrawer);
     agentDrawerBackdrop.addEventListener("click", () => {
@@ -2071,13 +2360,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       if (browserTab) return;
       closeAgentDrawer();
     });
-    for (const tab of agentDrawerTabs) {
-      tab.addEventListener("click", () => setAgentDrawerTab(tab.dataset.tab));
+
+    function cleanAssistantDisplayContent(rawText) {
+      return String(rawText || "").replace(/^\\s*Thought Process\\s*(?:\\n+|$)/i, "");
     }
 
     function splitThinkingContent(rawText) {
       const text = String(rawText || "");
-      if (!text.includes("<think>")) {
+      if (!/^\\s*<think>/.test(text)) {
         return { hasThinking: false, thinking: "", content: text, isThinkingClosed: true };
       }
       const thinkStartIndex = text.indexOf("<think>");
@@ -2109,7 +2399,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const previousScrollTop = messages.scrollTop;
       const shouldFollow = conversationChanged || options.forceScrollBottom === true || chatAutoFollow;
       renderedConversationId = conversation.id;
+      if (conversationChanged) {
+        qwenCaptchaOverlay?.remove();
+        qwenCaptchaOverlay = null;
+        shownQwenCaptchaKey = null;
+      }
       chatAutoFollow = shouldFollow;
+      if (conversationChanged) workspaceUi?.conversationChanged();
+      else workspaceUi?.update();
       activeTitle.textContent = conversation.title;
       workspace.textContent = conversation.workspace || appState.workspaceRoot;
       if (appState.stateFile) workspace.title = t("chat.history", { file: appState.stateFile });
@@ -2125,21 +2422,47 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       // Model picker — для провайдеров с поддержкой смены модели.
       // Скрываем статический бейдж, если доступен интерактивный выбор модели, чтобы не было путаницы.
       if (Array.isArray(info.models) && info.models.length > 1) {
-        const currentModel = conversation.model || info.defaultModel || info.models[0].id;
+        const savedModel = conversation.model || info.defaultModel || info.models[0].id;
+        const currentModel = info.modelAliases?.[savedModel] || savedModel;
         modelPickerEl.innerHTML = "";
+        if (!info.models.some((item) => item.id === currentModel)) {
+          const unavailable = document.createElement("option");
+          unavailable.value = currentModel;
+          unavailable.textContent = currentModel + (document.documentElement.lang === "ru"
+            ? " · недоступна — выберите модель" : " · unavailable — choose a model");
+          unavailable.selected = true;
+          unavailable.disabled = true;
+          modelPickerEl.appendChild(unavailable);
+        }
         for (const m of info.models) {
           const opt = document.createElement("option");
           opt.value = m.id;
-          opt.textContent = m.label;
+          const labels = mediaCapabilityLabels(resolveMediaCapabilities(prov, m.id));
+          opt.textContent = m.label + (labels.length ? " · " + labels.join(" · ") : "");
           if (m.id === currentModel) opt.selected = true;
           modelPickerEl.appendChild(opt);
         }
         modelPickerEl.classList.remove("hidden");
+        modelPickerEl.disabled = (appState.runningTaskIds || []).includes(conversation.id);
         activeModeBadge.classList.add("hidden");
       } else {
         modelPickerEl.classList.add("hidden");
+        modelPickerEl.disabled = true;
         activeModeBadge.classList.remove("hidden");
       }
+
+      const selectedModel = conversation.model || info.defaultModel || info.models?.[0]?.id;
+      const selectedMedia = resolveMediaCapabilities(prov, selectedModel);
+      modelCapabilitiesEl.innerHTML = "";
+      for (const label of mediaCapabilityLabels(selectedMedia)) {
+        const badge = document.createElement("span");
+        badge.className = "modelCapabilityBadge";
+        badge.textContent = label;
+        badge.title = label;
+        badge.setAttribute("aria-label", label);
+        modelCapabilitiesEl.appendChild(badge);
+      }
+      modelCapabilitiesEl.classList.toggle("hidden", !modelCapabilitiesEl.childElementCount);
 
       rolePickerEl.innerHTML = "";
       for (const roleDef of AGENT_ROLES) {
@@ -2150,64 +2473,8 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         rolePickerEl.appendChild(opt);
       }
       rolePickerEl.classList.remove("hidden");
+      handoffTaskBtn.disabled = false;
 
-      // Coder/ESP работают для всех провайдеров через общий agent runtime.
-      coderToggleEl.classList.remove("hidden");
-      hardwareToggleEl.classList.remove("hidden");
-      if (prov === "chatgpt") {
-        toggleSearch.classList.add("hidden");
-      } else {
-        toggleSearch.classList.remove("hidden");
-      }
-      if (conversation.coderMode === true) {
-        coderToggleEl.classList.add("active");
-        coderToggleEl.textContent = t("topbar.coderOn");
-      } else {
-        coderToggleEl.classList.remove("active");
-        coderToggleEl.textContent = t("topbar.coder");
-      }
-      if (conversation.hardwareMode === true) {
-        hardwareToggleEl.classList.add("active");
-        hardwareToggleEl.textContent = t("topbar.hardwareOn");
-      } else {
-        hardwareToggleEl.classList.remove("active");
-        hardwareToggleEl.textContent = t("topbar.hardware");
-      }
-      pipelineToggleEl.classList.remove("hidden");
-      if (conversation.pipelineMode === true) {
-        pipelineToggleEl.classList.add("active");
-        pipelineToggleEl.textContent = t("topbar.pipelineOn");
-      } else {
-        pipelineToggleEl.classList.remove("active");
-        pipelineToggleEl.textContent = t("topbar.pipeline");
-      }
-
-      memoryToggleEl.classList.remove("hidden");
-      if (conversation.memoryEnabled !== false) {
-        memoryToggleEl.classList.add("active");
-        memoryToggleEl.textContent = t("topbar.memoryOn");
-      } else {
-        memoryToggleEl.classList.remove("active");
-        memoryToggleEl.textContent = t("topbar.memory");
-      }
-
-      autoSkillToggleEl.classList.remove("hidden");
-      if (conversation.autoSkill !== false) {
-        autoSkillToggleEl.classList.add("active");
-        autoSkillToggleEl.textContent = t("topbar.autoSkillOn");
-      } else {
-        autoSkillToggleEl.classList.remove("active");
-        autoSkillToggleEl.textContent = t("topbar.autoSkill");
-      }
-
-      ensureInstalledSkills().then(() => {
-        renderSkillPicker(conversation);
-        skillPickerEl.classList.remove("hidden");
-      }).catch(() => {
-        skillPickerEl.classList.add("hidden");
-      });
-
-      if (agentDrawerControls) agentDrawerControls.classList.remove("disabled");
       refreshAgentDrawerMemory(conversation);
       if (agentDrawer.querySelector('[data-panel="browser"]').classList.contains("active")) {
         updateAgentBrowserWorkspace(conversation);
@@ -2215,7 +2482,12 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
       // Синхронизация и блокировка "Глубокого мышления"
       const currentModel = conversation.model || info.defaultModel || (info.models && info.models[0]?.id);
-      const isReasoningModel = findModelInfo(prov, currentModel)?.reasoning === true;
+      const currentModelInfo = findModelInfo(prov, currentModel);
+      const thinkingSupported = supportsThinkingControl(prov, currentModelInfo);
+      const searchSupported = supportsSearchControl(prov, currentModelInfo);
+      toggleThinking.classList.toggle("hidden", !thinkingSupported);
+      toggleSearch.classList.toggle("hidden", !searchSupported);
+      const isReasoningModel = currentModelInfo?.reasoning === true;
       if (isReasoningModel) {
         toggleThinking.classList.add("active");
         toggleThinking.disabled = true;
@@ -2233,7 +2505,19 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       toggleSearch.disabled = false;
       toggleSearch.classList.remove("disabled");
       toggleSearch.title = t("composer.searchTitle");
-      setComposerEnabled(!sending);
+      if (conversationChanged) {
+        messageInput.value = chatDrafts.get(conversation.id);
+        autoGrowInput();
+        attachments = attachmentDrafts.get(conversation.id) || [];
+        renderAttachments();
+      }
+      setComposerEnabled(!chatDrafts.isSending(conversation.id));
+      if (conversation.pendingQwenCaptcha) showQwenCaptchaModal(conversation);
+      else if (qwenCaptchaOverlay) {
+        qwenCaptchaOverlay.remove();
+        qwenCaptchaOverlay = null;
+        shownQwenCaptchaKey = null;
+      }
       messages.innerHTML = "";
 
       if (!conversation.messages.length) {
@@ -2251,12 +2535,21 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const role = document.createElement("div");
         role.className = "role";
         // Подпись assistant'а — провайдер-специфичная.
-        const assistantLabel = message.roleId
-          ? roleLabel(message.roleId)
-          : (({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || t("chat.assistant"));
+        const messageProvider = message.agentProvider || "";
+        const messageProviderInfo = PROVIDER_INFO[messageProvider] || null;
+        const messageProviderLabel = messageProviderInfo?.label || messageProvider;
+        const messageModelLabel = findModelInfo(messageProvider, message.agentModel)?.label || message.agentModel || "";
+        const agentModelLabel = messageModelLabel.toLowerCase().includes(messageProviderLabel.toLowerCase())
+          ? messageModelLabel
+          : [messageProviderLabel, messageModelLabel].filter(Boolean).join(" ");
+        const assistantLabel = messageProvider
+          ? (message.pipelineCoordinator ? t("pipeline.leader") : roleLabel(message.roleId)) + " · " + agentModelLabel
+          : (message.roleId
+              ? roleLabel(message.roleId)
+              : (({ deepseek: "DeepSeek", qwen: "Qwen" })[conversation.provider || "deepseek"] || t("chat.assistant")));
         role.textContent = message.role === "user"
           ? (message.source === "telegram" ? t("chat.you") + " · Telegram" : t("chat.you"))
-          : assistantLabel;
+          : [assistantLabel, message.effectiveModel].filter(Boolean).join(" · ");
         const bubble = document.createElement("div");
         bubble.className = "bubble";
         if (Array.isArray(message.toolLogs) && message.toolLogs.length) {
@@ -2279,7 +2572,10 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           bubble.appendChild(tools);
         }
         if (message.content) {
-          const thinkingData = splitThinkingContent(message.content);
+          const displayContent = message.role === "assistant"
+            ? cleanAssistantDisplayContent(message.content)
+            : message.content;
+          const thinkingData = splitThinkingContent(displayContent);
           if (thinkingData.hasThinking && thinkingData.thinking) {
             const thinkingDetails = document.createElement("details");
             thinkingDetails.className = "thinkingAccordion";
@@ -2308,7 +2604,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             bubble.appendChild(thinkingDetails);
           }
 
-          const visibleContent = thinkingData.hasThinking ? thinkingData.content : message.content;
+          const visibleContent = thinkingData.hasThinking ? thinkingData.content : displayContent;
           if (visibleContent || (message.streaming && !thinkingData.hasThinking)) {
             const textEl = document.createElement("div");
             if (message.streaming) {
@@ -2354,6 +2650,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             img.addEventListener("click", () => window.open(src, "_blank"));
             bubble.appendChild(img);
           }
+        }
+        if (message.role === 'assistant' && /^⚠️/.test(String(message.content || ''))) {
+          const reportError = document.createElement('button'); reportError.type = 'button'; reportError.className = 'iconBtn supportInline';
+          reportError.textContent = I18N.language?.code === 'ru' ? 'Сообщить об ошибке' : 'Report error';
+          reportError.addEventListener('click', () => supportUi.open(message.content)); bubble.appendChild(reportError);
         }
         row.append(role, bubble);
         messages.appendChild(row);
@@ -2442,98 +2743,137 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       tick();
     }
 
-    async function updatePipeline(edges, mainAgentId = appState?.pipeline?.mainAgentId || null) {
-      const data = await api("/api/pipeline", { method: "PATCH", body: { edges, mainAgentId } });
-      appState.pipeline = data.pipeline;
-      renderPipelinePanel();
-    }
-
-    async function updatePipelineEdges(edges) {
-      return updatePipeline(edges);
-    }
-
-    pipelineMakeLeader.addEventListener("click", async () => {
-      if (!activeConversation) return;
-      await api("/api/conversations/" + activeConversation.id, { method: "PATCH", body: { pipelineMode: true } });
-      activeConversation.pipelineMode = true;
-      await updatePipeline(appState?.pipeline?.edges || [], activeConversation.id);
-      setStatus(t("pipeline.leaderSet", { title: activeConversation.title }));
-    });
-
     pipelineAddAgent.addEventListener("click", async () => {
       if (!activeConversation) return;
-      const leaderId = appState?.pipeline?.mainAgentId || activeConversation.id;
-      await api("/api/conversations/" + leaderId, { method: "PATCH", body: { pipelineMode: true } });
-      const role = AGENT_ROLES.find((item) => item.id === "developer") || AGENT_ROLES[0];
-      const data = await api("/api/conversations", { method: "POST", body: {
-        title: role.label, workspace: activeConversation.workspace, provider: activeConversation.provider,
-        mode: activeConversation.mode, model: activeConversation.model, roleId: role.id, pipelineMode: true,
-      } });
-      const edges = (appState?.pipeline?.edges || []).concat({ from: leaderId, to: data.conversation.id });
-      await updatePipeline(edges, leaderId);
-      await loadState(leaderId);
+      const role = AGENT_ROLES.find((item) => item.id === "analyst") || AGENT_ROLES[0];
+      const pipelineAgents = [
+        ...(activeConversation.pipelineAgents || []),
+        {
+          id: "agent-" + Date.now().toString(36),
+          roleId: role.id,
+          provider: activeConversation.provider || "deepseek",
+          model: activeConversation.model || defaultModelForProviderMode(activeConversation.provider, activeConversation.mode),
+        },
+      ];
+      await api("/api/conversations/" + activeConversation.id, {
+        method: "PATCH",
+        body: { pipelineAgents, pipelineMode: true },
+      });
+      await loadState(activeConversation.id);
       setStatus(t("pipeline.agentAdded", { title: role.label }));
     });
 
     function renderPipelinePanel() {
-      const conversations = appState?.conversations || [];
-      const edges = appState?.pipeline?.edges || [];
-      const nextByFrom = new Map(edges.map((edge) => [edge.from, edge.to]));
-      const mainAgentId = appState?.pipeline?.mainAgentId || null;
       pipelineBody.innerHTML = "";
-      if (!conversations.length) {
+      if (!activeConversation) {
         pipelineBody.innerHTML = '<div class="empty smallEmpty">' + t("pipeline.empty") + '</div>';
         return;
       }
-      for (const conversation of conversations) {
+      const agents = activeConversation.pipelineAgents || [];
+      if (!agents.length) {
+        pipelineBody.innerHTML = '<div class="empty smallEmpty">' + t("pipeline.empty") + '</div>';
+        return;
+      }
+      for (const [index, agent] of agents.entries()) {
+        const provider = agent.provider || activeConversation.provider || "deepseek";
+        const providerInfo = PROVIDER_INFO[provider] || PROVIDER_INFO.deepseek;
+        const model = agent.model || providerInfo.defaultModel || providerInfo.models?.[0]?.id || "";
         const row = document.createElement("div");
         row.className = "pipelineRow";
         const meta = document.createElement("div");
         meta.className = "pipelineNodeMeta";
         const title = document.createElement("div");
         title.className = "pipelineNodeTitle";
-        title.textContent = (conversation.id === mainAgentId ? "★ " : "") + conversation.title;
+        title.textContent = roleLabel(agent.roleId) + " · " + (providerInfo.label || provider);
         const sub = document.createElement("div");
         sub.className = "pipelineNodeSub";
-        sub.textContent = (conversation.provider || "deepseek") + " · " + (conversation.model || conversation.mode || t("pipeline.model"));
+        sub.textContent = (index + 1) + " · " + (findModelInfo(provider, model)?.label || model || t("pipeline.model"));
         meta.append(title, sub);
+
+        const makeField = (labelText, select) => {
+          const field = document.createElement("label");
+          field.className = "pipelineField";
+          const label = document.createElement("span");
+          label.textContent = labelText;
+          field.append(label, select);
+          return field;
+        };
+
+        const providerSelect = document.createElement("select");
+        providerSelect.className = "pipelineSelect";
+        providerSelect.setAttribute("aria-label", t("pipeline.provider") + ": " + (index + 1));
+        for (const [providerId, info] of Object.entries(PROVIDER_INFO)) {
+          const opt = document.createElement("option");
+          opt.value = providerId;
+          opt.textContent = info.label || providerId;
+          if (providerId === provider) opt.selected = true;
+          providerSelect.appendChild(opt);
+        }
+        providerSelect.addEventListener("change", async () => {
+          const nextProvider = providerSelect.value;
+          const nextInfo = PROVIDER_INFO[nextProvider] || PROVIDER_INFO.deepseek;
+          const nextModel = nextInfo.defaultModel || nextInfo.models?.[0]?.id || "";
+          const pipelineAgents = agents.map((item) => item.id === agent.id
+            ? { ...item, provider: nextProvider, model: nextModel }
+            : item);
+          await api("/api/conversations/" + activeConversation.id, { method: "PATCH", body: { pipelineAgents } });
+          await loadState(activeConversation.id);
+        });
+
+        const modelSelect = document.createElement("select");
+        modelSelect.className = "pipelineSelect";
+        modelSelect.setAttribute("aria-label", t("pipeline.model") + ": " + (index + 1));
+        for (const modelDef of providerInfo.models || []) {
+          if (modelDef.legacy) continue;
+          const opt = document.createElement("option");
+          opt.value = modelDef.id;
+          opt.textContent = modelDef.label || modelDef.id;
+          if (modelDef.id === model) opt.selected = true;
+          modelSelect.appendChild(opt);
+        }
+        modelSelect.addEventListener("change", async () => {
+          const pipelineAgents = agents.map((item) => item.id === agent.id ? { ...item, model: modelSelect.value } : item);
+          await api("/api/conversations/" + activeConversation.id, { method: "PATCH", body: { pipelineAgents } });
+          await loadState(activeConversation.id);
+        });
 
         const roleSelect = document.createElement("select");
         roleSelect.className = "pipelineSelect";
+        roleSelect.setAttribute("aria-label", t("pipeline.role") + ": " + (index + 1));
         for (const roleDef of AGENT_ROLES) {
           const opt = document.createElement("option");
           opt.value = roleDef.id;
           opt.textContent = roleDef.label;
-          if (roleDef.id === (conversation.roleId || "assistant")) opt.selected = true;
+          if (roleDef.id === (agent.roleId || "assistant")) opt.selected = true;
           roleSelect.appendChild(opt);
         }
         roleSelect.addEventListener("change", async () => {
-          await api("/api/conversations/" + conversation.id, { method: "PATCH", body: { roleId: roleSelect.value } });
-          await loadState(activeConversation?.id || conversation.id);
+          const pipelineAgents = agents.map((item) => item.id === agent.id ? { ...item, roleId: roleSelect.value } : item);
+          await api("/api/conversations/" + activeConversation.id, { method: "PATCH", body: { pipelineAgents } });
+          await loadState(activeConversation.id);
         });
 
-        const nextSelect = document.createElement("select");
-        nextSelect.className = "pipelineSelect";
-        const none = document.createElement("option");
-        none.value = "";
-        none.textContent = t("pipeline.end");
-        nextSelect.appendChild(none);
-        for (const target of conversations) {
-          if (target.id === conversation.id) continue;
-          const opt = document.createElement("option");
-          opt.value = target.id;
-          opt.textContent = "→ " + target.title;
-          if (target.id === nextByFrom.get(conversation.id)) opt.selected = true;
-          nextSelect.appendChild(opt);
-        }
-        nextSelect.addEventListener("change", async () => {
-          const nextEdges = edges.filter((edge) => edge.from !== conversation.id);
-          if (nextSelect.value) nextEdges.push({ from: conversation.id, to: nextSelect.value });
-          await updatePipelineEdges(nextEdges);
-          await loadState(activeConversation?.id || conversation.id);
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "iconBtn";
+        removeBtn.type = "button";
+        removeBtn.textContent = "✕";
+        removeBtn.setAttribute("aria-label", t("app.close") + ": " + roleLabel(agent.roleId));
+        removeBtn.addEventListener("click", async () => {
+          const pipelineAgents = agents.filter((item) => item.id !== agent.id);
+          await api("/api/conversations/" + activeConversation.id, {
+            method: "PATCH",
+            body: { pipelineAgents, ...(pipelineAgents.length ? {} : { pipelineMode: false }) },
+          });
+          await loadState(activeConversation.id);
         });
 
-        row.append(meta, roleSelect, nextSelect);
+        row.append(
+          meta,
+          makeField(t("pipeline.provider"), providerSelect),
+          makeField(t("pipeline.model"), modelSelect),
+          makeField(t("pipeline.role"), roleSelect),
+          removeBtn,
+        );
         pipelineBody.appendChild(row);
       }
     }
@@ -2720,20 +3060,144 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         messageInput.placeholder = t("composer.chooseChat");
         return;
       }
-      if (activeConversation.coderMode === true) {
-        messageInput.placeholder = t("composer.coderActive");
-        return;
-      }
-      const provider = activeConversation.provider || "deepseek";
-      const label = ((PROVIDER_INFO[provider] || {}).label) || ({ deepseek: "DeepSeek", qwen: "Qwen" })[provider] || "AI";
-      messageInput.placeholder = t("composer.message", { label });
+      messageInput.placeholder = activeConversation.interactionMode === "discuss" ? (document.documentElement.lang === 'ru' ? 'Обсудите идею или задайте вопрос…' : 'Discuss an idea or ask a question…') : t("composer.coderActive");
     }
 
     function setComposerEnabled(enabled) {
       updateMessagePlaceholder();
-      messageInput.disabled = !enabled || !activeConversation;
-      sendBtn.disabled = !enabled || !activeConversation;
+      const available = enabled && activeConversation && !chatDrafts.isSending(activeConversation.id);
+      messageInput.disabled = !available;
+      sendBtn.disabled = !available;
       updateStopButton();
+    }
+
+    function showQwenCaptchaModal(conversation) {
+      if (conversation.pendingQwenCaptcha.status === "stale") {
+        qwenCaptchaOverlay?.remove();
+        qwenCaptchaOverlay = null;
+        shownQwenCaptchaKey = null;
+        return;
+      }
+      const key = conversation.id + ":" + conversation.pendingQwenCaptcha.createdAt;
+      if (shownQwenCaptchaKey === key) return;
+      qwenCaptchaOverlay?.remove();
+      shownQwenCaptchaKey = key;
+      const overlay = document.createElement("div");
+      overlay.className = "qwenCaptchaOverlay";
+      const panel = document.createElement("div");
+      panel.className = "qwenCaptchaPanel";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "false");
+      panel.setAttribute("aria-label", "Qwen — проверка безопасности");
+      const title = document.createElement("h3");
+      title.textContent = conversation.pendingQwenCaptcha.status === "cooldown"
+        ? "Qwen временно ограничил запросы" : "Qwen запросил проверку";
+      const help = document.createElement("p");
+      const cooldownOnly = conversation.pendingQwenCaptcha.status === "cooldown";
+      help.textContent = cooldownOnly
+        ? "Qwen временно ограничил запросы. Если ниже появится проверка, пройдите её вручную; если нет — дождитесь окончания ограничения."
+        : "Проверка откроется ниже в SYNVOX. Подтверждайте её только после успешного прохождения.";
+      const status = document.createElement("p");
+      status.className = "qwenCaptchaStatus";
+      function showBrowserError(message) {
+        title.textContent = "Не удалось открыть браузер Qwen";
+        help.textContent = "Проверка не открылась из-за ошибки локального браузера. Это сообщение не означает новое ограничение аккаунта.";
+        status.textContent = message || "Не удалось запустить Camoufox.";
+      }
+      if (conversation.pendingQwenCaptcha.status === "error") showBrowserError(conversation.pendingQwenCaptcha.error);
+      const viewport = document.createElement("div");
+      viewport.className = "qwenCaptchaViewport";
+      viewport.hidden = true;
+      function showViewport() {
+        if (viewport.firstChild) return;
+        const frame = document.createElement("iframe");
+        frame.title = "Ручная проверка Qwen";
+        frame.src = "/embed/qwen-captcha?conversationId=" + encodeURIComponent(conversation.id);
+        viewport.appendChild(frame);
+        viewport.hidden = false;
+      }
+      const actions = document.createElement("div");
+      actions.className = "qwenCaptchaActions";
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = "Показать проверку";
+      open.addEventListener("click", async () => {
+        open.disabled = true;
+        status.textContent = "Открываю окно проверки…";
+        try {
+          await api("/api/conversations/" + conversation.id + "/qwen-captcha/open", { method: "POST" });
+          status.textContent = "Окно Qwen открывается. Можно пользоваться другими чатами.";
+          const poll = setInterval(async () => {
+            if (!overlay.isConnected) return clearInterval(poll);
+            try {
+              const data = await api("/api/conversations/" + conversation.id);
+              const pending = data.conversation?.pendingQwenCaptcha;
+              if (pending?.status === "ready") {
+                status.textContent = "Пройдите проверку вручную ниже, затем нажмите «Проверка пройдена».";
+                showViewport();
+                done.disabled = false;
+                clearInterval(poll);
+              } else if (pending?.status === "not_shown") {
+                status.textContent = "Капча не появилась в Qwen сразу. Если вы прошли её позже, нажмите «Проверка пройдена» — SYNVOX проверит результат у браузера. Иначе дождитесь окончания ограничения.";
+                showViewport();
+                done.disabled = false;
+                clearInterval(poll);
+              } else if (pending?.status === "login_required") {
+                title.textContent = "Qwen требует входа в аккаунт";
+                help.textContent = "В этом профиле открылась страница входа, а не капча.";
+                status.textContent = "Переподключите аккаунт этой задачи в Настройки → Аккаунты AI, затем откройте проверку снова.";
+                viewport.hidden = true;
+                done.disabled = true;
+                clearInterval(poll);
+              } else if (pending?.status === "error") {
+                showBrowserError(pending.error);
+                clearInterval(poll);
+              }
+            } catch { /* Следующий опрос повторит проверку. */ }
+          }, 1500);
+        } catch (error) {
+          status.textContent = error.message;
+        } finally { open.disabled = false; }
+      });
+      const done = document.createElement("button");
+      done.type = "button";
+      done.textContent = "Проверка пройдена";
+      done.disabled = true;
+      done.addEventListener("click", async () => {
+        done.disabled = true;
+        status.textContent = "Проверяю доступ к Qwen…";
+        try {
+          const result = await api("/api/conversations/" + conversation.id + "/qwen-captcha/done", { method: "POST" });
+          overlay.remove();
+          qwenCaptchaOverlay = null;
+          shownQwenCaptchaKey = null;
+          if (activeConversation?.id === conversation.id) {
+            const data = await api("/api/conversations/" + conversation.id);
+            activeConversation = data.conversation;
+            renderConversation(activeConversation);
+            setStatus(result.resumeQwenCode ? "Проверка завершена. Восстанавливаю сохранённую задачу…" : result.resumeQwenCaptcha ? "Проверка завершена. Повторяю тот же вопрос…" : "Страница Qwen доступна. Можно продолжить запрос.");
+          }
+          if (result.resumeQwenCaptcha || result.resumeQwenCode) resumeQwenCaptcha(conversation.id, result.resumeQwenCode).catch((error) => setStatus(error.message, true));
+        } catch (error) {
+          status.textContent = error.message;
+        } finally { done.disabled = false; }
+      });
+      const dismiss = document.createElement("button");
+      dismiss.type = "button";
+      dismiss.textContent = "Позже";
+      dismiss.addEventListener("click", () => { overlay.remove(); qwenCaptchaOverlay = null; shownQwenCaptchaKey = key; });
+      actions.append(open, done, dismiss);
+      panel.append(title, help, status, viewport, actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      qwenCaptchaOverlay = overlay;
+      dismiss.focus();
+      if (!cooldownOnly) open.click();
+    }
+
+    async function resumeQwenCaptcha(conversationId, code = false) {
+      const data = await api("/api/conversations/" + conversationId);
+      await postStreamingMessage(conversationId, code ? { content: "продолжи" } : { resumeQwenCaptcha: true }, "qwen", data.conversation);
     }
 
     // Кнопка «Стоп» видна, когда в активном чате идёт фоновая задача (code/pipeline).
@@ -2799,6 +3263,11 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     function setStatus(text, isError = false) {
       statusEl.textContent = text;
       statusEl.className = "status" + (isError ? " error" : "");
+      if (isError) {
+        const reportError = document.createElement('button'); reportError.type = 'button'; reportError.className = 'iconBtn supportInline';
+        reportError.textContent = I18N.language?.code === 'ru' ? 'Сообщить об ошибке' : 'Report error';
+        reportError.addEventListener('click', () => supportUi.open(text)); statusEl.appendChild(reportError);
+      }
     }
 
     async function api(url, options = {}) {
@@ -2813,6 +3282,254 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return data;
     }
 
+    document.addEventListener("click", async (event) => {
+      if (!I18N.ui?.ideSurface) return;
+      const link = event.target.closest?.('a[target="_blank"]');
+      if (!link) return;
+      let url;
+      try { url = new URL(link.href); } catch { return; }
+      if (url.protocol !== "https:" || !["synvox.pro", "t.me", "auth.robokassa.ru"].includes(url.hostname)) return;
+      event.preventDefault();
+      try { await api("/api/subscription/open-external", { method: "POST", body: { url: url.href } }); }
+      catch (error) { setStatus(error.message, true); }
+    });
+
+    const tourSteps = [
+      {
+        selector: "#openNewChat",
+        title: "Создайте рабочий чат",
+        description: "Нажмите «Новый чат», выберите папку проекта, основную AI и модель. Один чат хранит одну рабочую задачу или контекст проекта.",
+      },
+      {
+        selector: ".chatList",
+        title: "Переключайтесь между задачами",
+        description: "Все чаты находятся слева. Они выполняются независимо, поэтому можно перейти в другой чат, пока текущая задача работает в фоне.",
+      },
+      {
+        selector: ".topbarControls",
+        title: "Модель и роль",
+        description: "В верхней панели видны выбранная модель, роль и поддерживаемые форматы. Кнопки появляются только там, где функция действительно работает.",
+      },
+      {
+        selector: "#messages",
+        title: "Результаты в одном месте",
+        description: "Здесь отвечает главная AI. Если подключена команда, результаты помощников тоже появляются в этом чате с подписью модели и роли.",
+      },
+      {
+        selector: "#composer",
+        title: "Поставьте задачу",
+        description: "Опишите желаемый результат обычными словами. Можно приложить файл или использовать голос. Режим Coder сам определит, когда нужно работать с проектом.",
+      },
+      {
+        selector: "#agentBrowserBtn",
+        title: "Встроенный браузер",
+        description: "Открывает веб-инструменты текущего проекта. Используйте браузер для входа в сервисы и задач, где AI должна видеть или управлять страницей.",
+      },
+      {
+        selector: "#pipelinePanelBtn",
+        title: "Команда агентов",
+        description: "Добавьте помощников, назначьте им модели и роли. Главная AI координирует их и собирает итоговый ответ в текущем чате.",
+      },
+      {
+        selector: "#settingsBtn",
+        title: "Все настройки",
+        description: "Здесь находятся провайдеры, память и skills, API, разрешения, обновления, Telegram, документы и управление данными.",
+      },
+      {
+        settingsTab: "status",
+        selector: '.settingsTab[data-tab="status"]',
+        title: "Статус подключений",
+        description: "Показывает готовность AI-провайдеров и системных компонентов. Отсюда удобно начинать диагностику, если модель или инструмент не отвечает.",
+      },
+      {
+        settingsTab: "language",
+        selector: '.settingsTab[data-tab="language"]',
+        title: "Язык и интерфейс",
+        description: "Здесь меняется язык приложения и общие параметры интерфейса. Настройки применяются ко всем новым чатам.",
+      },
+      {
+        settingsTab: "agent",
+        selector: '.settingsTab[data-tab="agent"]',
+        title: "Агент, память и skills",
+        description: "Управляйте памятью проекта, автоматическим подбором skills и установленными навыками. Здесь же можно просматривать и очищать полезные записи.",
+      },
+      {
+        settingsTab: "telegram",
+        selector: '.settingsTab[data-tab="telegram"]',
+        title: "Telegram",
+        description: "Подключите бота, чтобы ставить задачи и получать результаты удалённо. Привязка использует те же чаты и проекты SYNVOX.",
+      },
+      {
+        settingsTab: "update",
+        selector: '.settingsTab[data-tab="update"]',
+        title: "Обновления",
+        description: "Проверяйте наличие новой версии и устанавливайте обновления SYNVOX. После установки приложение предложит перезапуск.",
+      },
+      {
+        settingsTab: "api",
+        selector: '.settingsTab[data-tab="api"]',
+        title: "Локальный API",
+        description: "Здесь находятся адреса и ключи OpenAI- и Anthropic-совместимого API. Они нужны для подключения редакторов и внешних клиентов.",
+      },
+      {
+        settingsTab: "permissions",
+        selector: '.settingsTab[data-tab="permissions"]',
+        title: "Разрешения агента",
+        description: "Определите, какие локальные команды разрешено выполнять. Рискованные действия остаются отделены и требуют осознанного включения.",
+      },
+      {
+        settingsTab: "documents",
+        selector: '.settingsTab[data-tab="documents"]',
+        title: "Документы и данные",
+        description: "Условия бесплатного использования, политика данных, альфа-статус и удаление локальных данных собраны здесь.",
+      },
+    ];
+    const tourBtn = document.getElementById("tourBtn");
+    let tourState = null;
+
+    function positionProductTour() {
+      if (!tourState) return;
+      const step = tourSteps[tourState.index];
+      const target = document.querySelector(step.selector);
+      if (!target) return;
+      const rect = target.getBoundingClientRect();
+      const padding = 6;
+      const left = Math.max(6, rect.left - padding);
+      const top = Math.max(6, rect.top - padding);
+      const right = Math.min(window.innerWidth - 6, rect.right + padding);
+      const bottom = Math.min(window.innerHeight - 6, rect.bottom + padding);
+      Object.assign(tourState.spotlight.style, {
+        left: left + "px",
+        top: top + "px",
+        width: Math.max(24, right - left) + "px",
+        height: Math.max(24, bottom - top) + "px",
+      });
+
+      const card = tourState.card;
+      const cardRect = card.getBoundingClientRect();
+      const margin = 12;
+      let cardLeft = Math.min(Math.max(margin, left), window.innerWidth - cardRect.width - margin);
+      let cardTop = bottom + 14;
+      if (cardTop + cardRect.height > window.innerHeight - margin) {
+        cardTop = Math.max(margin, top - cardRect.height - 14);
+      }
+      if (window.innerWidth <= 640) {
+        cardLeft = margin;
+        cardTop = Math.max(margin, window.innerHeight - cardRect.height - margin);
+      }
+      card.style.left = cardLeft + "px";
+      card.style.top = cardTop + "px";
+    }
+
+    async function prepareProductTourStep(step) {
+      if (!step.settingsTab) {
+        if (!settingsOverlay.classList.contains("hidden")) closeSettings();
+        return;
+      }
+      if (settingsOverlay.classList.contains("hidden")) {
+        await openSettings(step.settingsTab);
+      } else {
+        selectSettingsTab(step.settingsTab);
+      }
+    }
+
+    async function renderProductTourStep() {
+      if (!tourState) return;
+      const step = tourSteps[tourState.index];
+      tourState.next.disabled = true;
+      tourState.back.disabled = true;
+      await prepareProductTourStep(step);
+      if (!tourState) return;
+      tourState.progress.textContent = "Шаг " + (tourState.index + 1) + " из " + tourSteps.length;
+      tourState.title.textContent = step.title;
+      tourState.description.textContent = step.description;
+      tourState.back.hidden = tourState.index === 0;
+      tourState.next.textContent = tourState.index === tourSteps.length - 1 ? "Готово" : "Продолжить";
+      tourState.next.disabled = false;
+      tourState.back.disabled = false;
+      requestAnimationFrame(positionProductTour);
+      tourState.next.focus();
+    }
+
+    function closeProductTour() {
+      if (!tourState) return;
+      window.removeEventListener("resize", positionProductTour);
+      document.removeEventListener("keydown", handleProductTourKeys);
+      tourState.root.remove();
+      appShell.inert = false;
+      tourState = null;
+      tourBtn.focus();
+    }
+
+    function handleProductTourKeys(event) {
+      if (!tourState) return;
+      if (event.key === "Escape") closeProductTour();
+      if (event.key === "ArrowRight" && tourState.index < tourSteps.length - 1) {
+        tourState.index += 1;
+        renderProductTourStep();
+      }
+      if (event.key === "ArrowLeft" && tourState.index > 0) {
+        tourState.index -= 1;
+        renderProductTourStep();
+      }
+    }
+
+    function startProductTour() {
+      if (tourState) return;
+      closeAgentDrawer();
+      const root = document.createElement("div");
+      root.className = "tourRoot";
+      root.setAttribute("role", "dialog");
+      root.setAttribute("aria-modal", "true");
+      root.setAttribute("aria-labelledby", "tourTitle");
+      root.setAttribute("aria-describedby", "tourDescription");
+      const spotlight = document.createElement("div");
+      spotlight.className = "tourSpotlight";
+      const card = document.createElement("section");
+      card.className = "tourCard";
+      const progress = document.createElement("div");
+      progress.className = "tourProgress";
+      const title = document.createElement("h2");
+      title.id = "tourTitle";
+      const description = document.createElement("p");
+      description.id = "tourDescription";
+      const actions = document.createElement("div");
+      actions.className = "tourActions";
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "iconBtn";
+      close.textContent = "Закрыть";
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "iconBtn";
+      back.textContent = "Назад";
+      const next = document.createElement("button");
+      next.type = "button";
+      next.className = "iconBtn primaryBtn";
+      next.textContent = "Продолжить";
+      close.addEventListener("click", closeProductTour);
+      back.addEventListener("click", () => {
+        if (tourState.index > 0) tourState.index -= 1;
+        renderProductTourStep();
+      });
+      next.addEventListener("click", () => {
+        if (tourState.index >= tourSteps.length - 1) return closeProductTour();
+        tourState.index += 1;
+        renderProductTourStep();
+      });
+      actions.append(close, back, next);
+      card.append(progress, title, description, actions);
+      root.append(spotlight, card);
+      document.body.appendChild(root);
+      appShell.inert = true;
+      tourState = { index: 0, root, spotlight, card, progress, title, description, back, next };
+      window.addEventListener("resize", positionProductTour);
+      document.addEventListener("keydown", handleProductTourKeys);
+      renderProductTourStep();
+    }
+
+    tourBtn.addEventListener("click", startProductTour);
+
     function renderUpdateToast(data) {
       availableUpdateCheck = data || null;
       const shouldShow = Boolean(data?.updateAvailable);
@@ -2825,7 +3542,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         : t("update.available");
       updateToastStatus.textContent = data.canUpdate ? (data.updateWarning || "") : t("update.gitRequired");
       updateToastDownload.disabled = !data.canUpdate;
-      updateToastDownload.textContent = data.canUpdate ? "Скачать" : "Недоступно";
+      updateToastDownload.textContent = data.canUpdate ? (data.updateMethod === "website" ? "Обновить" : "Скачать") : "Недоступно";
     }
 
     async function checkUpdateToast() {
@@ -2858,7 +3575,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       renderUpdateToast(result.after || null);
       setStatus(
         result.restarting
-          ? "Обновление установлено. Перезапускаю AI Free..."
+          ? "Обновление установлено. Перезапускаю SYNVOX..."
           : (result.message || t("update.installed")),
         false,
       );
@@ -2874,15 +3591,17 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       scrollMessagesToBottomIfFollowing();
     }
 
-    async function postStreamingMessage(convId, body, provider) {
-      activeConversation.messages.push({
+    async function postStreamingMessage(convId, body, provider, sentConversation) {
+      if (!body.resumeQwenCaptcha) sentConversation.messages.push({
         role: "assistant",
         content: "",
         streaming: true,
         createdAt: new Date().toISOString(),
       });
-      renderConversation(activeConversation);
-      setStatus(t("composer.writingStatus"));
+      if (activeConversation?.id === convId) {
+        renderConversation(sentConversation);
+        setStatus(t("composer.writingStatus"));
+      }
 
       const res = await fetch("/api/conversations/" + convId + "/messages", {
         method: "POST",
@@ -2894,26 +3613,32 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || t("app.requestFailed"));
         if (data.running) {
-          activeConversation = data.conversation;
-          await loadState(activeConversation.id);
-          renderConversation(activeConversation);
-          setStatus(t("composer.backgroundTask"));
+          if (activeConversation?.id === convId) {
+            activeConversation = data.conversation;
+            await loadState(convId);
+            renderConversation(activeConversation);
+            setStatus(t("composer.backgroundTask"));
+          }
           ensurePolling();
           return;
         }
         if (data.needsChatGPTLogin) {
-          activeConversation = data.conversation;
-          renderConversation(activeConversation);
-          setAgentDrawerTab("browser");
+          if (activeConversation?.id === convId) {
+            activeConversation = data.conversation;
+            renderConversation(activeConversation);
+          }
+          openAgentDrawer("browser");
           ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
           notifyBrowserTab("chatgpt", { force: true });
           setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
           return;
         }
-        activeConversation = data.conversation;
-        await loadState(activeConversation.id);
-        renderConversation(activeConversation, { animateLastAssistant: true });
-        setStatus("");
+        if (activeConversation?.id === convId) {
+          activeConversation = data.conversation;
+          await loadState(convId);
+          renderConversation(activeConversation, { animateLastAssistant: true });
+          setStatus("");
+        }
         return;
       }
 
@@ -2937,26 +3662,31 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           let event;
           try { event = JSON.parse(line); } catch { continue; }
           if (event.type === "start") {
-            activeConversation = event.conversation;
-            renderConversation(activeConversation);
+            if (activeConversation?.id === convId) {
+              activeConversation = event.conversation;
+              renderConversation(activeConversation);
+            }
           } else if (event.type === "delta") {
-            updateStreamingAssistantBubble(event.content);
-            setStatus(t("composer.writingStatus"));
+            if (activeConversation?.id === convId) {
+              updateStreamingAssistantBubble(event.content);
+              setStatus(t("composer.writingStatus"));
+            }
           } else if (event.type === "done") {
-            activeConversation = event.conversation;
+            if (activeConversation?.id === convId) activeConversation = event.conversation;
             streamDone = true;
           } else if (event.type === "error") {
-            activeConversation = event.conversation;
+            if (activeConversation?.id === convId) activeConversation = event.conversation;
             needsChatGPTLogin = Boolean(event.needsChatGPTLogin);
             streamDone = true;
           }
         }
       }
 
-      await loadState(activeConversation?.id || convId);
+      if (activeConversation?.id !== convId) return;
+      await loadState(convId);
       renderConversation(activeConversation);
       if (needsChatGPTLogin && provider === "chatgpt") {
-        setAgentDrawerTab("browser");
+        openAgentDrawer("browser");
         ensureAgentBrowserLoaded(activeConversation?.workspace || appState.workspaceRoot);
         notifyBrowserTab("chatgpt", { force: true });
         setStatus("Войдите в ChatGPT в боковом браузере и нажмите «Синхронизировать»", true);
@@ -3060,6 +3790,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     function closeSettings() {
       settingsOverlay.classList.add("hidden");
       settingsOverlay.setAttribute("aria-hidden", "true");
+      clearAccountsPolling();
     }
 
     function renderSettings({ catalog, allowedCommands, commandPermissions, openAICompat, ui, telegram }, initialTab) {
@@ -3080,12 +3811,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       content.className = "settingsTabContent";
       const tabs = [
         { id: "status", label: t("settings.tabStatus") || "Статус" },
+        { id: "accounts", label: "Аккаунты" },
         { id: "language", label: t("settings.tabLanguage") },
         { id: "agent", label: t("settings.tabAgent") },
         { id: "telegram", label: t("settings.tabTelegram") },
         { id: "update", label: t("settings.tabUpdate") },
         { id: "api", label: t("settings.tabApi") },
         { id: "permissions", label: t("settings.tabPermissions") },
+        { id: "documents", label: "Документы" },
       ];
       const panels = {};
       for (const tab of tabs) {
@@ -3109,28 +3842,46 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       settingsBody.appendChild(shell);
 
       renderStatusSettings(panels.status);
+      renderConnectedAccounts(panels.accounts);
       renderUiSettings(panels.language, ui, allowedCommands || []);
       renderAgentSettings(panels.agent, ui);
       renderTelegramSettings(panels.telegram, telegram || {});
       renderUpdateSettings(panels.update);
       renderOpenAISettings(panels.api, openAICompat);
       renderAgentPermissionSettings(panels.permissions, commandPermissions || {});
+      renderLegalSettings(panels.documents);
       for (const key of order) {
         const items = groups[key];
         if (!items.length) continue;
-        const groupEl = document.createElement("div");
-        groupEl.className = "settingsGroup";
-        const heading = document.createElement("h3");
-        heading.textContent = labels[key];
-        groupEl.appendChild(heading);
+        const groupEl = document.createElement("details");
+        groupEl.className = "permissionCommandGroup " + key;
+        const summary = document.createElement("summary");
+        summary.className = "permissionCommandSummary";
+        const summaryLabel = document.createElement("span");
+        summaryLabel.textContent = labels[key];
+        const summaryCount = document.createElement("span");
+        summaryCount.className = "permissionCommandCount";
+        const updateCount = () => {
+          const enabledCount = items.filter((item) => allowed.has(item.name)).length;
+          summaryCount.textContent = enabledCount + " / " + items.length;
+        };
+        updateCount();
+        summary.append(summaryLabel, summaryCount);
+        const list = document.createElement("div");
+        list.className = "permissionCommandList";
         for (const item of items) {
           const row = document.createElement("label");
-          row.className = "settingsItem";
+          row.className = "settingsItem permissionCommandItem";
           const cb = document.createElement("input");
           cb.type = "checkbox";
           cb.checked = allowed.has(item.name);
           cb.dataset.cmd = item.name;
-          cb.addEventListener("change", onToggle);
+          cb.addEventListener("change", () => {
+            if (cb.checked) allowed.add(item.name);
+            else allowed.delete(item.name);
+            updateCount();
+            onToggle();
+          });
 
           const textWrap = document.createElement("div");
           const nameEl = document.createElement("div");
@@ -3142,18 +3893,230 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           textWrap.appendChild(nameEl);
           textWrap.appendChild(descEl);
 
-          const badge = document.createElement("span");
-          badge.className = "riskBadge " + item.risk;
-          badge.textContent = item.risk;
-
           row.appendChild(cb);
           row.appendChild(textWrap);
-          row.appendChild(badge);
-          groupEl.appendChild(row);
+          list.appendChild(row);
         }
+        groupEl.append(summary, list);
         panels.permissions.appendChild(groupEl);
       }
       selectSettingsTab(initialTab || "status");
+    }
+
+    function clearAccountsPolling() {
+      if (accountsPollTimer) clearTimeout(accountsPollTimer);
+      accountsPollTimer = null;
+    }
+
+    function renderConnectedAccounts(target) {
+      const toolbar = document.createElement("label");
+      toolbar.className = "accountsToolbar";
+      const label = document.createElement("span");
+      label.textContent = "Выберите AI";
+      const providerSelect = document.createElement("select");
+      providerSelect.id = "accountProviderSelect";
+      providerSelect.setAttribute("aria-label", "AI для управления аккаунтами");
+      for (const [id, name] of [["deepseek", "DeepSeek"], ["qwen", "Qwen"], ["chatgpt", "ChatGPT"], ["glm", "GLM"], ["googleai", "Google AI"]]) {
+        const option = document.createElement("option"); option.value = id; option.textContent = name;
+        providerSelect.append(option);
+      }
+      const saved = localStorage.getItem("synvox.accountProvider") || "qwen";
+      if ([...providerSelect.options].some(option => option.value === saved)) providerSelect.value = saved;
+      toolbar.append(label, providerSelect); target.append(toolbar);
+      let panel = null;
+      const show = () => {
+        clearAccountsPolling(); panel?.remove();
+        panel = document.createElement("div"); panel.className = "providerAccountsPanel"; target.append(panel);
+        localStorage.setItem("synvox.accountProvider", providerSelect.value);
+        renderQwenAccountsSettings(panel, providerSelect.value);
+      };
+      providerSelect.addEventListener("change", show); show();
+    }
+
+    function renderQwenAccountsSettings(target, providerId = "qwen") {
+      clearAccountsPolling();
+      const isQwen = providerId === "qwen";
+      const providerLabel = { qwen: "Qwen", deepseek: "DeepSeek", chatgpt: "ChatGPT", glm: "GLM", googleai: "Google AI" }[providerId];
+      const heading = document.createElement("div");
+      heading.className = "accountsHeader";
+      const title = document.createElement("h3");
+      title.textContent = "Аккаунты " + providerLabel;
+      const description = document.createElement("p");
+      description.textContent = "До 10 отдельных аккаунтов. Основной используется для новых чатов; текущие сохраняют свой аккаунт.";
+      heading.append(title, description);
+
+      const notice = document.createElement("p");
+      notice.className = "accountsNotice";
+      notice.textContent = isQwen ? "Каждый Qwen-пользователь подключается в отдельном профиле. Новый чат использует основной аккаунт; существующий сохраняет свой. Автопереключение срабатывает только при подтверждённом лимите и не обходит ограничения Qwen." : "Каждый аккаунт сохраняет отдельный профиль и сессию. Основной используется для новых чатов; текущие сохраняют свой аккаунт. При переподключении войдите в прежний аккаунт.";
+
+      const toolbar = document.createElement("div");
+      toolbar.className = "accountsToolbar";
+      const refreshBtn = document.createElement("button");
+      refreshBtn.type = "button";
+      refreshBtn.className = "iconBtn";
+      refreshBtn.textContent = "Обновить";
+      const loginBtn = document.createElement("button");
+      loginBtn.type = "button";
+      loginBtn.className = "iconBtn primaryBtn";
+      loginBtn.textContent = "Добавить дополнительный аккаунт";
+      loginBtn.title = "Отдельный профиль: войдите под другим пользователем " + providerLabel + ".";
+      toolbar.append(refreshBtn, loginBtn);
+
+      const progress = document.createElement("div");
+      progress.className = "accountsProgress hidden";
+      progress.setAttribute("role", "status");
+      const setupHelp = document.createElement("a");
+      setupHelp.className = "accountsNotice";
+      setupHelp.hidden = true;
+      setupHelp.href = "https://www.python.org/downloads/";
+      setupHelp.target = "_blank";
+      setupHelp.rel = "noopener noreferrer";
+      setupHelp.textContent = "Установить Python 3.10+ с официального сайта";
+      const autoSwitch = document.createElement("label");
+      autoSwitch.className = "accountsAutoSwitch";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      const switchText = document.createElement("span");
+      switchText.textContent = "Автопереключение при подтверждённом лимите";
+      autoSwitch.append(checkbox, switchText);
+      const list = document.createElement("div");
+      list.className = "accountsList";
+      target.append(heading, notice, toolbar, progress, setupHelp);
+      if (isQwen) target.append(autoSwitch);
+      target.append(list);
+
+      const statusLabels = {
+        ready: "Вход сохранён",
+        disabled: "Отключён",
+        invalid: "Нужно переподключить",
+        duplicate: "Дубликат Qwen-пользователя",
+        limited: "Лимит исчерпан",
+        busy: "Занят",
+      };
+      const roleLabels = { primary: "Основной аккаунт", additional: "Дополнительный аккаунт", duplicate: "Повторный профиль" };
+      const resetLabel = (resetAt) => {
+        if (!resetAt) return "Сброс лимита неизвестен";
+        const date = new Date(resetAt);
+        return Number.isNaN(date.getTime()) ? "Сброс лимита неизвестен" : "Сброс: " + date.toLocaleString();
+      };
+      const request = (body) => api("/api/accounts/" + providerId, { method: "POST", body });
+      const isAttached = () => target.isConnected && !settingsOverlay.classList.contains("hidden");
+      const schedulePoll = (state) => {
+        clearAccountsPolling();
+        if (state !== "running" || !isAttached()) return;
+        accountsPollTimer = setTimeout(() => loadAccounts(), 1500);
+      };
+      const action = async (body, button) => {
+        if (button) button.disabled = true;
+        try {
+          await request(body);
+          await loadAccounts();
+        } catch (err) {
+          progress.textContent = "Не удалось выполнить действие: " + err.message;
+          progress.classList.remove("hidden");
+        } finally {
+          if (button) button.disabled = false;
+        }
+      };
+      const render = (data) => {
+        const login = data.login || { state: "idle" };
+        checkbox.checked = data.autoSwitch === true;
+        progress.classList.toggle("hidden", login.state === "idle");
+        progress.classList.toggle("error", login.state === "failed");
+        setupHelp.hidden = login.code !== "CAMOUFOX_PYTHON_REQUIRED";
+        if (login.state === "running") progress.textContent = login.message || "Выполняется вход в " + providerLabel + "…";
+        else if (login.state === "done") progress.textContent = "Данные входа в " + providerLabel + " сохранены.";
+        else if (login.state === "failed") progress.textContent = "Не удалось войти в " + providerLabel + ": " + (login.error || "неизвестная ошибка");
+        list.textContent = "";
+        for (const account of data.accounts || []) {
+          const row = document.createElement("div");
+          row.className = "accountRow";
+          const details = document.createElement("div");
+          details.className = "accountDetails";
+          const name = document.createElement("strong");
+          name.textContent = (roleLabels[account.role] || "Аккаунт " + providerLabel) + " · " + (account.label || providerLabel);
+          const meta = document.createElement("span");
+          meta.textContent = (statusLabels[account.status] || "Неизвестный статус")
+            + (account.status === "duplicate" ? " · уже подключён как аккаунт " + account.duplicateOf + ". Для второго аккаунта войдите под другим пользователем Qwen." : "")
+            + (account.status === "limited" ? " · " + resetLabel(account.resetAt) : "");
+          details.append(name, meta);
+          if (account.role === "duplicate") {
+            row.appendChild(details);
+            list.appendChild(row);
+            continue;
+          }
+          const actions = document.createElement("div");
+          actions.className = "accountActions";
+          const reconnect = document.createElement("button");
+          reconnect.type = "button";
+          reconnect.className = "iconBtn";
+          reconnect.textContent = "Переподключить";
+          reconnect.disabled = login.state === "running" || account.status === "busy" || account.role === "duplicate";
+          reconnect.addEventListener("click", () => action({ action: "login", id: account.id }, reconnect));
+          const disable = document.createElement("button");
+          disable.type = "button";
+          disable.className = "iconBtn";
+          disable.textContent = account.status === "disabled" ? "Включить" : "Отключить";
+          disable.disabled = account.role === "duplicate";
+          disable.addEventListener("click", () => action({ action: "disable", id: account.id, disabled: account.status !== "disabled" }, disable));
+          const primary = document.createElement("button");
+          primary.type = "button";
+          primary.className = "iconBtn";
+          primary.textContent = account.primary ? "Основной для новых задач" : "Сделать основным для новых задач";
+          primary.title = "Основной аккаунт используется для новых задач; текущие чаты сохраняют свой аккаунт.";
+          primary.disabled = account.primary === true || account.role === "duplicate";
+          primary.addEventListener("click", () => action({ action: "primary", id: account.id }, primary));
+          const rename = document.createElement("button");
+          rename.type = "button";
+          rename.className = "iconBtn";
+          rename.textContent = "Переименовать";
+          rename.addEventListener("click", () => {
+            const label = prompt("Название аккаунта", account.label || "");
+            if (label !== null && label.trim()) action({ action: "rename", id: account.id, label }, rename);
+          });
+          actions.append(reconnect);
+          if (isQwen) actions.append(disable);
+          actions.append(primary, rename);
+          if (providerId === "qwen" && account.status === "limited") {
+            const retry = document.createElement("button");
+            retry.type = "button";
+            retry.className = "iconBtn";
+            retry.textContent = "Повторить после лимита";
+            retry.addEventListener("click", () => action({ action: "retry", id: account.id }, retry));
+            const retryHint = document.createElement("span");
+            retryHint.className = "accountRetryHint";
+            retryHint.textContent = "Снимает только локальную отметку о лимите. Затем вернитесь в чат и напишите «продолжи», чтобы проверить доступность Qwen.";
+            details.append(retryHint);
+            actions.append(retry);
+          }
+          row.append(details, actions);
+          list.appendChild(row);
+        }
+        if (!(data.accounts || []).length) {
+          const empty = document.createElement("p");
+          empty.className = "accountsEmpty";
+          empty.textContent = "Аккаунты " + providerLabel + " ещё не подключены.";
+          list.appendChild(empty);
+        }
+        schedulePoll(login.state);
+        loginBtn.textContent = (data.accounts || []).length ? "Добавить дополнительный аккаунт" : "Подключить основной аккаунт";
+        description.textContent = "Аккаунты " + providerLabel + ": " + (data.accounts || []).length + " / 10. Основной используется для новых чатов; текущие сохраняют свой аккаунт.";
+        loginBtn.disabled = login.state === "running" || (data.accounts || []).length >= 10;
+      };
+      const loadAccounts = async () => {
+        if (!isAttached()) return;
+        try {
+          const data = await (isQwen ? api("/api/accounts/qwen") : api("/api/accounts/" + providerId));
+          if (isAttached()) render(data);
+        } catch (err) {
+          progress.textContent = "Не удалось обновить список: " + err.message;
+          progress.classList.remove("hidden");
+        }
+      };
+      refreshBtn.addEventListener("click", loadAccounts);
+      loginBtn.addEventListener("click", () => action({ action: "login" }, loginBtn));
+      checkbox.addEventListener("change", () => action({ action: "autoSwitch", enabled: checkbox.checked }, checkbox));
+      loadAccounts();
     }
 
     document.getElementById("sidebarMenuPlugins").addEventListener("click", () => {
@@ -3184,6 +4147,87 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         || descriptions.en?.[command]
         || fallback
         || "";
+    }
+
+
+    function renderLegalSettings(target) {
+      const header = document.createElement("div");
+      header.className = "legalHeader";
+      const title = document.createElement("h3");
+      title.textContent = "Документы и данные";
+      const subtitle = document.createElement("p");
+      subtitle.textContent = "Условия бесплатного использования SYNVOX, обработка данных и удаление локальных данных.";
+      header.append(title, subtitle);
+      target.appendChild(header);
+
+      if (!LEGAL.operatorComplete) {
+        const warning = document.createElement("div");
+        warning.className = "legalWarning";
+        warning.setAttribute("role", "status");
+        warning.textContent = "Документы уточняются для альфа-версии. SYNVOX распространяется бесплатно; для провайдеров может требоваться их собственная авторизация.";
+        target.appendChild(warning);
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "legalMeta";
+      meta.textContent = "Редакция: " + LEGAL.version + " · Оператор: " + LEGAL.operator.name;
+      target.appendChild(meta);
+
+      const list = document.createElement("div");
+      list.className = "legalDocuments";
+      for (const doc of LEGAL.docs) {
+        const details = document.createElement("details");
+        details.className = "legalDocument";
+        const summary = document.createElement("summary");
+        const summaryText = document.createElement("span");
+        const summaryTitle = document.createElement("strong");
+        summaryTitle.textContent = doc.title;
+        const summaryDesc = document.createElement("small");
+        summaryDesc.textContent = doc.summary;
+        summaryText.append(summaryTitle, summaryDesc);
+        const marker = document.createElement("span");
+        marker.className = "legalMarker";
+        marker.textContent = "+";
+        summary.append(summaryText, marker);
+        const body = document.createElement("div");
+        body.className = "legalDocumentBody";
+        for (const section of doc.sections) {
+          const heading = document.createElement("h4");
+          heading.textContent = section[0];
+          const paragraph = document.createElement("p");
+          paragraph.textContent = section[1];
+          body.append(heading, paragraph);
+        }
+        details.append(summary, body);
+        list.appendChild(details);
+      }
+      target.appendChild(list);
+
+      const danger = document.createElement("section");
+      danger.className = "legalDangerZone";
+      const dangerTitle = document.createElement("h3");
+      dangerTitle.textContent = "Удаление аккаунта и данных";
+      const dangerText = document.createElement("p");
+      dangerText.textContent = LEGAL.operatorComplete
+        ? "Откроется готовое обращение Оператору. Серверные данные удаляются с учётом обязательных сроков хранения, локальные данные — отдельно на каждом устройстве."
+        : "Кнопка станет доступна после указания действующего email Оператора. Сейчас собственного облачного аккаунта SYNVOX ещё нет, локальные данные остаются на этом устройстве.";
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "iconBtn dangerBtn legalDeleteBtn";
+      deleteBtn.textContent = "Удалить меня из системы";
+      deleteBtn.disabled = !LEGAL.operatorComplete;
+      deleteBtn.addEventListener("click", () => {
+        const subject = encodeURIComponent("Запрос на удаление аккаунта и персональных данных SYNVOX");
+        const body = encodeURIComponent([
+          "Прошу удалить мой аккаунт SYNVOX и персональные данные, для хранения которых отсутствует обязательное законное основание.",
+          "",
+          "Email аккаунта:",
+          "Дата запроса: " + new Date().toISOString(),
+        ].join("\\n"));
+        window.location.href = "mailto:" + LEGAL.operator.email + "?subject=" + subject + "&body=" + body;
+      });
+      danger.append(dangerTitle, dangerText, deleteBtn);
+      target.appendChild(danger);
     }
 
     function renderUiSettings(target, ui, allowedCommands) {
@@ -3259,6 +4303,9 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       copyBtn.className = "apiKeyBtn";
       copyBtn.textContent = t("health.copyReport") || "Скопировать отчёт";
       actions.append(refreshBtn, copyBtn);
+      const supportReportButton = document.createElement('button'); supportReportButton.type = 'button'; supportReportButton.className = 'apiKeyBtn';
+      supportReportButton.textContent = I18N.language?.code === 'ru' ? 'Сообщить о проблеме' : 'Report a problem';
+      supportReportButton.addEventListener('click', () => supportUi.open()); actions.appendChild(supportReportButton);
       header.append(heading, actions);
       groupEl.appendChild(header);
 
@@ -3367,10 +4414,60 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
     }
 
     async function renderAgentSettings(target, ui) {
+      const header = document.createElement("div");
+      header.className = "agentSettingsHeader";
+      const pageTitle = document.createElement("h3");
+      pageTitle.textContent = t("settings.agentTitle");
+      const pageIntro = document.createElement("div");
+      pageIntro.className = "settingsHint";
+      pageIntro.textContent = t("settings.agentIntro");
+      header.append(pageTitle, pageIntro);
+
+      const sectionNav = document.createElement("div");
+      sectionNav.className = "agentSettingsNav";
+      sectionNav.setAttribute("role", "tablist");
+      sectionNav.setAttribute("aria-label", t("settings.agentTitle"));
+      const sectionContent = document.createElement("div");
+      sectionContent.className = "agentSettingsContent";
+      const sectionPanels = {};
+      const sectionButtons = {};
+      const sections = [
+        ["general", "settings.agentSectionGeneral"],
+        ["plugins", "settings.agentSectionPlugins"],
+        ["skills", "settings.agentSectionSkills"],
+        ["memory", "settings.agentSectionMemory"],
+      ];
+      function selectAgentSettingsSection(sectionId) {
+        for (const [id] of sections) {
+          const active = id === sectionId;
+          sectionButtons[id].classList.toggle("active", active);
+          sectionButtons[id].setAttribute("aria-selected", active ? "true" : "false");
+          sectionPanels[id].classList.toggle("active", active);
+        }
+      }
+      for (const [id, labelKey] of sections) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "agentSettingsNavBtn";
+        button.textContent = t(labelKey);
+        button.setAttribute("role", "tab");
+        button.addEventListener("click", () => selectAgentSettingsSection(id));
+        sectionButtons[id] = button;
+        sectionNav.appendChild(button);
+
+        const panel = document.createElement("div");
+        panel.className = "agentSettingsSection";
+        panel.setAttribute("role", "tabpanel");
+        sectionPanels[id] = panel;
+        sectionContent.appendChild(panel);
+      }
+      target.append(header, sectionNav, sectionContent);
+      selectAgentSettingsSection("general");
+
       const groupEl = document.createElement("div");
       groupEl.className = "settingsGroup";
       const heading = document.createElement("h3");
-      heading.textContent = t("settings.agentTitle");
+      heading.textContent = t("settings.agentGeneralTitle");
       groupEl.appendChild(heading);
 
       const memoryRow = document.createElement("label");
@@ -3423,7 +4520,88 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       autoSkillRow.append(autoSkillCb, autoSkillText);
       groupEl.appendChild(autoSkillRow);
 
-      target.appendChild(groupEl);
+      sectionPanels.general.appendChild(groupEl);
+
+      const currentChatGroup = document.createElement("div");
+      currentChatGroup.className = "settingsGroup";
+      const currentChatHeading = document.createElement("h3");
+      currentChatHeading.textContent = t("settings.currentChat");
+      currentChatGroup.appendChild(currentChatHeading);
+      if (!activeConversation) {
+        const empty = document.createElement("div");
+        empty.className = "settingsHint";
+        empty.textContent = t("settings.noActiveChat");
+        currentChatGroup.appendChild(empty);
+      } else {
+        const addConversationToggle = (field, checked, nameKey, descKey) => {
+          const row = document.createElement("label");
+          row.className = "settingsItem checkboxRow";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = checked;
+          const textWrap = document.createElement("div");
+          const name = document.createElement("div");
+          name.className = "name";
+          name.textContent = t(nameKey);
+          const desc = document.createElement("div");
+          desc.className = "desc";
+          desc.textContent = t(descKey);
+          textWrap.append(name, desc);
+          checkbox.addEventListener("change", async () => {
+            checkbox.disabled = true;
+            try {
+              await patchActiveConversation({ [field]: checkbox.checked });
+              setStatus(t("settings.agentSaved"));
+            } catch (err) {
+              checkbox.checked = !checkbox.checked;
+              setStatus(t("settings.saveFailed", { message: err.message }), true);
+            } finally {
+              checkbox.disabled = false;
+            }
+          });
+          row.append(checkbox, textWrap);
+          currentChatGroup.appendChild(row);
+        };
+        addConversationToggle("hardwareMode", activeConversation.hardwareMode === true, "topbar.hardware", "topbar.hardwareTitle");
+        addConversationToggle("memoryEnabled", activeConversation.memoryEnabled !== false, "topbar.memory", "topbar.memoryTitle");
+        addConversationToggle("autoSkill", activeConversation.autoSkill !== false, "topbar.autoSkill", "topbar.autoSkillTitle");
+
+        const skillRow = document.createElement("label");
+        skillRow.className = "settingsItem settingsSelectRow";
+        const skillText = document.createElement("div");
+        const skillName = document.createElement("div");
+        skillName.className = "name";
+        skillName.textContent = t("topbar.skillTitle");
+        skillText.appendChild(skillName);
+        const skillSelect = document.createElement("select");
+        skillSelect.className = "pipelineSelect";
+        const autoOption = document.createElement("option");
+        autoOption.value = "";
+        autoOption.textContent = t("topbar.skillNone");
+        skillSelect.appendChild(autoOption);
+        const skills = await ensureInstalledSkills();
+        for (const skill of skills) {
+          const option = document.createElement("option");
+          option.value = skill.id;
+          option.textContent = skill.name || skill.id;
+          if (skill.id === activeConversation.skillId) option.selected = true;
+          skillSelect.appendChild(option);
+        }
+        skillSelect.addEventListener("change", async () => {
+          skillSelect.disabled = true;
+          try {
+            await patchActiveConversation({ skillId: skillSelect.value || null });
+            setStatus(t("settings.agentSaved"));
+          } catch (err) {
+            setStatus(t("settings.saveFailed", { message: err.message }), true);
+          } finally {
+            skillSelect.disabled = false;
+          }
+        });
+        skillRow.append(skillText, skillSelect);
+        currentChatGroup.appendChild(skillRow);
+      }
+      sectionPanels.general.appendChild(currentChatGroup);
 
       const pluginsGroup = document.createElement("div");
       pluginsGroup.className = "settingsGroup";
@@ -3489,12 +4667,15 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             textWrap.className = "textWrap";
             const nameEl = document.createElement("div");
             nameEl.className = "name";
-            nameEl.textContent = (plugin.name || plugin.id) + " · " + (plugin.format || "plugin");
+            nameEl.textContent = plugin.name || plugin.id;
             const descEl = document.createElement("div");
             descEl.className = "desc";
             const skillCount = Array.isArray(plugin.skillIds) ? plugin.skillIds.length : 0;
-            descEl.textContent = (plugin.description || plugin.id) + " · " + t("settings.pluginSkillCount", { count: skillCount });
+            descEl.textContent = plugin.description || plugin.id;
             textWrap.append(nameEl, descEl);
+            const skillBadge = document.createElement("span");
+            skillBadge.className = "settingsMetaBadge";
+            skillBadge.textContent = t("settings.pluginSkillCount", { count: skillCount });
             const delBtn = document.createElement("button");
             delBtn.type = "button";
             delBtn.className = "iconBtn";
@@ -3510,7 +4691,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
                 setStatus(t("settings.saveFailed", { message: err.message }), true);
               }
             });
-            row.append(textWrap, delBtn);
+            row.append(textWrap, skillBadge, delBtn);
             pluginsList.appendChild(row);
           }
         } catch (err) {
@@ -3519,7 +4700,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       }
 
       await refreshPluginsList();
-      target.appendChild(pluginsGroup);
+      sectionPanels.plugins.appendChild(pluginsGroup);
 
       const skillsGroup = document.createElement("div");
       skillsGroup.className = "settingsGroup";
@@ -3541,19 +4722,20 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           textWrap.className = "textWrap";
           const nameEl = document.createElement("div");
           nameEl.className = "name";
-          nameEl.textContent = (skill.name || skill.id) + (skill.format ? " · " + skill.format : "");
+          nameEl.textContent = skill.name || skill.id;
           const descEl = document.createElement("div");
           descEl.className = "desc";
-          const commands = Array.isArray(skill.commands) && skill.commands.length
-            ? skill.commands.join(", ")
-            : "—";
-          descEl.textContent = (skill.description || skill.id) + " · " + t("settings.skillCommands", { commands });
+          descEl.textContent = skill.description || skill.id;
           textWrap.append(nameEl, descEl);
-          row.appendChild(textWrap);
+          const commandsCount = Array.isArray(skill.commands) ? skill.commands.length : 0;
+          const badge = document.createElement("span");
+          badge.className = "settingsMetaBadge";
+          badge.textContent = t("settings.skillToolCount", { count: commandsCount });
+          row.append(textWrap, badge);
           skillsGroup.appendChild(row);
         }
       }
-      target.appendChild(skillsGroup);
+      sectionPanels.skills.appendChild(skillsGroup);
 
       const memoryGroup = document.createElement("div");
       memoryGroup.className = "settingsGroup";
@@ -3566,13 +4748,32 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       memoryHint.textContent = t("settings.recentMemoryHint");
       memoryGroup.appendChild(memoryHint);
 
+      const technicalDetails = document.createElement("details");
+      technicalDetails.className = "settingsTechnicalDetails";
+      const technicalSummary = document.createElement("summary");
+      technicalSummary.textContent = t("settings.technicalDetails");
       const backendBadge = document.createElement("div");
       backendBadge.className = "settingsHint";
-      memoryGroup.appendChild(backendBadge);
+      technicalDetails.append(technicalSummary, backendBadge);
+      memoryGroup.appendChild(technicalDetails);
 
       const memoryList = document.createElement("div");
       memoryList.className = "memorySettingsList";
       memoryGroup.appendChild(memoryList);
+
+      function compactMemoryPreview(value) {
+        const raw = String(value || "");
+        const cleaned = raw
+          .replace(/<think>[\\s\\S]*?<\\/think>/gi, " ")
+          .replace(/<\\/?think>/gi, " ")
+          .replace(/\\bGoal:\\s*/gi, "")
+          .replace(/\\bFinal team result:\\s*/gi, "")
+          .replace(/^Problem:\\s*/i, "")
+          .replace(/\\b(?:RES|RESULT):\\s*/gi, "")
+          .replace(/\\s+/g, " ")
+          .trim();
+        return cleaned.length > 180 ? cleaned.slice(0, 177).trimEnd() + "…" : cleaned;
+      }
 
       async function refreshMemoryList() {
         memoryList.textContent = t("app.loading");
@@ -3595,11 +4796,18 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
             textWrap.className = "textWrap";
             const nameEl = document.createElement("div");
             nameEl.className = "name";
-            nameEl.textContent = "[" + item.type + "] " + String(item.content || "").slice(0, 120);
+            nameEl.textContent = compactMemoryPreview(item.content) || t("settings.memoryEntry");
             const descEl = document.createElement("div");
             descEl.className = "desc";
-            descEl.textContent = item.workspace || t("settings.memoryNoWorkspace");
+            descEl.textContent = t("settings.memoryCurrentProject");
             textWrap.append(nameEl, descEl);
+            const typeBadge = document.createElement("span");
+            typeBadge.className = "settingsMetaBadge";
+            typeBadge.textContent = item.type === "fix"
+              ? t("settings.memoryTypeFix")
+              : item.type === "decision"
+                ? t("settings.memoryTypeDecision")
+                : t("settings.memoryTypeNote");
             const delBtn = document.createElement("button");
             delBtn.type = "button";
             delBtn.className = "iconBtn";
@@ -3614,7 +4822,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
                 setStatus(t("settings.saveFailed", { message: err.message }), true);
               }
             });
-            row.append(textWrap, delBtn);
+            row.append(typeBadge, textWrap, delBtn);
             memoryList.appendChild(row);
           }
         } catch (err) {
@@ -3622,7 +4830,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         }
       }
 
-      target.appendChild(memoryGroup);
+      sectionPanels.memory.appendChild(memoryGroup);
       refreshMemoryList().catch(() => {});
     }
 
@@ -3769,10 +4977,13 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
     function renderAgentPermissionSettings(target, commandPermissions) {
       const groupEl = document.createElement("div");
-      groupEl.className = "settingsGroup";
+      groupEl.className = "settingsGroup permissionSettings";
       const heading = document.createElement("h3");
       heading.textContent = t("settings.agentPermissions");
       groupEl.appendChild(heading);
+
+      const overview = document.createElement("div");
+      overview.className = "permissionOverview";
 
       const rows = [
         {
@@ -3792,22 +5003,22 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         {
           key: "allowDestructiveActions",
           checked: commandPermissions.allowDestructiveActions === true,
-          name: "Удаление и опасные локальные действия",
-          desc: "Удаление, git reset/clean и похожие операции. По умолчанию выключено и включается только с вашего согласия.",
+          name: t("settings.allowDestructiveActions"),
+          desc: t("settings.allowDestructiveActionsDesc"),
           risk: "high",
         },
         {
           key: "allowExternalWrites",
           checked: commandPermissions.allowExternalWrites === true,
-          name: "Изменение GitHub, серверов и внешних систем",
-          desc: "Чтение доступно без запроса. Push, SSH-команды и внешние изменения требуют вашего согласия.",
+          name: t("settings.allowExternalWrites"),
+          desc: t("settings.allowExternalWritesDesc"),
           risk: "high",
         },
       ];
 
       for (const spec of rows) {
         const row = document.createElement("label");
-        row.className = "settingsItem";
+        row.className = "settingsItem permissionSettingCard";
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.checked = spec.checked;
@@ -3823,7 +5034,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
 
         const badge = document.createElement("span");
         badge.className = "riskBadge " + spec.risk;
-        badge.textContent = spec.risk;
+        badge.textContent = spec.risk === "high" ? t("settings.high") : t("settings.medium");
 
         cb.addEventListener("change", async () => {
           try {
@@ -3835,13 +5046,20 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
         });
 
         row.append(cb, textWrap, badge);
-        groupEl.appendChild(row);
+        overview.appendChild(row);
       }
 
+      groupEl.appendChild(overview);
       target.appendChild(groupEl);
     }
 
     function renderUpdateSettings(target) {
+      if (I18N.ui?.ideSurface) {
+        const note = document.createElement("p");
+        note.textContent = I18N.language.code === "ru" ? "Обновляйте SYNVOX через магазин расширений вашей IDE." : "Update SYNVOX through your IDE extension marketplace.";
+        target.appendChild(note);
+        return;
+      }
       const groupEl = document.createElement("div");
       groupEl.className = "settingsGroup updateSettings";
 
@@ -3885,11 +5103,14 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       function renderCheck(data) {
         lastCheck = data;
         renderUpdateToast(data);
+        if (data.updateMethod === "website") {
+          note.textContent = "Обновления SYNVOX устанавливаются автоматически с synvox.pro. Перед заменой файлов сохраняется резервная копия. Чаты, настройки и аккаунты остаются на месте. Плагины обновляются отдельно.";
+        }
         meta.innerHTML = "";
         const rows = [
           [t("update.currentVersion"), data.currentVersion || "-"],
           [t("update.latestVersion"), data.latestVersion || "-"],
-          [t("update.projectRoot"), data.projectRoot || "-"],
+          [data.updateMethod === "website" ? "Источник обновлений" : t("update.projectRoot"), data.updateMethod === "website" ? "https://synvox.pro" : (data.projectRoot || "-")],
         ];
         for (const [label, value] of rows) {
           const row = document.createElement("div");
@@ -3908,7 +5129,7 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
           status.textContent = t("update.available");
           status.className = "updateStatus ready";
         } else {
-          status.textContent = t("update.upToDate");
+          status.textContent = data.updateMethod === "website" ? data.updateWarning : t("update.upToDate");
           status.className = "updateStatus";
         }
         installBtn.disabled = !data.updateAvailable || !data.canUpdate;
@@ -4011,33 +5232,43 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       const note = document.createElement("div");
       note.className = "apiModels";
       note.textContent = t("settings.apiNote", { models: (info.models || []).join(", ") });
-      groupEl.appendChild(note);
+
+      const details = document.createElement("details");
+      details.className = "apiDetails";
+      const summary = document.createElement("summary");
+      summary.textContent = t("settings.apiDetails");
+      const detailsBody = document.createElement("div");
+      detailsBody.className = "apiDetailsBody";
+      detailsBody.appendChild(note);
+      details.append(summary, detailsBody);
+      groupEl.appendChild(details);
 
       target.appendChild(groupEl);
       renderAnthropicSettings(target, info);
     }
 
     function renderAnthropicSettings(target, info) {
-      const groupEl = document.createElement("div");
-      groupEl.className = "settingsGroup apiSettings";
+      const compatibilityDetails = document.createElement("details");
+      compatibilityDetails.className = "apiCompatibilityDetails";
+      const summary = document.createElement("summary");
+      summary.textContent = t("settings.anthropicApiTitle");
 
-      const heading = document.createElement("h3");
-      heading.textContent = t("settings.anthropicApiTitle");
-      groupEl.appendChild(heading);
+      const compatibilityBody = document.createElement("div");
+      compatibilityBody.className = "apiCompatibilityBody";
 
       const grid = document.createElement("div");
       grid.className = "apiSettingsGrid";
       grid.appendChild(makeApiField(t("settings.anthropicBaseUrl"), info.anthropicBaseUrl || ""));
       grid.appendChild(makeApiField(t("settings.anthropicEndpoint"), info.anthropicMessagesUrl || ""));
       grid.appendChild(makeApiField(t("settings.anthropicAuth"), "x-api-key: <provider API key>"));
-      groupEl.appendChild(grid);
 
       const note = document.createElement("div");
       note.className = "apiModels";
       note.textContent = t("settings.anthropicNote", { models: (info.models || []).join(", ") });
-      groupEl.appendChild(note);
 
-      target.appendChild(groupEl);
+      compatibilityBody.append(grid, note);
+      compatibilityDetails.append(summary, compatibilityBody);
+      target.appendChild(compatibilityDetails);
     }
 
     function makeApiKeyRow(provider, label, key) {
@@ -4215,10 +5446,173 @@ export function renderWindowHtml({ language: requestedLanguage = "", ui = {} } =
       return parseInt(raw, 10) || 0;
     }
 
+    async function showLegalConsentIfNeeded() {
+      // Match the currently published RU original and EN translation on synvox.pro.
+      const CONSENT_LEGAL_VERSION = "2026-09-07";
+      const status = await api("/api/legal/consents?version=" + encodeURIComponent(CONSENT_LEGAL_VERSION)).catch(() => ({ accepted: false }));
+      if (status.accepted) return;
+      const copy = {
+        ru: {
+          eyebrow: "АЛЬФА-ВЕРСИЯ", title: "Согласие перед использованием SYNVOX",
+          intro: "Продукт находится в альфа-разработке: функции могут меняться, а AI — ошибаться. Перед продолжением прочитайте документы редакции " + CONSENT_LEGAL_VERSION + ".",
+          data: "Чаты и сессии AI хранятся локально. Подтверждение согласия фиксируется отдельно. Английский перевод носит информационный характер; юридически значимым остаётся русский оригинал.",
+          language: "Язык документов", docs: "Открыть документы на сайте SYNVOX",
+          terms: "Я ознакомился с условиями бесплатного использования SYNVOX и понимаю альфа-статус продукта.",
+          privacy: "Я отдельно согласен на обработку данных, которые добровольно отправляю в поддержку или внешние сервисы.",
+          close: "Закрыть приложение", accept: "Принять и продолжить", saving: "Сохраняем…", error: "Не удалось зафиксировать согласие: ",
+        },
+        en: {
+          eyebrow: "ALPHA VERSION", title: "Consent before using SYNVOX",
+          intro: "This product is in active alpha development: features may change and AI can make mistakes. Please read the documents, version " + CONSENT_LEGAL_VERSION + ", before continuing.",
+          data: "Chats and AI sessions are stored locally. Your consent is recorded separately. The English text is an informational translation; the Russian original prevails unless mandatory law requires otherwise.",
+          language: "Document language", docs: "Open the documents on the SYNVOX website",
+          terms: "I have read the free-use terms for SYNVOX and understand the product's alpha status.",
+          privacy: "I separately consent to processing data that I voluntarily send to support or external services.",
+          close: "Close application", accept: "Accept and continue", saving: "Saving…", error: "Could not record consent: ",
+        },
+      };
+      let consentLanguage = I18N.language?.code === "en" ? "en" : "ru";
+      const overlay = document.createElement("div");
+      overlay.className = "settingsOverlay alphaNoticeOverlay";
+      overlay.setAttribute("aria-hidden", "false");
+      const panel = document.createElement("div");
+      panel.className = "settingsPanel alphaNoticePanel";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-labelledby", "alphaNoticeTitle");
+      const eyebrow = document.createElement("div");
+      eyebrow.className = "alphaNoticeEyebrow";
+      const title = document.createElement("h2");
+      title.id = "alphaNoticeTitle";
+      const text = document.createElement("p");
+      const dataNote = document.createElement("p");
+      dataNote.className = "alphaNoticeData";
+      const languageLabel = document.createElement("label");
+      languageLabel.className = "consentLanguageLabel";
+      const languageText = document.createElement("span");
+      const languageSelect = document.createElement("select");
+      languageSelect.id = "consentLanguage";
+      for (const [value, label] of [["ru", "Русский"], ["en", "English"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        languageSelect.appendChild(option);
+      }
+      languageSelect.value = consentLanguage;
+      languageLabel.append(languageText, languageSelect);
+      const documents = document.createElement("div");
+      documents.className = "consentDocuments";
+      const documentsLink = document.createElement("a");
+      documentsLink.target = "_blank";
+      documentsLink.rel = "noopener noreferrer";
+      documentsLink.addEventListener("click", async (event) => {
+        event.preventDefault();
+        try { await api("/api/subscription/open-external", { method: "POST", body: { url: documentsLink.href } }); }
+        catch (error) { formError.textContent = copy[consentLanguage].error + error.message; formError.classList.remove("hidden"); }
+      });
+      documents.appendChild(documentsLink);
+
+      const form = document.createElement("form");
+      form.className = "consentForm";
+      const makeConsent = (name, labelText) => {
+        const label = document.createElement("label");
+        label.className = "consentCheck";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.name = name;
+        const copy = document.createElement("span");
+        copy.textContent = labelText;
+        label.append(input, copy);
+        return { label, input, copy };
+      };
+      const terms = makeConsent("termsAccepted", "");
+      const personalData = makeConsent("personalDataAccepted", "");
+      const formError = document.createElement("div");
+      formError.className = "consentError hidden";
+      const actions = document.createElement("div");
+      actions.className = "alphaNoticeActions";
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "iconBtn";
+      const acceptBtn = document.createElement("button");
+      acceptBtn.type = "submit";
+      acceptBtn.className = "iconBtn primaryBtn";
+      acceptBtn.disabled = true;
+      const renderConsentLanguage = () => {
+        const labels = copy[consentLanguage];
+        panel.lang = consentLanguage;
+        eyebrow.textContent = labels.eyebrow;
+        title.textContent = labels.title;
+        text.textContent = labels.intro;
+        dataNote.textContent = labels.data;
+        languageText.textContent = labels.language;
+        documentsLink.textContent = labels.docs;
+        documentsLink.href = consentLanguage === "en" ? "https://synvox.pro/en/documents/" : "https://synvox.pro/documents/";
+        terms.copy.textContent = labels.terms;
+        personalData.copy.textContent = labels.privacy;
+        closeBtn.textContent = labels.close;
+        acceptBtn.textContent = labels.accept;
+      };
+      languageSelect.addEventListener("change", () => {
+        consentLanguage = languageSelect.value === "en" ? "en" : "ru";
+        renderConsentLanguage();
+      });
+      renderConsentLanguage();
+      const syncAcceptState = () => {
+        acceptBtn.disabled = !(terms.input.checked && personalData.input.checked);
+      };
+      terms.input.addEventListener("change", syncAcceptState);
+      personalData.input.addEventListener("change", syncAcceptState);
+      closeBtn.addEventListener("click", () => api("/api/shutdown", { method: "POST" }).catch(() => window.close()));
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (acceptBtn.disabled) return;
+        acceptBtn.disabled = true;
+        acceptBtn.textContent = copy[consentLanguage].saving;
+        formError.classList.add("hidden");
+        try {
+          await api("/api/legal/consents", {
+            method: "POST",
+            body: {
+              legalVersion: CONSENT_LEGAL_VERSION,
+              appVersion: APP_VERSION,
+              termsAccepted: terms.input.checked,
+              personalDataAccepted: personalData.input.checked,
+              alphaAcknowledged: terms.input.checked,
+            },
+          });
+          overlay.remove();
+        } catch (error) {
+          formError.textContent = copy[consentLanguage].error + error.message;
+          formError.classList.remove("hidden");
+          acceptBtn.textContent = copy[consentLanguage].accept;
+          syncAcceptState();
+        }
+      });
+      actions.append(closeBtn, acceptBtn);
+      form.append(terms.label, personalData.label, formError, actions);
+      panel.append(eyebrow, title, text, languageLabel, dataNote, documents, form);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      terms.input.focus();
+    }
+
+    (${setupWorkspaceSidebar.toString()})();
+    workspaceUi = (${setupWorkspaceUi.toString()})({
+      getState: () => appState, getConversation: () => activeConversation,
+      getTaskView: getHarnessTaskView, getBoardItems: ${getWorkspaceBoardItems.toString()}, getProjects: ${getWorkspaceProjects.toString()},
+      api, loadConversation: async id => { await loadState(id); workspaceUi?.selectTab("chat"); },
+      onContinue: continueTaskFromPanel, onStop: stopTaskFromPanel,
+      openNewChat: async project => { await openNewChatModal(); if (project) document.getElementById("newWorkspace").value = project; newRoleSelect.value = "developer"; },
+      patchConversation: patchActiveConversation, onError: message => setStatus(message, true), t,
+    });
+
     startupReady
       .then(() => loadState())
+      .then(() => showLegalConsentIfNeeded())
       .catch((error) => setStatus(error.message, true));
     checkUpdateToast().catch(() => {});
+    announcementsUi.start();
   </script>
 </body>
 </html>`;

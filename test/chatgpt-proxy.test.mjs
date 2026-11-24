@@ -119,7 +119,7 @@ describe("persistent ChatGPT login profile", () => {
     );
     const loginStart = source.indexOf("export async function loginChatGPTAndSave");
     const loginBody = source.slice(loginStart);
-    assert.match(loginBody, /await closeChatGPTBrowserProxy\(\)/);
+    assert.match(loginBody, /await closeChatGPTBrowserProxy\(options.accountId \|\| "default"\)/);
     assert.match(loginBody, /prepareChromeProfileForLaunch\(profileDir, \{ clearCookies: false \}\)/);
     assert.match(loginBody, /clearCookies: false,\s+skipKillStale: true/);
     assert.doesNotMatch(loginBody, /repairChatGPTBrowserProfile\(profileDir\)/);

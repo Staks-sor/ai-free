@@ -77,3 +77,15 @@ describe("qwen session errors", () => {
     );
   });
 });
+
+describe('Qwen rejects false logout diagnoses', () => {
+  it('keeps generic 403 and WAF HTML separate from expired credentials', async () => {
+    const { throwIfQwenSessionExpiredFromHttp } = await import('../src/providers/qwen/session-errors.mjs');
+    assert.equal(isQwenSessionExpiredError({ status: 403, message: 'Forbidden' }), false);
+    assert.equal(isQwenAuthError({ status: 403, message: 'HTTP 403 Forbidden' }), false);
+    assert.doesNotThrow(() => throwIfQwenSessionExpiredFromHttp(403, 'Forbidden', 'completion'));
+    assert.throws(() => throwIfQwenSessionExpiredFromHttp(403, '<html>Baxia /_____tmd_____/punish</html>', 'completion'), error => error.code === 'QWEN_ANTIBOT_PUNISH' && !error.isAuthError);
+    assert.throws(() => throwIfQwenSessionExpiredFromHttp(200, '<html>Maintenance</html>', 'completion'), error => error.code === 'QWEN_UNEXPECTED_RESPONSE' && !error.isAuthError);
+    assert.throws(() => throwIfQwenSessionExpiredFromHttp(401, 'Unauthorized', 'completion'), error => error.isAuthError === true);
+  });
+});

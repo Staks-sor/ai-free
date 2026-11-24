@@ -5,17 +5,17 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 object NodeRuntimeResolver {
-    private const val REQUIRED_MAJOR = 18
+    private const val REQUIRED_MAJOR = 22
 
     fun resolve(environment: Map<String, String> = System.getenv()): String {
-        val attempts = candidates(environment).distinct().mapNotNull { candidate ->
-            probe(candidate)?.let { candidate to it }
-        }
-        return attempts.firstOrNull { (_, major) -> major >= REQUIRED_MAJOR }?.first
+        return firstCompatible(candidates(environment).distinct(), ::probe)
             ?: error(
                 "Node.js $REQUIRED_MAJOR+ не найден. Установите Node.js или задайте AI_FREE_NODE_PATH."
             )
     }
+
+    internal fun firstCompatible(candidates: List<String>, probe: (String) -> Int?): String? =
+        candidates.firstOrNull { probe(it)?.let { major -> major >= REQUIRED_MAJOR } == true }
 
     internal fun candidates(environment: Map<String, String>): List<String> {
         val executable = if (SystemInfo.isWindows) "node.exe" else "node"

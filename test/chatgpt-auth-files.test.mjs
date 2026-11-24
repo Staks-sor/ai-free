@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import { strict as assert } from "node:assert";
-import { sanitizeCookiesForStorage, pickEssentialChatGPTCookies, estimateCookieHeaderBytes, isChatGPTAuthUsable, getChatGPTSessionToken, playwrightCookiesFromSaved } from "../src/providers/chatgpt/auth-files.mjs";
+import { sanitizeCookiesForStorage, pickEssentialChatGPTCookies, estimateCookieHeaderBytes, isChatGPTAuthUsable, getChatGPTSessionToken, playwrightCookiesFromSaved, restoreSavedChatGPTCookiesIfMissing } from "../src/providers/chatgpt/auth-files.mjs";
 
 describe("ChatGPT cookie sanitization", () => {
   it("accepts current Auth.js session cookie names", () => {
@@ -101,6 +101,46 @@ describe("ChatGPT cookie sanitization", () => {
       { domain: ".auth.openai.com", path: "/" },
     ]);
     assert.equal(restored.some((cookie) => "url" in cookie), false);
+  });
+
+  it("keeps a refreshed browser session instead of replacing it with saved cookies", async () => {
+    const current = [{ name: "__Secure-authjs.session-token", value: "refreshed", domain: ".chatgpt.com", path: "/" }];
+    const saved = [{ name: "__Secure-authjs.session-token", value: "older", domain: ".chatgpt.com", path: "/" }];
+    let additions = 0;
+    const context = {
+      cookies: async () => current,
+      addCookies: async () => { additions += 1; },
+      clearCookies: async () => { throw new Error("must not clear live cookies"); },
+    };
+    assert.equal(await restoreSavedChatGPTCookiesIfMissing(context, saved), false);
+    assert.equal(additions, 0);
+  });
+
+  it("restores saved login only when the browser profile has no session", async () => {
+    const saved = [{ name: "__Secure-authjs.session-token", value: "saved", domain: ".chatgpt.com", path: "/" }];
+    let added = [];
+    const context = {
+      cookies: async () => [],
+      addCookies: async (cookies) => { added = cookies; },
+    };
+    assert.equal(await restoreSavedChatGPTCookiesIfMissing(context, saved), true);
+    assert.equal(added[0].value, "saved");
+  });
+
+  it("does not treat an expired saved cookie as an active session", async () => {
+    const expired = [{
+      name: "__Secure-authjs.session-token",
+      value: "expired",
+      domain: ".chatgpt.com",
+      path: "/",
+      expires: Math.floor(Date.now() / 1000) - 60,
+    }];
+    assert.equal(isChatGPTAuthUsable({ sessionToken: "expired", cookies: expired }), false);
+    assert.equal(getChatGPTSessionToken(expired), "");
+    assert.equal(await restoreSavedChatGPTCookiesIfMissing({
+      cookies: async () => [],
+      addCookies: async () => { throw new Error("must not restore expired cookie"); },
+    }, expired), false);
   });
 
 });
